@@ -18,6 +18,8 @@ class PoseFrame:
     frame: int
     time_s: float
     landmarks: dict[str, tuple[float, float, float]]
+    track_id: int | None = None
+    appearance: tuple[float, float, float] | None = None
 
 
 @dataclass

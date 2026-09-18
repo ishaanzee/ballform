@@ -7,7 +7,7 @@ const jobKey = `ballform-job:${token || 'local'}`;
 let file, dragStart, rimBox, report;
 $('#analysisMode').onchange = () => {
   const game = $('#analysisMode').value === 'one_on_one';
-  $('#modeHelp').textContent = game ? 'Use a steady side or slightly angled view. Keep both players, their hands and feet, the ball, and the basket visible. Overlap and camera movement reduce measurement confidence.' : 'Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
+  $('#modeHelp').textContent = game ? 'Works with 1-on-1 or crowded 5-on-5 footage. Use a steady side or slightly angled view and keep the shooter, nearby defenders, their hands, the ball, and the basket visible.' : 'Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze 1-on-1' : 'Analyze form'} <span>→</span>`;
 };
 
@@ -92,7 +92,7 @@ async function poll(id){
 function showError(message){ $('#progressText').classList.add('error');$('#progressText').textContent=message;$('#retry').classList.remove('hidden'); }
 $('#retry').onclick = () => { localStorage.removeItem(jobKey); if (!file) return location.reload(); $('#progressStep').classList.add('hidden'); $('#markStep').classList.remove('hidden'); $('#settings').classList.remove('hidden'); };
 const labels={elbow_angle_at_release_deg:'Elbow at release',set_point_elbow_angle_deg:'Set-point elbow',upper_arm_elevation_deg:'Upper-arm elevation',wrist_over_elbow_pct_shoulder_width:'Wrist / elbow offset',release_height_body_ratio:'Release height ratio',follow_through_extension_deg:'Follow-through',release_angle_2d_deg:'2D launch angle'};
-Object.assign(labels,{separation_torso:'Projected separation at release',contest_clearance_torso:'Defender hand / release clearance',separation_change_torso:'Separation change before release',separation:'Release separation',contest_clearance:'Contest clearance'});
+Object.assign(labels,{visible_players:'Players visible at release',separation_torso:'Projected separation at release',contest_clearance_torso:'Defender hand / release clearance',separation_change_torso:'Separation change before release',defender_selection_margin_torso:'Defender selection margin',separation:'Release separation',contest_clearance:'Contest clearance'});
 function displayMetric(k,v){if(v==null)return 'Unavailable';const value=typeof v==='number'?Number(v.toFixed(2)):v;if(k.includes('angle')||k.includes('_deg'))return `${value}°`;if(k.includes('pct'))return `${value}%`;if(k.includes('torso'))return `${value} torso lengths`;if(k.endsWith('_s'))return `${value} s`;return value;}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function label(k){return labels[k]||k.replaceAll('_',' ');}

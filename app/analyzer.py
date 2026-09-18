@@ -17,12 +17,14 @@ from ultralytics import YOLO
 from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import analyze_shots, classify_view
+from app.tracking import PoseTracker, jersey_descriptor
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS_DIR = Path(os.environ.get("BALLFORM_MODELS_DIR", str(ROOT / "models")))
-POSE_MODEL = MODELS_DIR / "pose_landmarker_lite.task"
+POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
 POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
-BALL_MODEL = MODELS_DIR / "yolo11n.pt"
+GAME_POSE_MODEL = ROOT / "models" / "pose_landmarker_full.task"
+GAME_POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+BALL_MODEL = ROOT / "models" / "yolo11n.pt"
 BALL_MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt"
 POSE_NAMES = {
     0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",
@@ -44,8 +46,11 @@ def _ensure_model(path: Path, url: str) -> Path:
     return path
 
 
-def ensure_pose_model() -> Path:
-    return _ensure_model(POSE_MODEL, POSE_MODEL_URL)
+def ensure_pose_model(game_mode: bool = False) -> Path:
+    return _ensure_model(
+        GAME_POSE_MODEL if game_mode else POSE_MODEL,
+        GAME_POSE_MODEL_URL if game_mode else POSE_MODEL_URL,
+    )
 
 
 def _device() -> str:
@@ -110,7 +115,8 @@ def _net_flow(previous_gray: np.ndarray | None, gray: np.ndarray, rim: tuple[flo
 
 
 def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], ball: Detection | None,
-          rim: tuple[float, float, float, float] | None, handedness: str = "right") -> None:
+          rim: tuple[float, float, float, float] | None, handedness: str = "right",
+          label: str | None = None) -> None:
     h, w = frame.shape[:2]
     for a, b in SKELETON:
         if a in landmarks and b in landmarks and landmarks[a][2] > .35 and landmarks[b][2] > .35:
@@ -120,6 +126,11 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
     for idx in ((12, 14, 16) if handedness == "right" else (11, 13, 15)):
         if idx in landmarks and landmarks[idx][2] > .35:
             cv2.circle(frame, (int(landmarks[idx][0] * w), int(landmarks[idx][1] * h)), 5, (15, 245, 255), -1)
+    if label and landmarks:
+        anchor = next((landmarks[idx] for idx in (0, 11, 12) if idx in landmarks and landmarks[idx][2] > .35), None)
+        if anchor:
+            cv2.putText(frame, label, (int(anchor[0] * w), max(20, int(anchor[1] * h) - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .55, (65, 235, 180), 2, cv2.LINE_AA)
     if ball:
         center = int(ball.x * w), int(ball.y * h)
         cv2.circle(frame, center, max(7, int(ball.radius * max(w, h))), (30, 130, 255), 3, cv2.LINE_AA)
@@ -135,7 +146,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
     report(0.02, "Loading local vision models")
-    pose_path = ensure_pose_model()
+    pose_path = ensure_pose_model(mode == "one_on_one")
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     ball_model_path = configured_ball_model or str(_ensure_model(BALL_MODEL, BALL_MODEL_URL))
     ball_model = YOLO(ball_model_path)
@@ -165,7 +176,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             delegate=mp.tasks.BaseOptions.Delegate.CPU,
         ),
         running_mode=mp.tasks.vision.RunningMode.VIDEO,
-        num_poses=3 if mode == "one_on_one" else 1, min_pose_detection_confidence=0.45,
+        num_poses=10 if mode == "one_on_one" else 1, min_pose_detection_confidence=0.45,
         min_pose_presence_confidence=0.45, min_tracking_confidence=0.45,
     )
     balls: list[Detection] = []
@@ -175,6 +186,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     previous_ball: Detection | None = None
     previous_gray: np.ndarray | None = None
     processed = 0
+    pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
     with ExitStack() as resources:
         resources.callback(capture.release)
         resources.callback(writer.release)
@@ -196,7 +208,12 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             for pose_landmarks in result.pose_landmarks:
                 landmark_map = {i: (float(v.x), float(v.y), float(v.visibility or 0)) for i, v in enumerate(pose_landmarks)}
                 landmark_maps.append(landmark_map)
-                players.append(PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()}))
+                pose = PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()})
+                if mode == "one_on_one":
+                    pose.appearance = jersey_descriptor(frame, pose)
+                players.append(pose)
+            if mode == "one_on_one":
+                pose_tracker.update(players)
             poses.extend(players)
             player_frames.append({"frame": frame_no, "time_s": time_s, "players": players})
             ball = _track_ball(ball_model, frame, previous_ball, frame_no, time_s, width, height)
@@ -206,8 +223,9 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             flows[frame_no] = _net_flow(previous_gray, gray, rim)
             previous_gray = gray
-            for visible_pose in landmark_maps:
-                _draw(frame, visible_pose, None, None, handedness)
+            for visible_pose, player in zip(landmark_maps, players):
+                player_label = f"P{player.track_id}" if mode == "one_on_one" and player.track_id else None
+                _draw(frame, visible_pose, None, None, handedness, player_label)
             _draw(frame, {}, ball, rim)
             writer.write(frame)
             processed += 1
@@ -250,6 +268,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
         "diagnostics": {"pose_frames": sum(bool(p["players"]) for p in player_frames),
                         "two_player_frames": sum(len(p["players"]) == 2 for p in player_frames),
+                        "multi_player_frames": sum(len(p["players"]) > 2 for p in player_frames),
+                        "max_players_visible": max((len(p["players"]) for p in player_frames), default=0),
                         "ball_detections": len(observed_balls),
                         "rim_marked": rim is not None},
         "limitations": [

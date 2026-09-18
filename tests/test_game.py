@@ -4,7 +4,7 @@ from app.game import analyze_game_shots
 from app.models import Detection, PoseFrame, ShotResult
 
 
-def player(x, wrist=None, hidden=None, time=1.):
+def player(x, wrist=None, hidden=None, time=1., appearance=None, track_id=None):
     landmarks = {"left_shoulder": (x-.02, .4, .95), "right_shoulder": (x+.02, .4, .95),
                  "left_hip": (x-.02, .6, .95), "right_hip": (x+.02, .6, .95),
                  "left_wrist": (x-.03, .3, .95), "right_wrist": (x+.03, .3, .95)}
@@ -12,7 +12,7 @@ def player(x, wrist=None, hidden=None, time=1.):
         landmarks["right_wrist"] = (*wrist, .95)
     if hidden:
         landmarks[hidden] = (*landmarks[hidden][:2], .1)
-    return PoseFrame(round(time*30), time, landmarks)
+    return PoseFrame(round(time*30), time, landmarks, track_id=track_id, appearance=appearance)
 
 
 def run(players, prior=None, ball=None, aspect=1.):
@@ -89,3 +89,62 @@ def test_zoom_scale_change_withholds_trend():
     game, _ = run([player(.3), player(.8)], prior=prior)
     assert game["score"] is not None
     assert game["metrics"]["separation_change_torso"] is None
+
+
+def test_five_on_five_selects_ball_owner_and_nearest_opponent():
+    offense = (.25, .35, .45)
+    defense = (.78, .58, .18)
+    players = [
+        player(.30, wrist=(.33, .30), appearance=offense, track_id=1),
+        player(.05, appearance=offense, track_id=2),
+        player(.12, appearance=offense, track_id=3),
+        player(.68, appearance=offense, track_id=4),
+        player(.82, appearance=offense, track_id=5),
+        player(.43, appearance=defense, track_id=6),
+        player(.57, appearance=defense, track_id=7),
+        player(.72, appearance=defense, track_id=8),
+        player(.90, appearance=defense, track_id=9),
+        player(.96, appearance=defense, track_id=10),
+    ]
+    game, summary = run(players)
+    assert game["score"] is not None
+    assert game["metrics"]["visible_players"] == 10
+    assert game["players"] == {
+        "ball_carrier_track_id": 1,
+        "shooter_track_id": 1,
+        "defender_track_id": 6,
+    }
+    assert game["metrics"]["separation_torso"] == .65
+    assert summary["method"]["version"] == "shot-space-v2-multiplayer"
+
+
+def test_crowded_frame_with_indistinguishable_jerseys_withholds_matchup():
+    same = (.4, .4, .4)
+    players = [
+        player(.30, wrist=(.33, .30), appearance=same, track_id=1),
+        player(.55, appearance=same, track_id=2),
+        player(.75, appearance=same, track_id=3),
+    ]
+    game, _ = run(players)
+    assert game["score"] is None
+    assert "jersey appearance" in " ".join(game["evidence"])
+
+
+def test_multiplayer_trend_uses_track_ids_when_pose_order_changes():
+    offense = (.2, .3, .4)
+    defense = (.8, .6, .2)
+    release = [
+        player(.30, wrist=(.33, .30), appearance=offense, track_id=1),
+        player(.80, appearance=offense, track_id=2),
+        player(.50, appearance=defense, track_id=3),
+        player(.92, appearance=defense, track_id=4),
+    ]
+    prior = [
+        player(.45, time=.5, appearance=defense, track_id=3),
+        player(.92, time=.5, appearance=defense, track_id=4),
+        player(.80, time=.5, appearance=offense, track_id=2),
+        player(.30, wrist=(.33, .30), time=.5, appearance=offense, track_id=1),
+    ]
+    game, _ = run(release, prior=prior)
+    assert game["score"] is not None
+    assert game["metrics"]["separation_change_torso"] == .25

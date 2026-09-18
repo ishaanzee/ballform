@@ -12,7 +12,3 @@ data/jobs/*
 !data/jobs/.gitkeep
 models/*
 !models/.gitkeep
-node_modules/
-.next/
-.vercel/
-*.tsbuildinfo

@@ -9,26 +9,18 @@ import uuid
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyzer import ROOT, analyze_video
 
 app = FastAPI(title="Ballform", version="0.1.0")
-JOBS_DIR = Path(os.environ.get("BALLFORM_JOBS_DIR", str(ROOT / "data" / "jobs")))
+JOBS_DIR = ROOT / "data" / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 STATE: dict[str, dict] = {}
 LOCK = threading.Lock()
 ANALYSIS_LOCK = threading.Lock()
 ACCESS_TOKEN = os.environ.get("BALLFORM_ACCESS_TOKEN", "")
-if os.environ.get("BALLFORM_REQUIRE_TOKEN", "").lower() in {"1", "true", "yes"} and not ACCESS_TOKEN:
-    raise RuntimeError("Set BALLFORM_ACCESS_TOKEN before starting the hosted analysis service.")
-CORS_ORIGINS = [origin.strip().rstrip("/") for origin in os.environ.get(
-    "BALLFORM_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-).split(",") if origin.strip()]
-if "*" in CORS_ORIGINS:
-    raise RuntimeError("Set exact frontend origins in BALLFORM_CORS_ORIGINS, not '*'.")
 MAX_BYTES = 750 * 1024 * 1024
 ALLOWED = {".mp4", ".mov", ".m4v", ".avi", ".webm"}
 
@@ -41,7 +33,7 @@ def _update(job_id: str, **values) -> None:
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
          mode: str = "form", handedness: str = "right") -> None:
     try:
-        _update(job_id, status="waiting", message="Waiting for the analysis worker")
+        _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
             result = analyze_video(input_path, input_path.parent, rim,
@@ -58,29 +50,8 @@ async def require_lan_token(request: Request, call_next):
     if ACCESS_TOKEN and request.url.path.startswith("/api/"):
         supplied = request.query_params.get("token") or request.headers.get("x-ballform-token")
         if not supplied or not secrets.compare_digest(supplied, ACCESS_TOKEN):
-            return JSONResponse({"detail": "Invalid or missing Ballform access token."}, status_code=401,
-                                headers={"Cache-Control": "no-store"})
-    response = await call_next(request)
-    if request.url.path.startswith("/api/"):
-        response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-# CORS wraps authentication so preflight requests and authentication errors work
-# in the independently deployed frontend. Requests still require the access token.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Ballform-Token", "Range"],
-    expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
-    allow_credentials=False,
-)
-
-
-@app.get("/healthz")
-def health() -> dict:
-    return {"status": "ok"}
+            return JSONResponse({"detail": "Invalid or missing Ballform pairing token."}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/")
@@ -121,7 +92,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                 target.close()
                 input_path.unlink(missing_ok=True)
                 directory.rmdir()
-                raise HTTPException(413, "Video exceeds the 750 MB upload limit.")
+                raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
             target.write(chunk)
     _update(job_id, status="queued", progress=0.0, message="Queued")
     background.add_task(_run, job_id, input_path, rim_box, mode, handedness)
