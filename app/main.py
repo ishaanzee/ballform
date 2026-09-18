@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import threading
@@ -29,13 +30,15 @@ def _update(job_id: str, **values) -> None:
         STATE.setdefault(job_id, {}).update(values)
 
 
-def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None) -> None:
+def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
+         mode: str = "form", handedness: str = "right") -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
             result = analyze_video(input_path, input_path.parent, rim,
-                                   lambda p, m: _update(job_id, progress=round(p, 3), message=m))
+                                   lambda p, m: _update(job_id, progress=round(p, 3), message=m),
+                                   mode=mode, handedness=handedness)
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -57,7 +60,12 @@ def index() -> FileResponse:
 
 
 @app.post("/api/jobs", status_code=202)
-async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None)) -> dict:
+async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None),
+                     mode: str = Form("form"), handedness: str = Form("right")) -> dict:
+    if mode not in {"form", "one_on_one"}:
+        raise HTTPException(422, "Mode must be form or one_on_one.")
+    if handedness not in {"right", "left"}:
+        raise HTTPException(422, "Handedness must be right or left.")
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(415, f"Use one of: {', '.join(sorted(ALLOWED))}")
@@ -65,7 +73,9 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
     if rim:
         try:
             values = tuple(float(v) for v in json.loads(rim))
-            if len(values) != 4 or any(v < 0 or v > 1 for v in values) or values[2] <= .005 or values[3] <= .005:
+            if (len(values) != 4 or any(not math.isfinite(v) or v < 0 or v > 1 for v in values)
+                    or values[2] <= .005 or values[3] <= .005
+                    or values[0] + values[2] > 1 or values[1] + values[3] > 1):
                 raise ValueError
             rim_box = values
         except (ValueError, TypeError, json.JSONDecodeError):
@@ -85,7 +95,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                 raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
             target.write(chunk)
     _update(job_id, status="queued", progress=0.0, message="Queued")
-    background.add_task(_run, job_id, input_path, rim_box)
+    background.add_task(_run, job_id, input_path, rim_box, mode, handedness)
     return {"job_id": job_id}
 
 

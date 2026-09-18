@@ -31,7 +31,7 @@ class ShotResult:
     evidence: list[str]
     metrics: dict[str, float | str | None]
     cues: list[str] = field(default_factory=list)
+    game: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
-

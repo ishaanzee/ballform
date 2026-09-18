@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import urllib.request
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 
 import cv2
@@ -14,6 +15,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from app.models import Detection, PoseFrame
+from app.game import analyze_game_shots
 from app.scoring import analyze_shots, classify_view
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,9 +55,9 @@ def _device() -> str:
         return "cpu"
 
 
-def _track_ball(model: YOLO, rgb: np.ndarray, previous: Detection | None, frame_no: int,
+def _track_ball(model: YOLO, bgr: np.ndarray, previous: Detection | None, frame_no: int,
                 time_s: float, width: int, height: int) -> Detection | None:
-    result = model.predict(rgb, imgsz=640, conf=0.12, classes=[32], device=_device(), verbose=False)[0]
+    result = model.predict(bgr, imgsz=640, conf=0.12, classes=[32], device=_device(), verbose=False)[0]
     choices: list[Detection] = []
     if result.boxes is not None:
         for xyxy, conf in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()):
@@ -107,14 +109,14 @@ def _net_flow(previous_gray: np.ndarray | None, gray: np.ndarray, rim: tuple[flo
 
 
 def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], ball: Detection | None,
-          rim: tuple[float, float, float, float] | None) -> None:
+          rim: tuple[float, float, float, float] | None, handedness: str = "right") -> None:
     h, w = frame.shape[:2]
     for a, b in SKELETON:
         if a in landmarks and b in landmarks and landmarks[a][2] > .35 and landmarks[b][2] > .35:
             p1 = int(landmarks[a][0] * w), int(landmarks[a][1] * h)
             p2 = int(landmarks[b][0] * w), int(landmarks[b][1] * h)
             cv2.line(frame, p1, p2, (65, 235, 180), 3, cv2.LINE_AA)
-    for idx in (12, 14, 16):
+    for idx in ((12, 14, 16) if handedness == "right" else (11, 13, 15)):
         if idx in landmarks and landmarks[idx][2] > .35:
             cv2.circle(frame, (int(landmarks[idx][0] * w), int(landmarks[idx][1] * h)), 5, (15, 245, 255), -1)
     if ball:
@@ -126,7 +128,10 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
 
 
 def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
-                  progress: Callable[[float, str], None] | None = None) -> dict:
+                  progress: Callable[[float, str], None] | None = None,
+                  mode: str = "form", handedness: str = "right") -> dict:
+    if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
+        raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
     report(0.02, "Loading local vision models")
     pose_path = ensure_pose_model()
@@ -140,13 +145,15 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if width < 64 or height < 64 or total < 3:
+        capture.release()
         raise ValueError("The uploaded video is empty or too small to analyze.")
-    # Analyze at <=15 FPS, but retain source frame numbers/timestamps.
-    stride = max(1, round(fps / 15.0))
+    # Preserve more release/contest detail than the original 15 FPS pipeline.
+    stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
     raw_output = output_dir / "annotated_raw.mp4"
     writer = cv2.VideoWriter(str(raw_output), cv2.VideoWriter_fourcc(*"mp4v"), analyzed_fps, (width, height))
     if not writer.isOpened():
+        capture.release()
         raise RuntimeError("Could not initialize the annotated video writer.")
 
     options = mp.tasks.vision.PoseLandmarkerOptions(
@@ -157,16 +164,20 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             delegate=mp.tasks.BaseOptions.Delegate.CPU,
         ),
         running_mode=mp.tasks.vision.RunningMode.VIDEO,
-        num_poses=1, min_pose_detection_confidence=0.45,
+        num_poses=3 if mode == "one_on_one" else 1, min_pose_detection_confidence=0.45,
         min_pose_presence_confidence=0.45, min_tracking_confidence=0.45,
     )
     balls: list[Detection] = []
     poses: list[PoseFrame] = []
+    player_frames: list[dict] = []
     flows: dict[int, float] = {}
     previous_ball: Detection | None = None
     previous_gray: np.ndarray | None = None
     processed = 0
-    with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
+    with ExitStack() as resources:
+        resources.callback(capture.release)
+        resources.callback(writer.release)
+        landmarker = resources.enter_context(mp.tasks.vision.PoseLandmarker.create_from_options(options))
         frame_no = -1
         while True:
             ok, frame = capture.read()
@@ -179,29 +190,43 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), int(time_s * 1000))
             landmark_map: dict[int, tuple[float, float, float]] = {}
-            if result.pose_landmarks:
-                landmark_map = {i: (float(v.x), float(v.y), float(v.visibility or 0)) for i, v in enumerate(result.pose_landmarks[0])}
-                poses.append(PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()}))
-            ball = _track_ball(ball_model, rgb, previous_ball, frame_no, time_s, width, height)
+            players = []
+            landmark_maps = []
+            for pose_landmarks in result.pose_landmarks:
+                landmark_map = {i: (float(v.x), float(v.y), float(v.visibility or 0)) for i, v in enumerate(pose_landmarks)}
+                landmark_maps.append(landmark_map)
+                players.append(PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()}))
+            poses.extend(players)
+            player_frames.append({"frame": frame_no, "time_s": time_s, "players": players})
+            ball = _track_ball(ball_model, frame, previous_ball, frame_no, time_s, width, height)
             if ball:
                 balls.append(ball)
                 previous_ball = ball
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             flows[frame_no] = _net_flow(previous_gray, gray, rim)
             previous_gray = gray
-            _draw(frame, landmark_map, ball, rim)
+            for visible_pose in landmark_maps:
+                _draw(frame, visible_pose, None, None, handedness)
+            _draw(frame, {}, ball, rim)
             writer.write(frame)
             processed += 1
             if processed % 15 == 0:
                 report(min(.88, .08 + .78 * frame_no / max(1, total)), f"Analyzing frame {frame_no:,} of {total:,}")
-    capture.release()
-    writer.release()
+    observed_balls = list(balls)
     balls = _interpolate_track(balls, max(2, round(fps * .25)))
     nonzero_flow = [v for v in flows.values() if v > 0]
     baseline = float(np.median(nonzero_flow)) if nonzero_flow else 1.0
     normalized_flow = {frame: value / max(baseline, 1e-5) for frame, value in flows.items()}
-    shots = analyze_shots(balls, poses, fps, rim, normalized_flow)
-    view, view_confidence = classify_view(poses)
+    shots = analyze_shots(balls, poses, fps, rim, normalized_flow,
+                          aspect_ratio=width / height, handedness=handedness)
+    game_summary = None
+    if mode == "one_on_one":
+        # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
+        for shot in shots:
+            shot.metrics = {}
+            shot.cues = []
+        game_summary = analyze_game_shots(shots, player_frames, observed_balls, fps, width / height)
+    view, view_confidence = classify_view(poses, aspect_ratio=width / height)
 
     report(.92, "Encoding review video")
     annotated = output_dir / "annotated.mp4"
@@ -220,16 +245,22 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         "video": {"duration_s": round(total / fps, 2), "fps": round(fps, 2), "resolution": f"{width}×{height}",
                   "analyzed_fps": round(analyzed_fps, 2)},
         "camera_view": view, "camera_view_confidence": round(view_confidence, 2),
-        "right_handed": True, "shots": [shot.to_dict() for shot in shots],
-        "diagnostics": {"pose_frames": len(poses), "ball_detections": len([b for b in balls if b.confidence >= .12]),
+        "mode": mode, "handedness": handedness, "game_summary": game_summary,
+        "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
+        "diagnostics": {"pose_frames": sum(bool(p["players"]) for p in player_frames),
+                        "two_player_frames": sum(len(p["players"]) == 2 for p in player_frames),
+                        "ball_detections": len(observed_balls),
                         "rim_marked": rim is not None},
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
             "Make/miss is inferred from visible ball/rim geometry and net motion; occlusion can lower confidence.",
             "Feedback is descriptive and should complement, not replace, coaching judgment.",
+            "Shot candidates and outcomes require video review; passes, occlusion and camera movement can cause errors.",
         ],
         "annotated_video": "annotated.mp4",
     }
+    if mode == "one_on_one":
+        result["limitations"].extend(game_summary.get("limitations", []))
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
     return result

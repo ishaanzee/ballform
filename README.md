@@ -1,6 +1,6 @@
 # Ballform
 
-Local-first basketball shot analysis for uploaded iPhone video. Ballform uses MediaPipe Pose for right-arm mechanics, a small YOLO model for basketball tracking, and rim-plane/net-motion evidence for make/miss classification.
+Local-first basketball shot analysis for uploaded video. Choose **Shooting form** for left- or right-arm mechanics, or **1-on-1 game** for projected shooter–defender separation and contest review. Ballform uses MediaPipe Pose, YOLO basketball detection, and rim-plane/net-motion evidence for estimated make/miss classification.
 
 ## Run on Apple Silicon
 
@@ -55,12 +55,30 @@ Ballform is licensed under **AGPL-3.0-only** because it integrates the AGPL-lice
 
 All joint and launch angles are **2D image-plane estimates**. They are useful for comparing attempts recorded from the same camera position, not as calibrated 3D biomechanics. The outcome classifier reports its confidence and the exact evidence it used.
 
+### 1-on-1 game review
+
+Select **1-on-1 game** before uploading. Use a fixed sideline or slightly angled camera with both players and their hands visible. Mark the rim for outcome estimates. Each detected shot offers a release review button, underlying measurements, evidence quality, and an exportable JSON report.
+
+- **Separation:** projected distance between player hip centers divided by the shooter's shoulder-to-hip torso length.
+- **Contest clearance:** projected distance from the ball to the nearest visible defender wrist, in the same torso units. This is a hand-contest proxy, not a measurement of a blocked shooting lane.
+- **Separation change:** change over approximately 0.5 seconds before release, when conservative player matching and stable body scale permit comparison. Positive values mean more projected space.
+- **Shot-space score (0–100):** 65% separation component plus 35% contest-clearance component. Separation maps 0.5–3 torso lengths to 0–100; clearance maps 0.15–1.5 to 0–100, both clipped at the endpoints. Separation change is descriptive and does not affect the score.
+
+The formula and thresholds are **unvalidated review heuristics**, not make probability, expected points, a professional player grade, or a claim of optimal shot selection. Evidence quality is also heuristic, not a statistical probability. No score is produced when shooter ownership is ambiguous, an extra player is detected, required landmarks are occluded, or ball evidence is weak. Missing measurements remain unavailable, never zero.
+
+Footage is sampled at up to 30 FPS; exact release timing still has sampling and detection uncertainty. Distances are aspect-corrected but not court-calibrated: camera angle, depth, player overlap and movement affect the numbers. Compare attempts from a consistent camera setup and review detected shots and outcomes in the video. Passes can still be mistaken for shots. Game mode does not publish arm mechanics across players without reliable persistent identity. Use the separate form mode for individual biomechanics review.
+
+The multi-person configuration uses MediaPipe's documented [`num_poses` option](https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/PoseLandmarkerOptions). It allows a third detection so crowded frames can be rejected, rather than assigning that person as the defender. This is a review aid; professional-use accuracy needs evaluation on labeled representative game footage.
+
 ## Architecture
 
 - `app/analyzer.py`: video decoding, pose/ball inference, net optical flow, annotation
 - `app/scoring.py`: shot segmentation, release detection, metrics, outcome evidence
+- `app/game.py`: conservative 1-on-1 association, projected measurements, transparent shot-space score
 - `app/main.py`: upload/job API
 - `app/lan.py`: tokenized LAN/Tailscale sharing and QR pairing
 - `web/`: dependency-free upload and review interface
 
 Set `BALLFORM_YOLO_MODEL` to another Ultralytics detection checkpoint if desired. It must include COCO class 32 (`sports ball`). The default checkpoint is stored in `models/` and ignored by git.
+
+Run regression checks with `uv run pytest -q` and `node --check web/app.js`.

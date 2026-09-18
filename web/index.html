@@ -13,19 +13,24 @@
     <section class="hero">
       <p class="eyebrow">COMPUTER VISION SHOOTING REVIEW</p>
       <h1>See the shot<br><em>behind the shot.</em></h1>
-      <p class="lede">Upload an iPhone clip. Ballform follows your shooting arm and the ball, finds each release, and explains what the camera can actually prove.</p>
+      <p class="lede">Review your mechanics or the space you create in 1-on-1. Follow each release, inspect the evidence, and take specific questions back to the court.</p>
     </section>
 
     <section class="workspace" id="workspace">
       <div class="step"><b>01</b><span>CHOOSE CLIP</span></div>
+      <div class="settings" id="settings">
+        <label>Analysis mode<select id="analysisMode" aria-describedby="modeHelp"><option value="form">Shooting form</option><option value="one_on_one">1-on-1 game</option></select></label>
+        <label>Shooting hand<select id="handedness"><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
+        <p id="modeHelp">Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.</p>
+      </div>
       <label class="drop" id="drop">
-        <input id="file" type="file" accept="video/mp4,video/quicktime,video/x-m4v,video/webm" hidden>
+        <input id="file" class="accessible-file" type="file" accept="video/mp4,video/quicktime,video/x-m4v,video/webm">
         <span class="ball">●</span>
         <strong>Drop a shooting video here</strong>
         <small>or tap to choose from Photos · MP4, MOV, M4V, WEBM · up to 750 MB</small>
       </label>
       <label class="record" id="recordLabel">
-        <input id="cameraFile" type="file" accept="video/*" capture="environment" hidden>
+        <input id="cameraFile" class="accessible-file" type="file" accept="video/*" capture="environment">
         <span>PHONE</span><strong>Record a new clip</strong><small>Uses the rear camera, then uploads to this Mac</small>
       </label>
 
@@ -34,7 +39,7 @@
         <div class="preview-wrap">
           <video id="preview" muted playsinline></video>
           <canvas id="rimCanvas"></canvas>
-          <div class="scrub"><input id="scrubber" type="range" min="0" max="100" value="25"><span>Move to a clear rim frame</span></div>
+          <div class="scrub"><input id="scrubber" aria-label="Preview frame" type="range" min="0" max="100" value="25"><span>Move to a clear rim frame</span></div>
         </div>
         <div class="actions">
           <button id="clear" class="ghost" type="button">Clear box</button>
@@ -45,20 +50,22 @@
       <div id="progressStep" class="hidden progress-panel">
         <div class="step"><b>03</b><span>ANALYZING</span></div>
         <div class="meter"><i id="meter"></i></div>
-        <p id="progressText">Preparing upload…</p>
+        <p id="progressText" role="status" aria-live="polite">Preparing upload…</p>
+        <button id="retry" class="ghost hidden" type="button">Return to clip</button>
         <small>First run downloads the pose and ball models. Everything after that stays on this Mac.</small>
       </div>
     </section>
 
     <section id="results" class="results hidden">
-      <div class="result-head"><div><p class="eyebrow">ANALYSIS COMPLETE</p><h2>Your shot report</h2></div><button id="again" class="ghost">Analyze another</button></div>
+      <div class="result-head"><div><p class="eyebrow" id="reportMode">ANALYSIS COMPLETE</p><h2>Your shot report</h2></div><div class="report-actions"><button id="download" class="ghost">Download report</button><button id="again" class="ghost">Analyze another</button></div></div>
       <div class="summary" id="summary"></div>
+      <p id="gameHelp" class="report-note hidden">Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.</p>
       <video id="annotated" controls playsinline></video>
       <div id="shots"></div>
       <div class="limitations"><h3>Read this correctly</h3><ul id="limitations"></ul></div>
     </section>
   </main>
-  <footer><span>BALLFORM / LOCAL VISION LAB</span><span>RIGHT-HANDED ANALYSIS · 2D CAMERA PLANE</span></footer>
+  <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
   <script src="/assets/app.js"></script>
 </body>
 </html>
