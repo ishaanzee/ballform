@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import threading
+import uuid
+from pathlib import Path
+
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.analyzer import ROOT, analyze_video
+
+app = FastAPI(title="Ballform", version="0.1.0")
+JOBS_DIR = ROOT / "data" / "jobs"
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
+STATE: dict[str, dict] = {}
+LOCK = threading.Lock()
+ANALYSIS_LOCK = threading.Lock()
+ACCESS_TOKEN = os.environ.get("BALLFORM_ACCESS_TOKEN", "")
+MAX_BYTES = 750 * 1024 * 1024
+ALLOWED = {".mp4", ".mov", ".m4v", ".avi", ".webm"}
+
+
+def _update(job_id: str, **values) -> None:
+    with LOCK:
+        STATE.setdefault(job_id, {}).update(values)
+
+
+def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None) -> None:
+    try:
+        _update(job_id, status="waiting", message="Waiting for the local analyzer")
+        with ANALYSIS_LOCK:
+            _update(job_id, status="running", message="Starting analysis")
+            result = analyze_video(input_path, input_path.parent, rim,
+                                   lambda p, m: _update(job_id, progress=round(p, 3), message=m))
+        _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
+    except Exception as exc:
+        _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
+
+
+@app.middleware("http")
+async def require_lan_token(request: Request, call_next):
+    """Protect job data when the server is deliberately exposed to the LAN."""
+    if ACCESS_TOKEN and request.url.path.startswith("/api/"):
+        supplied = request.query_params.get("token") or request.headers.get("x-ballform-token")
+        if not supplied or not secrets.compare_digest(supplied, ACCESS_TOKEN):
+            return JSONResponse({"detail": "Invalid or missing Ballform pairing token."}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(ROOT / "web" / "index.html")
+
+
+@app.post("/api/jobs", status_code=202)
+async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None)) -> dict:
+    suffix = Path(video.filename or "").suffix.lower()
+    if suffix not in ALLOWED:
+        raise HTTPException(415, f"Use one of: {', '.join(sorted(ALLOWED))}")
+    rim_box = None
+    if rim:
+        try:
+            values = tuple(float(v) for v in json.loads(rim))
+            if len(values) != 4 or any(v < 0 or v > 1 for v in values) or values[2] <= .005 or values[3] <= .005:
+                raise ValueError
+            rim_box = values
+        except (ValueError, TypeError, json.JSONDecodeError):
+            raise HTTPException(422, "Rim must be a normalized [x, y, width, height] box.") from None
+    job_id = uuid.uuid4().hex[:12]
+    directory = JOBS_DIR / job_id
+    directory.mkdir()
+    input_path = directory / f"input{suffix}"
+    size = 0
+    with input_path.open("wb") as target:
+        while chunk := await video.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_BYTES:
+                target.close()
+                input_path.unlink(missing_ok=True)
+                directory.rmdir()
+                raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
+            target.write(chunk)
+    _update(job_id, status="queued", progress=0.0, message="Queued")
+    background.add_task(_run, job_id, input_path, rim_box)
+    return {"job_id": job_id}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    if job_id not in STATE:
+        result_path = JOBS_DIR / job_id / "result.json"
+        if result_path.exists():
+            return {"status": "complete", "progress": 1, "result": json.loads(result_path.read_text())}
+        raise HTTPException(404, "Job not found")
+    return STATE[job_id]
+
+
+@app.get("/api/jobs/{job_id}/video")
+def get_video(job_id: str) -> FileResponse:
+    if not job_id.isalnum():
+        raise HTTPException(404)
+    path = JOBS_DIR / job_id / "annotated.mp4"
+    if not path.exists():
+        raise HTTPException(404, "Annotated video is not ready")
+    return FileResponse(path, media_type="video/mp4", filename=f"ballform-{job_id}.mp4")
+
+
+app.mount("/assets", StaticFiles(directory=ROOT / "web"), name="assets")

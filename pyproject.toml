@@ -1,0 +1,33 @@
+[project]
+name = "ballform"
+version = "0.1.0"
+description = "Local-first basketball shot form analyzer"
+license = "AGPL-3.0-only"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "mediapipe>=0.10.21,<1",
+  "numpy>=1.26,<3",
+  "opencv-contrib-python>=4.10,<5",
+  "python-multipart>=0.0.18,<1",
+  "qrcode>=8.0,<9",
+  "ultralytics>=8.3,<9",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.28,<1", "pytest>=8.3,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[project.scripts]
+ballform-lan = "app.lan:main"
+ballform-share = "app.lan:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+packages = ["app"]

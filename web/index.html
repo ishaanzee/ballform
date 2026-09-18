@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Ballform — Shot mechanics, frame by frame</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header><a class="brand" id="homeLink" href="/"><span>BF</span> BALLFORM</a><div class="local" id="modeLabel">● RUNS LOCALLY</div></header>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">COMPUTER VISION SHOOTING REVIEW</p>
+      <h1>See the shot<br><em>behind the shot.</em></h1>
+      <p class="lede">Upload an iPhone clip. Ballform follows your shooting arm and the ball, finds each release, and explains what the camera can actually prove.</p>
+    </section>
+
+    <section class="workspace" id="workspace">
+      <div class="step"><b>01</b><span>CHOOSE CLIP</span></div>
+      <label class="drop" id="drop">
+        <input id="file" type="file" accept="video/mp4,video/quicktime,video/x-m4v,video/webm" hidden>
+        <span class="ball">●</span>
+        <strong>Drop a shooting video here</strong>
+        <small>or tap to choose from Photos · MP4, MOV, M4V, WEBM · up to 750 MB</small>
+      </label>
+      <label class="record" id="recordLabel">
+        <input id="cameraFile" type="file" accept="video/*" capture="environment" hidden>
+        <span>PHONE</span><strong>Record a new clip</strong><small>Uses the rear camera, then uploads to this Mac</small>
+      </label>
+
+      <div id="markStep" class="hidden">
+        <div class="step"><b>02</b><span>MARK THE RIM</span><small>Drag a snug box around the orange rim. This makes scoring much more reliable.</small></div>
+        <div class="preview-wrap">
+          <video id="preview" muted playsinline></video>
+          <canvas id="rimCanvas"></canvas>
+          <div class="scrub"><input id="scrubber" type="range" min="0" max="100" value="25"><span>Move to a clear rim frame</span></div>
+        </div>
+        <div class="actions">
+          <button id="clear" class="ghost" type="button">Clear box</button>
+          <button id="analyze" type="button">Analyze shot <span>→</span></button>
+        </div>
+      </div>
+
+      <div id="progressStep" class="hidden progress-panel">
+        <div class="step"><b>03</b><span>ANALYZING</span></div>
+        <div class="meter"><i id="meter"></i></div>
+        <p id="progressText">Preparing upload…</p>
+        <small>First run downloads the pose and ball models. Everything after that stays on this Mac.</small>
+      </div>
+    </section>
+
+    <section id="results" class="results hidden">
+      <div class="result-head"><div><p class="eyebrow">ANALYSIS COMPLETE</p><h2>Your shot report</h2></div><button id="again" class="ghost">Analyze another</button></div>
+      <div class="summary" id="summary"></div>
+      <video id="annotated" controls playsinline></video>
+      <div id="shots"></div>
+      <div class="limitations"><h3>Read this correctly</h3><ul id="limitations"></ul></div>
+    </section>
+  </main>
+  <footer><span>BALLFORM / LOCAL VISION LAB</span><span>RIGHT-HANDED ANALYSIS · 2D CAMERA PLANE</span></footer>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
