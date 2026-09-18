@@ -12,6 +12,8 @@ uv run uvicorn app.main:app --reload
 
 Use Python 3.11 or 3.12. Keep changes focused, add tests for scoring or networking behavior, and run the complete test suite before opening a pull request.
 
+The primary frontend is in `frontend/` and uses Node.js 22+, Next.js, React, and TypeScript. Run `npm ci`, copy `.env.example` to `.env.local`, and run `npm run dev` there with the Python service running separately. Before submitting frontend changes, run `npm test`, `npm run typecheck`, and `npm run build`. The original `web/` interface remains for local phone-sharing compatibility.
+
 ## Privacy and test data
 
 Never commit real user footage, generated job directories, pairing URLs, access tokens, downloaded model weights, or biometric/pose exports. Use synthetic fixtures or footage for which you have explicit redistribution permission. A pull request containing personal footage will not be accepted.

@@ -19,9 +19,10 @@ from app.game import analyze_game_shots
 from app.scoring import analyze_shots, classify_view
 
 ROOT = Path(__file__).resolve().parents[1]
-POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
+MODELS_DIR = Path(os.environ.get("BALLFORM_MODELS_DIR", str(ROOT / "models")))
+POSE_MODEL = MODELS_DIR / "pose_landmarker_lite.task"
 POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
-BALL_MODEL = ROOT / "models" / "yolo11n.pt"
+BALL_MODEL = MODELS_DIR / "yolo11n.pt"
 BALL_MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt"
 POSE_NAMES = {
     0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",

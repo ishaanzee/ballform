@@ -1,19 +1,71 @@
 # Ballform
 
-Local-first basketball shot analysis for uploaded video. Choose **Shooting form** for left- or right-arm mechanics, or **1-on-1 game** for projected shooter–defender separation and contest review. Ballform uses MediaPipe Pose, YOLO basketball detection, and rim-plane/net-motion evidence for estimated make/miss classification.
+Basketball video analysis with a **Next.js / React / TypeScript frontend** and a **Python vision backend**. Choose **Shooting form** for left- or right-arm mechanics, or **1-on-1 game** for projected shooter–defender separation and contest review. Both modes use the same existing analysis pipeline. Run everything locally, or deploy the frontend to Vercel and connect an HTTPS analysis worker.
 
-## Run on Apple Silicon
+## Run locally
 
-Python 3.11 or 3.12 is required (MediaPipe does not support the system's Python 3.14 build).
+Use Node.js 22+ and Python 3.11 or 3.12. Start the backend in one terminal:
 
 ```bash
 uv sync --extra dev --python 3.12
 uv run uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000>. On the first analysis, the MediaPipe pose model and YOLO weights download into local caches. Later runs are offline. `ffmpeg` is recommended and is used automatically to produce a browser-friendly H.264 review video.
+In another terminal:
 
-## Upload directly from an iPhone with Tailscale
+```bash
+cd frontend
+npm ci
+cp .env.example .env.local
+npm run dev
+```
+
+Open <http://localhost:3000>. The default frontend environment points directly to <http://localhost:8000>. Localhost origins on port 3000 are allowed by the backend by default. No access token is needed for this local development setup unless you configure one.
+
+On first analysis, the MediaPipe pose model and YOLO weights download into local caches. Later local runs are offline. Install `ffmpeg` for browser-friendly H.264 review videos. The original standalone interface remains at <http://127.0.0.1:8000> for the existing phone-sharing workflow.
+
+## Deploy the Next.js frontend to Vercel
+
+1. Import this repository into Vercel.
+2. Set **Root Directory** to **`frontend`** and select the **Next.js** framework preset. Build command: `npm run build`. Leave the output directory at its default.
+3. Set **`NEXT_PUBLIC_API_URL`** to your analysis worker's public HTTPS base URL, such as `https://analysis.example.com`. This is an address, **not a secret**. Never put the access token in a `NEXT_PUBLIC_` variable.
+4. Deploy. Configure the backend's `BALLFORM_CORS_ORIGINS` with the exact Vercel production origin, then restart the backend. For previews, explicitly add each origin that should work.
+5. Open the app and enter the backend access token. It stays in the tab's session storage. Upload a clip, choose a mode, and analyze.
+
+The frontend can build without the backend URL; it displays a setup notice and disables analysis until configured. `NEXT_PUBLIC_API_URL` is baked into the browser build, so changing it requires a redeploy.
+
+Videos upload **directly from the browser to the Python service**; they are never proxied through Vercel functions. [Vercel limits function request/response bodies to 4.5 MB](https://vercel.com/docs/functions/limitations), while Ballform accepts up to 750 MB and runs long-lived model jobs. Deploying the frontend alone does not provide video analysis. An HTTPS frontend also needs an HTTPS backend; a localhost or plain HTTP worker cannot serve a public Vercel deployment.
+
+### Deploy the analysis service
+
+The root `Dockerfile` packages the existing FastAPI worker, CPU vision dependencies, and FFmpeg. Deploy it on a container host with HTTPS, writable persistent storage, and enough memory for the vision models. Build it from the **repository root**, not `frontend/`.
+
+Configure these backend variables (see `backend.env.example`):
+
+| Variable | Value |
+| --- | --- |
+| `BALLFORM_REQUIRE_TOKEN` | `1` (the Docker default; refuses startup without a token) |
+| `BALLFORM_ACCESS_TOKEN` | A long random private token, entered in the frontend by trusted users |
+| `BALLFORM_CORS_ORIGINS` | Exact frontend origins, comma-separated, e.g. `https://your-project.vercel.app` |
+| `BALLFORM_JOBS_DIR` | `/data/jobs` |
+| `BALLFORM_MODELS_DIR` | `/data/models` |
+| `PORT` | Host-supplied port, or `8000` |
+
+Mount a persistent volume at `/data` writable by the container's `ballform` user. The healthcheck path is `/healthz`. First analysis downloads model weights; allow outbound access for that download. Your host/reverse proxy must allow the upload size and upload duration you intend to support. Configure access logs to omit query strings: video playback uses the access token in its URL because native video elements cannot set a custom authorization header.
+
+Run **one instance and one Uvicorn worker**: the job queue and progress are process-local. Completed reports survive restarts when `/data` persists, but interrupted or queued jobs must be submitted again. Do not enable horizontal autoscaling without first adding a shared job queue and object storage. The shared token is suitable for a trusted individual/team, not public multi-tenant access: holders can access all jobs. Uploaded footage remains on the backend until you remove it.
+
+Example local container smoke test (set the token in your shell first):
+
+```bash
+docker build -t ballform-worker .
+docker run --rm -p 8000:8000 \
+  -e BALLFORM_ACCESS_TOKEN \
+  -e BALLFORM_CORS_ORIGINS=http://localhost:3000 \
+  -v ballform-data:/data ballform-worker
+```
+
+## Optional: original local iPhone interface with Tailscale
 
 Tailscale is the recommended transport. It works across isolated school, guest, and home networks without using a phone hotspot, while inference and stored footage remain on the Mac.
 
@@ -37,7 +89,7 @@ Keep Tailscale connected and the terminal open during the transfer. Press `Ctrl+
 
 Running `uv run ballform-share` without a `--network` option automatically prefers Tailscale when it is connected and otherwise falls back to local Wi-Fi. Force ordinary local networking with `--network lan`; the legacy `ballform-lan` command remains available.
 
-If required-Tailscale mode reports that Tailscale is stopped, open the app on both devices and enable it before retrying. A campus policy that explicitly blocks VPN software may still prevent this approach; that requires the future cloud-upload worker described in the roadmap.
+If required-Tailscale mode reports that Tailscale is stopped, open the app on both devices and enable it before retrying. The Vercel frontend plus hosted analysis service above is the alternative when you need access without a private network.
 
 ## Open-source license
 
@@ -77,8 +129,10 @@ The multi-person configuration uses MediaPipe's documented [`num_poses` option](
 - `app/game.py`: conservative 1-on-1 association, projected measurements, transparent shot-space score
 - `app/main.py`: upload/job API
 - `app/lan.py`: tokenized LAN/Tailscale sharing and QR pairing
-- `web/`: dependency-free upload and review interface
+- `frontend/`: Next.js App Router, React upload/review UI, typed API client (Vercel root directory)
+- `web/`: original standalone interface for local LAN/Tailscale compatibility
+- `Dockerfile`: independently hosted Python analysis worker
 
 Set `BALLFORM_YOLO_MODEL` to another Ultralytics detection checkpoint if desired. It must include COCO class 32 (`sports ball`). The default checkpoint is stored in `models/` and ignored by git.
 
-Run regression checks with `uv run pytest -q` and `node --check web/app.js`.
+Run backend regression checks with `uv run pytest -q`. In `frontend/`, run `npm test`, `npm run typecheck`, and `npm run build`.
