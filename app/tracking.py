@@ -28,11 +28,11 @@ def body_geometry(pose: PoseFrame, aspect_ratio: float) -> tuple[tuple[float, fl
     shoulder = ((ls[0] + rs[0]) * aspect_ratio / 2, (ls[1] + rs[1]) / 2)
     hip = ((lh[0] + rh[0]) * aspect_ratio / 2, (lh[1] + rh[1]) / 2)
     torso = math.dist(shoulder, hip)
-    return (hip, torso) if torso >= .025 else None
+    return (hip, torso) if torso >= .008 else None
 
 
 def jersey_descriptor(frame: np.ndarray, pose: PoseFrame) -> tuple[float, float, float] | None:
-    """Return robust normalized Lab colour from an inset torso polygon."""
+    """Return dominant jersey colour, reducing contamination from numbers and skin."""
     points = [_visible(pose, name) for name in BODY_NAMES]
     if any(point is None for point in points):
         return None
@@ -40,16 +40,40 @@ def jersey_descriptor(frame: np.ndarray, pose: PoseFrame) -> tuple[float, float,
     ordered = (points[0], points[1], points[3], points[2])
     raw = np.asarray([(point[0] * width, point[1] * height) for point in ordered], dtype=np.float32)
     center = raw.mean(axis=0)
-    polygon = np.rint(center + .68 * (raw - center)).astype(np.int32)
+    polygon = np.rint(center + .90 * (raw - center)).astype(np.int32)
     if abs(float(cv2.contourArea(polygon))) < 20:
         return None
-    mask = np.zeros((height, width), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, polygon, 255)
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    x, y, w, h = cv2.boundingRect(polygon)
+    x, y = max(0, x), max(0, y)
+    w, h = min(w, width-x), min(h, height-y)
+    if w < 2 or h < 2:
+        return None
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, polygon - (x, y), 255)
+    lab = cv2.cvtColor(frame[y:y+h, x:x+w], cv2.COLOR_BGR2LAB)
     pixels = lab[mask > 0]
     if len(pixels) < 20:
         return None
-    median = np.median(pixels, axis=0) / 255.
+    values = pixels[::max(1, len(pixels)//512)].astype(float)
+    centers = [values.mean(axis=0)]
+    for _ in range(2):
+        distances = np.min(np.linalg.norm(values[:, None] - np.asarray(centers), axis=2), axis=1)
+        centers.append(values[int(np.argmax(distances))])
+    centers = np.asarray(centers)
+    for _ in range(6):
+        labels = np.argmin(np.linalg.norm(values[:, None] - centers, axis=2), axis=1)
+        for k in range(3):
+            if np.any(labels == k):
+                centers[k] = values[labels == k].mean(axis=0)
+    dominant = int(np.argmax(np.bincount(labels, minlength=3)))
+    # Large jersey lettering often occupies the center of the torso. A substantial
+    # saturated fabric cluster is more useful than its white/gold number.
+    counts = np.bincount(labels, minlength=3) / len(labels)
+    chroma = np.linalg.norm(centers[:, 1:] - 128, axis=1)
+    fabric = [k for k in range(3) if counts[k] >= .20 and chroma[k] > 40]
+    if fabric:
+        dominant = max(fabric, key=lambda k: counts[k])
+    median = np.median(values[labels == dominant], axis=0) / 255.
     return tuple(float(value) for value in median)
 
 
@@ -71,6 +95,10 @@ class PoseTracker:
         self.max_gap_frames = max_gap_frames
         self._next_id = 1
         self._tracks: dict[int, _Track] = {}
+
+    def reset(self) -> None:
+        """Start new identities after a camera cut without recycling player IDs."""
+        self._tracks.clear()
 
     def update(self, poses: list[PoseFrame]) -> None:
         if not poses:

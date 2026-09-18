@@ -115,7 +115,7 @@ def test_five_on_five_selects_ball_owner_and_nearest_opponent():
         "defender_track_id": 6,
     }
     assert game["metrics"]["separation_torso"] == .65
-    assert summary["method"]["version"] == "shot-space-v2-multiplayer"
+    assert summary["method"]["version"] == "shot-space-v3-broadcast"
 
 
 def test_crowded_frame_with_indistinguishable_jerseys_withholds_matchup():
@@ -148,3 +148,33 @@ def test_multiplayer_trend_uses_track_ids_when_pose_order_changes():
     game, _ = run(release, prior=prior)
     assert game["score"] is not None
     assert game["metrics"]["separation_change_torso"] == .25
+
+
+def test_background_lowered_hand_cannot_become_shooter():
+    shooter = player(.3, wrist=(.34, .3), track_id=1)
+    background = player(.6, wrist=(.331, .3), track_id=2)
+    for side in ('left', 'right'):
+        background.landmarks[side+'_shoulder'] = (.6, .1, .95)
+        background.landmarks[side+'_hip'] = (.6, .3, .95)
+    game, _ = run([shooter, background])
+    assert game['players']['shooter_track_id'] == 1
+
+
+def test_raised_contesting_opponent_preferred_to_background_hip():
+    shooter = player(.3, appearance=(.1,.2,.3), track_id=1)
+    background = player(.45, appearance=(.8,.6,.3), track_id=2)
+    for side in ('left', 'right'):
+        background.landmarks[side+'_wrist'] = (.45, .65, .95)
+    contester = player(.65, wrist=(.45,.3), appearance=(.8,.6,.3), track_id=3)
+    game, _ = run([shooter, background, contester])
+    assert game['players']['defender_track_id'] == 3
+
+
+def test_occluded_hand_yields_bounds_not_a_fabricated_point_score():
+    game, _ = run([player(.3), player(.7, hidden='right_wrist')])
+    complete, _ = run([player(.3), player(.7)])
+    assert game['score'] is None
+    assert game['status'] == 'partial'
+    assert game['score_range']['lower'] <= complete['score'] <= game['score_range']['upper']
+    assert game['metrics']['contest_clearance_torso'] is None
+    assert game['metrics']['visible_hand_clearance_torso'] is not None

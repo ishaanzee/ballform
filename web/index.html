@@ -19,7 +19,8 @@
     <section class="workspace" id="workspace">
       <div class="step"><b>01</b><span>CHOOSE CLIP</span></div>
       <div class="settings" id="settings">
-        <label>Analysis mode<select id="analysisMode" aria-describedby="modeHelp"><option value="form">Shooting form</option><option value="one_on_one">1-on-1 game</option></select></label>
+        <label>Analysis mode<select id="analysisMode" aria-describedby="modeHelp"><option value="form">Single-person shooting form</option><option value="one_on_one">Game / 1-on-1 / 5-on-5</option></select></label>
+        <label>Camera / footage<select id="cameraProfile"><option value="auto">Auto (wide view for games)</option><option value="broadcast">NBA / elevated broadcast</option><option value="elevated">Pickup / elevated wide view</option><option value="courtside">Stationary courtside / side view</option></select></label>
         <label>Shooting hand<select id="handedness"><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
         <p id="modeHelp">Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.</p>
       </div>
@@ -35,14 +36,15 @@
       </label>
 
       <div id="markStep" class="hidden">
-        <div class="step"><b>02</b><span>MARK THE RIM</span><small>Drag a snug box around the orange rim. This makes scoring much more reliable.</small></div>
+        <div class="step"><b>02</b><span>MARK THE VIEW</span><small id="markHelp">Drag a snug box around the rim for stationary-camera outcome estimates.</small></div>
+        <div class="actions"><button id="markRim" class="ghost" type="button">Mark rim</button><button id="markCourt" class="ghost" type="button">Mark playing area (click 3–8 corners)</button></div>
         <div class="preview-wrap">
           <video id="preview" muted playsinline></video>
           <canvas id="rimCanvas"></canvas>
           <div class="scrub"><input id="scrubber" aria-label="Preview frame" type="range" min="0" max="100" value="25"><span>Move to a clear rim frame</span></div>
         </div>
         <div class="actions">
-          <button id="clear" class="ghost" type="button">Clear box</button>
+          <button id="clear" class="ghost" type="button">Clear current selection</button>
           <button id="analyze" type="button">Analyze shot <span>→</span></button>
         </div>
       </div>
@@ -59,6 +61,7 @@
     <section id="results" class="results hidden">
       <div class="result-head"><div><p class="eyebrow" id="reportMode">ANALYSIS COMPLETE</p><h2>Your shot report</h2></div><div class="report-actions"><button id="download" class="ghost">Download report</button><button id="again" class="ghost">Analyze another</button></div></div>
       <div class="summary" id="summary"></div>
+      <p id="visionSummary" class="report-note"></p>
       <p id="gameHelp" class="report-note hidden">Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.</p>
       <video id="annotated" controls playsinline></video>
       <div id="shots"></div>

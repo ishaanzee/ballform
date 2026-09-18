@@ -41,17 +41,39 @@ def classify_view(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0) -> tupl
     return "oblique", 0.65
 
 
-def find_release(ball: Sequence[Detection], poses: Sequence[PoseFrame], start: int, apex: int, aspect_ratio: float = 1.0, handedness: str = "right") -> int:
+def _release_proximity(pose, detection, side, aspect_ratio, game_mode):
+    wrist = _point(pose, f"{side}_wrist", aspect_ratio)
+    if wrist is None or detection is None:
+        return None
+    proximity = distance(wrist, (detection.x * aspect_ratio, detection.y))
+    if not game_mode:
+        return proximity
+    body = [_point(pose, name, aspect_ratio) for name in
+            ("left_shoulder", "right_shoulder", "left_hip", "right_hip")]
+    if not all(body):
+        return None
+    shoulder = tuple((body[0][i]+body[1][i])/2 for i in (0, 1))
+    hip = tuple((body[2][i]+body[3][i])/2 for i in (0, 1))
+    torso = distance(shoulder, hip)
+    # Waist-level contact followed by a bounce is not a shot release. Scaling
+    # to the player's body avoids a large fixed-radius contact test in wide views.
+    if (torso <= 0 or proximity > .9 * torso or detection.confidence < .4
+            or wrist[1] > shoulder[1] + .15*torso):
+        return None
+    return proximity / torso * .10
+
+
+def find_release(ball: Sequence[Detection], poses: Sequence[PoseFrame], start: int, apex: int, aspect_ratio: float = 1.0, handedness: str = "right", game_mode: bool = False) -> int:
     candidates: list[tuple[float, int]] = []
     by_frame = {b.frame: b for b in ball}
     for pose in poses:
         if not start <= pose.frame <= apex:
             continue
-        wrist = _point(pose, f"{handedness}_wrist", aspect_ratio)
         detection = by_frame.get(pose.frame)
-        if wrist and detection:
-            proximity = distance(wrist, (detection.x * aspect_ratio, detection.y))
-            candidates.append((proximity, pose.frame))
+        for side in (("left", "right") if game_mode else (handedness,)):
+            proximity = _release_proximity(pose, detection, side, aspect_ratio, game_mode)
+            if proximity is not None:
+                candidates.append((proximity, pose.frame))
     if candidates and min(c[0] for c in candidates) <= .12:
         near_frame = min(candidates)[1]
         # The release follows the last close hand/ball contact before separation.
@@ -136,6 +158,7 @@ def analyze_shots(
     net_motion: dict[int, float] | None = None,
     aspect_ratio: float = 1.0,
     handedness: str = "right",
+    game_mode: bool = False,
 ) -> list[ShotResult]:
     """Segment arcs and calculate form/outcome. Coordinates are normalized 0..1."""
     if fps <= 0 or not math.isfinite(fps) or aspect_ratio <= 0 or not math.isfinite(aspect_ratio):
@@ -162,7 +185,9 @@ def analyze_shots(
         if any(b - a > max_gap for a, b in zip(frames[before_idx:after_idx], frames[before_idx + 1:after_idx + 1])):
             continue
         if before.y - current.y > 0.015 and after.y - current.y > 0.015:
-            pose = _nearest_pose(poses, current.frame, fps)
+            # Detector ordering is not identity in games; a random player's shoulder
+            # height cannot determine whether another player's ball is a dribble.
+            pose = None if game_mode else _nearest_pose(poses, current.frame, fps)
             shoulders = [_point(pose, name) for name in ("left_shoulder", "right_shoulder")] if pose else []
             # Only reject an obvious below-shoulder bounce, with both shoulders visible.
             if len(shoulders) == 2 and all(shoulders) and current.y > max(p[1] for p in shoulders) + .05:
@@ -186,13 +211,36 @@ def analyze_shots(
                 hi = index
                 break
         segment = ordered[lo : hi + 1]
-        release = find_release(segment, poses, segment[0].frame, apex_frame, aspect_ratio, handedness)
+        release = find_release(segment, poses, segment[0].frame, apex_frame, aspect_ratio, handedness, game_mode)
         release_ball = next((b for b in segment if b.frame == release), None)
         release_contact = release_ball is not None and any(
-            p.frame == release and (wrist := _point(p, f"{handedness}_wrist", aspect_ratio)) is not None
-            and distance(wrist, (release_ball.x * aspect_ratio, release_ball.y)) <= .12
+            p.frame == release and (proximity := _release_proximity(p, release_ball, side, aspect_ratio, game_mode)) is not None
+            and proximity <= .12
             for p in poses
+            for side in (("left", "right") if game_mode else (handedness,))
         )
+        if game_mode and not release_contact:
+            continue
+        if game_mode:
+            apex_ball = ordered[apex_idx]
+            flight_supported = False
+            for pose in poses:
+                if pose.frame != release or not any(
+                        (contact := _release_proximity(pose, release_ball, side, aspect_ratio, True)) is not None
+                        and contact <= .12 for side in ('left', 'right')):
+                    continue
+                body = [_point(pose, name, aspect_ratio) for name in
+                        ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')]
+                if not all(body):
+                    continue
+                shoulder = tuple((body[0][i]+body[1][i])/2 for i in (0,1))
+                hip = tuple((body[2][i]+body[3][i])/2 for i in (0,1))
+                torso = distance(shoulder, hip)
+                if apex_ball.y < shoulder[1] - .75*torso and release_ball.y-apex_ball.y >= .75*torso:
+                    flight_supported = True
+                    break
+            if not flight_supported:
+                continue
         outcome, confidence, evidence = "unknown", 0.0, ["Ball arc detected"]
         evidence.append(
             "Release time estimated from visible shooting-hand/ball proximity"
@@ -243,7 +291,7 @@ def analyze_shots(
                 evidence.append("No reliable rim-plane crossing was visible")
         else:
             evidence.append("Outcome unavailable because the rim was not marked")
-        metrics, cues = _form_metrics(poses, segment, release, fps, aspect_ratio, handedness)
+        metrics, cues = ({}, []) if game_mode else _form_metrics(poses, segment, release, fps, aspect_ratio, handedness)
         results.append(ShotResult(
             number=len(results) + 1,
             start_s=round(segment[0].time_s, 2),

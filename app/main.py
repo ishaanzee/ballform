@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyzer import ROOT, analyze_video
+from app.vision import CAMERAS, validate_court
 
 app = FastAPI(title="Ballform", version="0.1.0")
 JOBS_DIR = ROOT / "data" / "jobs"
@@ -31,14 +32,14 @@ def _update(job_id: str, **values) -> None:
 
 
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
-         mode: str = "form", handedness: str = "right") -> None:
+         mode: str = "form", handedness: str = "right", camera: str = "auto", court=None) -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
             result = analyze_video(input_path, input_path.parent, rim,
                                    lambda p, m: _update(job_id, progress=round(p, 3), message=m),
-                                   mode=mode, handedness=handedness)
+                                   mode=mode, handedness=handedness, camera=camera, court=court)
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -61,11 +62,18 @@ def index() -> FileResponse:
 
 @app.post("/api/jobs", status_code=202)
 async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None),
-                     mode: str = Form("form"), handedness: str = Form("right")) -> dict:
+                     mode: str = Form("form"), handedness: str = Form("right"),
+                     camera: str = Form("auto"), court: str | None = Form(None)) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
+    if camera not in CAMERAS:
+        raise HTTPException(422, "Camera must be auto, broadcast, elevated or courtside.")
+    try:
+        court_polygon = validate_court(json.loads(court)) if court else None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Court must be 3–8 normalized [x,y] points around a convex playing area.") from None
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(415, f"Use one of: {', '.join(sorted(ALLOWED))}")
@@ -95,7 +103,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                 raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
             target.write(chunk)
     _update(job_id, status="queued", progress=0.0, message="Queued")
-    background.add_task(_run, job_id, input_path, rim_box, mode, handedness)
+    background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
     return {"job_id": job_id}
 
 

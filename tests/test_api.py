@@ -19,7 +19,7 @@ def test_upload_forwards_game_options(client, monkeypatch):
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video", "video/mp4")},
                            data={"mode": "one_on_one", "handedness": "left"})
     assert response.status_code == 202
-    assert calls[0][3:] == ("one_on_one", "left")
+    assert calls[0][3:] == ("one_on_one", "left", "auto", None)
     assert calls[0][1].read_bytes() == b"video"
 
 
@@ -28,11 +28,23 @@ def test_existing_upload_defaults_to_form(client, monkeypatch):
     monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
     response = client.post("/api/jobs", files={"video": ("shot.mp4", b"video")})
     assert response.status_code == 202
-    assert calls[0][3:] == ("form", "right")
+    assert calls[0][3:] == ("form", "right", "auto", None)
+
+
+def test_upload_forwards_broadcast_court(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    court = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": "broadcast", "court": json.dumps(court)})
+    assert response.status_code == 202
+    assert calls[0][5:] == ("broadcast", court)
 
 
 @pytest.mark.parametrize("data", [
     {"mode": "invalid"}, {"handedness": "either"},
+    {"camera": "unknown"}, {"court": "oops"}, {"court": "[1,2,3]"},
+    {"court": "[[0,0],[1,1],[0,1],[1,0]]"},
     {"rim": json.dumps([float("nan"), .2, .1, .1])},
     {"rim": json.dumps([.95, .2, .2, .1])},
 ])
