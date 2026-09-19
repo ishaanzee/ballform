@@ -134,6 +134,22 @@ def test_smooth_realistic_apex_detected_at_normal_frame_rates(fps):
     assert any("Release contact unavailable" in item for item in shots[0].evidence)
 
 
+def test_game_shot_with_broad_apex_and_visible_release():
+    fps = 60
+    track = [Detection(f, f / fps, .4 + .002 * (f - 30),
+                       .03 + .15 * ((f - 60) / 60) ** 2, .9)
+             for f in range(0, 121, 2)]
+    release_ball = next(ball for ball in track if ball.frame == 30)
+    shooter = PoseFrame(30, 30 / fps, {
+        "left_shoulder": (.38, .18, .9), "right_shoulder": (.42, .18, .9),
+        "left_hip": (.38, .22, .9), "right_hip": (.42, .22, .9),
+        "right_wrist": (release_ball.x, release_ball.y, .9),
+    })
+    shots = analyze_shots(track, [shooter], fps, None, aspect_ratio=16 / 9, game_mode=True)
+    assert len(shots) == 1
+    assert shots[0].release_s == .5
+
+
 def test_monotonic_ball_path_is_not_an_apex():
     track = [Detection(f, f / 30, .2 + f / 200, .8 - f / 100, .9) for f in range(60)]
     assert analyze_shots(track, [], 30, None) == []

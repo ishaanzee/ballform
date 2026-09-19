@@ -20,7 +20,7 @@ from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.tracking import PoseTracker, jersey_descriptor
-from app.vision import CourtVision, camera_profile, scene_cut, validate_court
+from app.vision import CourtVision, CutDetector, camera_profile, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +51,17 @@ class RimTracker:
         self.started = False
         self.lost = False
         self.last = initial
+        self.failures = 0
+
+    def _soft_failure(self):
+        self.failures += 1
+        if self.failures <= 5 and self.last:
+            # Short ball/net occlusions should not erase the hoop annotation.
+            self.started = False
+            self.initial = self.last
+            return self.last
+        self.lost = True
+        return None
 
     def update(self, frame: np.ndarray) -> tuple[float, float, float, float] | None:
         if self.lost:
@@ -69,20 +80,18 @@ class RimTracker:
             return self.initial
         ok, box = self.tracker.update(frame)
         if not ok:
-            self.lost = True
-            return None
+            return self._soft_failure()
         x, y, w, h = (float(value) for value in box)
         if w < 5 or h < 3 or x < 0 or y < 0 or x + w > self.width or y + h > self.height:
-            self.lost = True
-            return None
+            return self._soft_failure()
         current = x / self.width, y / self.height, w / self.width, h / self.height
         old_x, old_y, old_w, old_h = self.last
         center_jump = np.hypot((current[0] + current[2] / 2) - (old_x + old_w / 2),
                                (current[1] + current[3] / 2) - (old_y + old_h / 2))
         scale = current[2] / max(old_w, 1e-6)
         if center_jump > .12 or not .62 <= scale <= 1.6:
-            self.lost = True
-            return None
+            return self._soft_failure()
+        self.failures = 0
         self.last = current
         return current
 
@@ -178,8 +187,9 @@ def _device() -> str:
         return "cpu"
 
 
-def _track_ball(model: YOLO, bgr: np.ndarray, previous: Detection | None, frame_no: int,
-                time_s: float, width: int, height: int) -> Detection | None:
+def _track_ball(model: YOLO, bgr: np.ndarray, previous: Detection | None,
+                prior: Detection | None, frame_no: int, time_s: float,
+                width: int, height: int) -> Detection | None:
     result = model.predict(bgr, imgsz=640, conf=0.12, classes=[32], device=_device(), verbose=False)[0]
     choices: list[Detection] = []
     if result.boxes is not None:
@@ -191,7 +201,21 @@ def _track_ball(model: YOLO, bgr: np.ndarray, previous: Detection | None, frame_
     if not choices:
         return None
     if previous and frame_no - previous.frame < 12:
-        return max(choices, key=lambda d: d.confidence - 2.0 * ((d.x - previous.x) ** 2 + (d.y - previous.y) ** 2) ** 0.5)
+        predicted = (previous.x, previous.y)
+        if prior and previous.frame - prior.frame == frame_no - previous.frame:
+            predicted = (previous.x + previous.x - prior.x, previous.y + previous.y - prior.y)
+        def continuity_cost(d):
+            distance = float(np.hypot(d.x - predicted[0], d.y - predicted[1]))
+            # A ball can move quickly, but a crowd false positive should not jump
+            # across a large part of the frame for one low-confidence detection.
+            velocity = float(np.hypot(previous.x - (prior.x if prior else previous.x),
+                                      previous.y - (prior.y if prior else previous.y)))
+            allowed = max(.10, 2.5 * velocity + .06, 7.0 * max(previous.radius, d.radius))
+            if distance > allowed and d.confidence < max(.82, previous.confidence + .08):
+                return -100.0
+            return d.confidence - 3.0 * distance
+        selected = max(choices, key=continuity_cost)
+        return selected if continuity_cost(selected) > -50 else None
     return max(choices, key=lambda d: d.confidence)
 
 
@@ -403,9 +427,11 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     player_frames: list[dict] = []
     flows: dict[int, dict[str, float]] = {}
     previous_ball: Detection | None = None
+    prior_ball: Detection | None = None
     previous_gray: np.ndarray | None = None
     processed = 0
     cut_frames = []
+    cut_detector = CutDetector() if game_mode else None
     raw_people_counts = []
     tracked_rims: dict[int, tuple[float, float, float, float]] = {}
     rim_tracking_lost = False
@@ -429,16 +455,17 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                 continue
             time_s = frame_no / fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            cut = bool(game_mode and scene_cut(previous_gray, gray))
-            if cut:
-                cut_frames.append(frame_no)
+            cut_frame = cut_detector.observe(frame_no, gray) if cut_detector else None
+            if cut_frame is not None:
+                cut_frames.append(cut_frame)
                 pose_tracker.reset()
                 previous_ball = None
+                prior_ball = None
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
             players = []
             landmark_maps = []
             if court_vision:
-                players, landmark_maps, ball = court_vision.detect(frame, frame_no, time_s, previous_ball)
+                players, landmark_maps, ball = court_vision.detect(frame, frame_no, time_s, previous_ball, prior_ball)
                 raw_people_counts.append(court_vision.raw_people)
                 for pose in players:
                     pose.appearance = jersey_descriptor(frame, pose)
@@ -450,11 +477,12 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                     landmark_map = {i: (float(v.x), float(v.y), float(v.visibility or 0)) for i, v in enumerate(pose_landmarks)}
                     landmark_maps.append(landmark_map)
                     players.append(PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()}))
-                ball = _track_ball(ball_model, frame, previous_ball, frame_no, time_s, width, height)
+                ball = _track_ball(ball_model, frame, previous_ball, prior_ball, frame_no, time_s, width, height)
             poses.extend(players)
             player_frames.append({"frame": frame_no, "time_s": time_s, "players": players})
             if ball:
                 balls.append(ball)
+                prior_ball = previous_ball
                 previous_ball = ball
             flows[frame_no] = _net_flow(previous_gray, gray, frame_rim)
             previous_gray = gray
@@ -565,7 +593,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         if profile in {"broadcast", "elevated"}:
             result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip.")
         if profile == "moving":
-            result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on the video's first frame and review every result.")
+            result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on any clear frame and review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")

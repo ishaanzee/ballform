@@ -91,7 +91,7 @@ class CourtVision:
         self.imgsz = 1280 if self.tiled else 960
         self.raw_people = 0
 
-    def detect(self, frame, frame_no, time_s, previous_ball=None):
+    def detect(self, frame, frame_no, time_s, previous_ball=None, prior_ball=None):
         height, width = frame.shape[:2]
         candidates, balls = [], []
         basketball_objects = self.ball_model.detect(frame) if isinstance(self.ball_model, BasketballDetector) else None
@@ -161,7 +161,20 @@ class CourtVision:
             poses.append(PoseFrame(frame_no, time_s, {NAMES[i]: p for i, p in person.landmarks.items()}))
             maps.append(person.landmarks)
         if previous_ball and time_s - previous_ball.time_s < .3:
-            ball = max(balls, key=lambda b: b.confidence - 2*np.hypot(b.x-previous_ball.x, b.y-previous_ball.y), default=None)
+            predicted = (previous_ball.x, previous_ball.y)
+            if prior_ball and previous_ball.frame - prior_ball.frame == frame_no - previous_ball.frame:
+                predicted = (previous_ball.x + previous_ball.x - prior_ball.x,
+                             previous_ball.y + previous_ball.y - prior_ball.y)
+            velocity = np.hypot(previous_ball.x - (prior_ball.x if prior_ball else previous_ball.x),
+                                 previous_ball.y - (prior_ball.y if prior_ball else previous_ball.y))
+            allowed = max(.10, 2.5 * velocity + .06, 7.0 * previous_ball.radius)
+            def cost(candidate):
+                jump = np.hypot(candidate.x - predicted[0], candidate.y - predicted[1])
+                if jump > allowed and candidate.confidence < max(.82, previous_ball.confidence + .08):
+                    return -100.0
+                return candidate.confidence - 3.0 * jump
+            selected = max(balls, key=cost, default=None)
+            ball = selected if selected is not None and cost(selected) > -50 else None
         else:
             ball = max(balls, key=lambda b: b.confidence, default=None)
         return poses, maps, ball
@@ -181,3 +194,27 @@ def scene_cut(previous, current) -> bool:
     old = cv2.resize(previous, (96, 54)).astype(np.float32)
     new = cv2.resize(current, (96, 54)).astype(np.float32)
     return float(np.mean(np.abs(old-new))) > 45.
+
+
+class CutDetector:
+    """Confirm a cut only if the new image persists past one sampled frame."""
+
+    def __init__(self):
+        self.previous = None
+        self.pending_frame = None
+        self.reference = None
+
+    def observe(self, frame: int, gray: np.ndarray) -> int | None:
+        cut = None
+        if self.pending_frame is not None:
+            # A one-frame flash differs from its neighbors twice, but the
+            # image after it still resembles the image before it.
+            if scene_cut(self.reference, gray):
+                cut = self.pending_frame
+            self.pending_frame = None
+            self.reference = None
+        elif scene_cut(self.previous, gray):
+            self.pending_frame = frame
+            self.reference = self.previous
+        self.previous = gray
+        return cut

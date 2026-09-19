@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from app.vision import Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
+from app.vision import CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
 from app.basketball import decode, preprocess
 from app.game import _body, _appearance_groups
 from app.models import PoseFrame
@@ -80,6 +80,15 @@ def test_cut_detection_and_profiles():
     assert camera_profile('auto', 'one_on_one') == 'broadcast'
     assert camera_profile('auto', 'form') == 'courtside'
     assert camera_profile('moving', 'one_on_one') == 'moving'
+
+
+def test_single_frame_flash_is_not_a_cut_but_a_persistent_edit_is():
+    old = np.full((100, 100), 100, dtype=np.uint8)
+    flash = np.full((100, 100), 160, dtype=np.uint8)
+    new = np.full((100, 100), 200, dtype=np.uint8)
+    detector = CutDetector()
+    assert [detector.observe(i, frame) for i, frame in
+            enumerate((old, flash, old, new, new))] == [None, None, None, None, 3]
 
 
 def test_basketball_detector_rgb_normalization_and_box_decode():

@@ -193,9 +193,10 @@ def analyze_shots(
     ordered = sorted(ball, key=lambda b: b.frame)
     # Candidate apexes: strong upward approach, downward departure, and enough prominence.
     candidates: list[int] = []
-    # A quarter-second approach/departure captures smooth apexes at normal
-    # frame rates without requiring large movement between adjacent frames.
-    gap = max(1, round(fps * 0.25))
+    # Wide game footage often has a broad apex near the top of the image.
+    # Measure rise and fall over a longer window there; release contact and
+    # shoulder-height checks still guard against calling a dribble a shot.
+    gap = max(1, round(fps * (0.4 if game_mode else 0.25)))
     frames = [b.frame for b in ordered]
     max_gap = max(2, round(fps * .35))
     for i in range(1, len(ordered) - 1):
