@@ -9,8 +9,11 @@ The numbers are useful review signals, not a scouting department in a box. Compa
 ## see it on a real clip
 
 [![Before: raw shooting clip](https://img.youtube.com/vi/6gkVcpQtEcA/0.jpg)](https://www.youtube.com/watch?v=6gkVcpQtEcA)
+before
+
 
 [![After: Ballform review](https://img.youtube.com/vi/uuiYnWBlgpQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=uuiYnWBlgpQ)
+after
 
 
 ![Before shot details](docs/demo/shot-details-before.png)
