@@ -18,6 +18,53 @@ def test_made_shot_crosses_rim_on_descent():
     assert len(shots) == 1
     assert shots[0].outcome == "made"
     assert shots[0].outcome_confidence > .7
+    assert shots[0].outcome_frame == 7
+
+
+def test_made_shot_uses_rim_track_during_camera_pan():
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .56, .23), ball(6, .60, .32), ball(7, .64, .43),
+        ball(8, .67, .55),
+    ]
+    rims = {frame: (.48 + .015 * frame, .36, .14, .08) for frame in range(9)}
+    shots = analyze_shots(track, [], 10, rims, {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "made"
+    assert shots[0].outcome_frame == 7
+
+
+def test_net_only_motion_cannot_turn_an_airball_into_a_make():
+    # The ball is lost before it has a descending path through the rim. This
+    # represents an airball that brushes the net from the side or below.
+    track = [
+        ball(0, .24, .70), ball(1, .31, .54), ball(2, .38, .36), ball(3, .42, .23),
+        ball(4, .43, .18), ball(5, .39, .25), ball(6, .34, .34),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: {"strength": 8.0}})
+    assert len(shots) == 1
+    assert shots[0].outcome == "unknown"
+
+
+def test_outside_rim_crossing_stays_missed_despite_net_motion():
+    track = [
+        ball(0, .25, .70), ball(1, .31, .56), ball(2, .37, .39), ball(3, .42, .22),
+        ball(4, .44, .18), ball(5, .38, .25), ball(6, .35, .34), ball(7, .33, .43),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: {"strength": 9.0}})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+
+
+def test_occluded_path_needs_geometry_and_delayed_net_event_for_likely_make():
+    track = [
+        ball(0, .28, .70), ball(1, .34, .54), ball(2, .41, .36), ball(3, .47, .23),
+        ball(4, .50, .18), ball(5, .53, .24), ball(6, .545, .32),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: {"strength": 3.0}})
+    assert len(shots) == 1
+    assert shots[0].outcome == "likely made"
+    assert shots[0].outcome_frame == 7
 
 
 def test_unknown_without_rim():

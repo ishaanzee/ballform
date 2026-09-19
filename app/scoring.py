@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_left, bisect_right
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 
 from app.geometry import distance, elevation_angle, interpolate_crossing, joint_angle
 from app.models import Detection, PoseFrame, ShotResult
+
+RimBox = tuple[float, float, float, float]
+RimInput = RimBox | Mapping[int, RimBox] | None
+
+
+def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
+    """Return a rim box at a source frame, interpolating tracked samples."""
+    if rim is None:
+        return None
+    if not isinstance(rim, Mapping):
+        return rim
+    if frame in rim:
+        return rim[frame]
+    keys = sorted(rim)
+    index = bisect_left(keys, frame)
+    if index == 0 or index == len(keys):
+        return None
+    left, right = keys[index - 1], keys[index]
+    # Do not bridge a tracker failure or camera cut.
+    if right - left > 12:
+        return None
+    amount = (frame - left) / (right - left)
+    return tuple(rim[left][i] + amount * (rim[right][i] - rim[left][i]) for i in range(4))  # type: ignore[return-value]
 
 def _point(pose: PoseFrame, name: str, aspect_ratio: float = 1.0) -> tuple[float, float] | None:
     value = pose.landmarks.get(name)
@@ -154,8 +177,8 @@ def analyze_shots(
     ball: Sequence[Detection],
     poses: Sequence[PoseFrame],
     fps: float,
-    rim: tuple[float, float, float, float] | None,
-    net_motion: dict[int, float] | None = None,
+    rim: RimInput,
+    net_motion: dict[int, float | dict[str, float]] | None = None,
     aspect_ratio: float = 1.0,
     handedness: str = "right",
     game_mode: bool = False,
@@ -241,54 +264,97 @@ def analyze_shots(
                     break
             if not flight_supported:
                 continue
-        outcome, confidence, evidence = "unknown", 0.0, ["Ball arc detected"]
+        outcome, confidence, evidence, outcome_frame = "unknown", 0.0, ["Ball arc detected"], None
         evidence.append(
             "Release time estimated from visible shooting-hand/ball proximity"
             if release_contact else
             "Release contact unavailable: timestamp uses the start of the visible arc and may precede or follow actual release"
         )
-        if rim:
-            rx, ry, rw, rh = rim
-            rim_y = ry + 0.45 * rh
+        segment_rim = _rim_at(rim, apex_frame)
+        if segment_rim:
             descending = [b for b in segment if b.frame >= apex_frame]
             crossings = []
             for p1, p2 in zip(descending, descending[1:]):
-                if p2.y <= p1.y:
+                rim1, rim2 = _rim_at(rim, p1.frame), _rim_at(rim, p2.frame)
+                if rim1 is None or rim2 is None:
                     continue
-                x = interpolate_crossing((p1.x, p1.y), (p2.x, p2.y), rim_y)
-                if x is not None and p2.frame - p1.frame <= max(3, fps * 0.25):
-                    crossings.append((p2.frame, x))
-            inside = [(f, x) for f, x in crossings if rx - 0.08 * rw <= x <= rx + 1.08 * rw]
+                plane1, plane2 = rim1[1] + .45 * rim1[3], rim2[1] + .45 * rim2[3]
+                relative1, relative2 = p1.y - plane1, p2.y - plane2
+                if relative1 > 0 or relative2 <= relative1 or relative2 < 0:
+                    continue
+                amount = -relative1 / max(relative2 - relative1, 1e-9)
+                x = p1.x + amount * (p2.x - p1.x)
+                crossing_rim = tuple(rim1[i] + amount * (rim2[i] - rim1[i]) for i in range(4))
+                if p2.frame - p1.frame <= max(3, fps * 0.25):
+                    crossings.append((p2.frame, x, crossing_rim))
+            inside = [(f, x) for f, x, box in crossings
+                      if box[0] - .08 * box[2] <= x <= box[0] + 1.08 * box[2]]
             flow = net_motion or {}
-            if crossings:
-                crossing_frames = [f for f, _ in crossings]
-                motion_score = max(
-                    (value for frame, value in flow.items()
-                     if any(crossing <= frame <= crossing + .35 * fps for crossing in crossing_frames)),
-                    default=0.0,
-                )
-            else:
-                # Detector occlusion is common directly over the rim. Look for a
-                # delayed net response during the post-apex part of this shot.
-                motion_score = max(
-                    (value for frame, value in flow.items()
-                     if apex_frame <= frame <= segment[-1].frame),
-                    default=0.0,
-                )
+            def motion_event(start: int, end: int) -> tuple[float, int | None]:
+                """Return net-specific motion, not camera/background motion.
+
+                Older callers can still pass a numeric, baseline-normalized
+                value. Newer callers pass ``strength`` after subtracting a
+                surrounding reference region.
+                """
+                candidates = []
+                for frame, value in flow.items():
+                    if not start <= frame <= end:
+                        continue
+                    score = float(value.get("strength", 0.0)) if isinstance(value, dict) else float(value)
+                    candidates.append((score, frame))
+                return max(candidates, default=(0.0, None))
+
             if inside:
+                crossing_frame = inside[0][0]
+                motion_score, motion_frame = motion_event(crossing_frame, round(crossing_frame + .35 * fps))
                 outcome = "made"
+                outcome_frame = crossing_frame
                 confidence = min(0.98, 0.68 + 0.18 * min(1.0, motion_score / 2.5))
-                evidence += ["Ball center crossed the rim plane downward inside the rim", f"Net motion score: {motion_score:.1f}× baseline"]
+                evidence += ["Ball center crossed the rim plane downward inside the rim",
+                             f"Net-specific motion score: {motion_score:.1f}× baseline"]
             elif crossings:
                 outcome = "missed"
                 confidence = 0.74
                 evidence.append("Descending ball crossed the rim plane outside the rim")
-            elif motion_score > 2.2:
-                outcome = "likely made"
-                confidence = 0.58
-                evidence.append("Ball was lost near the basket, but net motion increased")
             else:
-                evidence.append("No reliable rim-plane crossing was visible")
+                # A moving net alone is never enough: an airball can brush the
+                # net. When the ball is occluded at the hoop, require a descending
+                # path that projects through the rim *and* a delayed net event.
+                pre_rim = [b for b in descending if (box := _rim_at(rim, b.frame)) is not None
+                           and b.y <= box[1] + .8 * box[3]]
+                last = pre_rim[-1] if pre_rim else None
+                projected_u = None
+                if last:
+                    prior = [b for b in descending if b.frame < last.frame and b.y < last.y
+                             and last.frame - b.frame <= max(3, round(.25 * fps))]
+                    last_rim = _rim_at(rim, last.frame)
+                    if prior and last_rim:
+                        previous = prior[-1]
+                        previous_rim = _rim_at(rim, previous.frame)
+                        # Unlike a measured crossing, this intentionally projects
+                        # the final visible descent beyond the last detection.
+                        if previous_rim:
+                            previous_y = previous.y - (previous_rim[1] + .45 * previous_rim[3])
+                            last_y = last.y - (last_rim[1] + .45 * last_rim[3])
+                            if previous_y < last_y < 0:
+                                alpha = -previous_y / (last_y - previous_y)
+                                previous_u = (previous.x - previous_rim[0]) / previous_rim[2]
+                                last_u = (last.x - last_rim[0]) / last_rim[2]
+                                projected_u = previous_u + alpha * (last_u - previous_u)
+                path_through_rim = projected_u is not None and -.08 <= projected_u <= 1.08
+                if last and path_through_rim:
+                    motion_score, motion_frame = motion_event(last.frame, round(last.frame + .4 * fps))
+                    if motion_score >= 2.2:
+                        outcome = "likely made"
+                        outcome_frame = motion_frame or last.frame
+                        confidence = min(.72, .52 + .10 * min(2.0, motion_score / 2.2))
+                        evidence += ["Ball was occluded on a descending path projected through the rim",
+                                     f"Net-specific motion score: {motion_score:.1f}× baseline"]
+                    else:
+                        evidence.append("Ball was occluded near the rim, but no net-specific motion confirmed the event")
+                else:
+                    evidence.append("No reliable rim-plane crossing was visible")
         else:
             evidence.append("Outcome unavailable because the rim was not marked")
         metrics, cues = ({}, []) if game_mode else _form_metrics(poses, segment, release, fps, aspect_ratio, handedness)
@@ -302,5 +368,6 @@ def analyze_shots(
             evidence=evidence,
             metrics=metrics,
             cues=cues,
+            outcome_frame=outcome_frame,
         ))
     return results

@@ -15,7 +15,7 @@ COCO_TO_MP = {0: 0, 5: 11, 6: 12, 7: 13, 8: 14, 9: 15, 10: 16,
 NAMES = {0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",
          14: "right_elbow", 15: "left_wrist", 16: "right_wrist", 23: "left_hip",
          24: "right_hip", 25: "left_knee", 26: "right_knee", 27: "left_ankle", 28: "right_ankle"}
-CAMERAS = {"auto", "broadcast", "elevated", "courtside"}
+CAMERAS = {"auto", "broadcast", "elevated", "courtside", "moving"}
 
 
 def camera_profile(camera: str, mode: str) -> str:
@@ -87,7 +87,7 @@ class CourtVision:
     def __init__(self, pose_model, ball_model, device: str, profile: str, court=None):
         self.pose_model, self.ball_model = pose_model, ball_model
         self.device, self.profile, self.court = device, profile, court
-        self.tiled = profile in {"broadcast", "elevated"}
+        self.tiled = profile in {"broadcast", "elevated", "moving"}
         self.imgsz = 1280 if self.tiled else 960
         self.raw_people = 0
 
@@ -95,7 +95,7 @@ class CourtVision:
         height, width = frame.shape[:2]
         candidates, balls = [], []
         basketball_objects = self.ball_model.detect(frame) if isinstance(self.ball_model, BasketballDetector) else None
-        if (basketball_objects is not None and self.profile == "broadcast"
+        if (basketball_objects is not None and self.profile in {"broadcast", "moving"}
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0
             return [], [], None
@@ -144,7 +144,7 @@ class CourtVision:
         people = merge_people(candidates)
         self.raw_people = len(people)
         people = [p for p in people if on_court(p, self.court)]
-        if basketball_objects is not None and self.profile == "broadcast":
+        if basketball_objects is not None and self.profile in {"broadcast", "moving"}:
             # The basketball-trained detector distinguishes on-court players from
             # officials/crowd. Pose alone cannot make that distinction.
             people = [p for p in people if is_player(p, basketball_objects)]

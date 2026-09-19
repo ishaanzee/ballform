@@ -11,11 +11,13 @@ function updateSettings() {
   $('#handedness').disabled = game;
   $('#modeHelp').textContent = game ? 'For NBA broadcasts choose the elevated broadcast camera. Mark the playing area to exclude spectators and benches. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
-  $('#markHelp').textContent = game ? 'Playing area: click corners around the visible court in order. Leave benches and spectators outside. Use a short continuous camera view; this boundary stays fixed in the image. Rim outcomes are available only for stationary courtside footage.' : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+  const moving = $('#cameraProfile').value === 'moving';
+  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: pause on the first frame and drag a snug box around the rim. Continuous pans and moderate zooms are supported; cuts stop outcome tracking. You may also mark the playing area.' : 'Playing area: click corners around the visible court in order. Leave benches and spectators outside. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.') : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
 }
 $('#analysisMode').onchange = updateSettings;
 $('#cameraProfile').onchange = () => {
-  if (['broadcast','elevated'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
+  if (['broadcast','elevated','moving'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
+  if ($('#cameraProfile').value === 'moving' && preview.src) preview.currentTime = 0;
   updateSettings();
 };
 $('#markRim').onclick = () => {marking='rim';};
@@ -39,7 +41,7 @@ function loadFile(chosen) {
   courtPoints = [];
   file = chosen; preview.src = URL.createObjectURL(file); preview.load();
   drop.classList.add('hidden'); $('#recordLabel').classList.add('hidden'); $('#markStep').classList.remove('hidden');
-  preview.onloadedmetadata = () => { preview.currentTime = Math.min(preview.duration * .25, preview.duration - .05); resizeCanvas(); };
+  preview.onloadedmetadata = () => { preview.currentTime = $('#cameraProfile').value === 'moving' ? 0 : Math.min(preview.duration * .25, preview.duration - .05); resizeCanvas(); };
 }
 fileInput.onchange = () => loadFile(fileInput.files[0]);
 $('#cameraFile').onchange = () => loadFile($('#cameraFile').files[0]);

@@ -34,6 +34,9 @@ class ShotResult:
     metrics: dict[str, float | str | None]
     cues: list[str] = field(default_factory=list)
     game: dict | None = None
+    # Source-video frame where the outcome was observed.  It is deliberately
+    # separate from end_s: the visible flight may continue after a rim event.
+    outcome_frame: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

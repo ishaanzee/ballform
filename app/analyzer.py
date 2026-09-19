@@ -18,7 +18,7 @@ from ultralytics import YOLO
 
 from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
-from app.scoring import analyze_shots, classify_view
+from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.tracking import PoseTracker, jersey_descriptor
 from app.vision import CourtVision, camera_profile, scene_cut, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
@@ -40,6 +40,55 @@ POSE_NAMES = {
 }
 SKELETON = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23),
             (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
+
+
+class RimTracker:
+    """Follow a user-marked hoop through a continuous pan/zoom shot."""
+
+    def __init__(self, initial: tuple[float, float, float, float], width: int, height: int):
+        self.initial, self.width, self.height = initial, width, height
+        self.tracker = None
+        self.started = False
+        self.lost = False
+        self.last = initial
+
+    def update(self, frame: np.ndarray) -> tuple[float, float, float, float] | None:
+        if self.lost:
+            return None
+        if not self.started:
+            create = getattr(cv2, "TrackerCSRT_create", None)
+            if create is None and hasattr(cv2, "legacy"):
+                create = getattr(cv2.legacy, "TrackerCSRT_create", None)
+            if create is None:
+                raise RuntimeError("This OpenCV build does not include the CSRT tracker.")
+            self.tracker = create()
+            x, y, w, h = self.initial
+            self.tracker.init(frame, (round(x * self.width), round(y * self.height),
+                                      round(w * self.width), round(h * self.height)))
+            self.started = True
+            return self.initial
+        ok, box = self.tracker.update(frame)
+        if not ok:
+            self.lost = True
+            return None
+        x, y, w, h = (float(value) for value in box)
+        if w < 5 or h < 3 or x < 0 or y < 0 or x + w > self.width or y + h > self.height:
+            self.lost = True
+            return None
+        current = x / self.width, y / self.height, w / self.width, h / self.height
+        old_x, old_y, old_w, old_h = self.last
+        center_jump = np.hypot((current[0] + current[2] / 2) - (old_x + old_w / 2),
+                               (current[1] + current[3] / 2) - (old_y + old_h / 2))
+        scale = current[2] / max(old_w, 1e-6)
+        if center_jump > .12 or not .62 <= scale <= 1.6:
+            self.lost = True
+            return None
+        self.last = current
+        return current
+
+    def stop_at_cut(self) -> None:
+        # A box from the old camera angle is not a valid initialization in the new shot.
+        self.lost = True
 
 
 def _ensure_model(path: Path, url: str, sha256: str | None = None) -> Path:
@@ -115,19 +164,105 @@ def _interpolate_track(track: list[Detection], max_gap_frames: int) -> list[Dete
     return output
 
 
-def _net_flow(previous_gray: np.ndarray | None, gray: np.ndarray, rim: tuple[float, float, float, float] | None) -> float:
+def _flow_percentile(previous: np.ndarray, current: np.ndarray) -> float:
+    flow = cv2.calcOpticalFlowFarneback(previous, current, None, 0.5, 2, 13, 2, 5, 1.1, 0)
+    magnitude = np.linalg.norm(flow, axis=2)
+    # A net is sparse: median flow is normally zero even when its strands move.
+    return float(np.percentile(magnitude, 82))
+
+
+def _net_flow(previous_gray: np.ndarray | None, gray: np.ndarray, rim: tuple[float, float, float, float] | None) -> dict[str, float]:
+    """Measure net movement relative to its immediate background.
+
+    The reference patch makes pans, zooms, and general player movement less
+    likely to masquerade as a swish. Geometry remains the primary make signal.
+    """
     if previous_gray is None or rim is None:
-        return 0.0
+        return {"net": 0.0, "reference": 0.0}
     height, width = gray.shape
     x, y, w, h = rim
-    x1, x2 = max(0, int((x - 0.15 * w) * width)), min(width, int((x + 1.15 * w) * width))
-    y1, y2 = max(0, int((y + 0.35 * h) * height)), min(height, int((y + 2.8 * h) * height))
-    if x2 - x1 < 8 or y2 - y1 < 8:
-        return 0.0
-    old, new = previous_gray[y1:y2, x1:x2], gray[y1:y2, x1:x2]
-    flow = cv2.calcOpticalFlowFarneback(old, new, None, 0.5, 2, 13, 2, 5, 1.1, 0)
-    magnitude = np.linalg.norm(flow, axis=2)
-    return float(np.median(magnitude))
+    def crop(x1: float, y1: float, x2: float, y2: float) -> tuple[np.ndarray, np.ndarray] | None:
+        left, right = max(0, int(x1 * width)), min(width, int(x2 * width))
+        top, bottom = max(0, int(y1 * height)), min(height, int(y2 * height))
+        if right - left < 8 or bottom - top < 8:
+            return None
+        return previous_gray[top:bottom, left:right], gray[top:bottom, left:right]
+
+    # The lower central portion is where a hanging net can move. Side patches
+    # sample the same local camera/background movement without the net itself.
+    net = crop(x + .14 * w, y + .42 * h, x + .86 * w, y + 2.45 * h)
+    left = crop(x - .55 * w, y + .45 * h, x - .08 * w, y + 2.2 * h)
+    right = crop(x + 1.08 * w, y + .45 * h, x + 1.55 * w, y + 2.2 * h)
+    net_value = _flow_percentile(*net) if net else 0.0
+    reference_values = [_flow_percentile(*patch) for patch in (left, right) if patch]
+    return {"net": net_value, "reference": float(np.median(reference_values)) if reference_values else 0.0}
+
+
+def _normalize_net_flow(flows: dict[int, dict[str, float]]) -> dict[int, dict[str, float]]:
+    net_values = [item["net"] for item in flows.values() if item["net"] > 0]
+    reference_values = [item["reference"] for item in flows.values() if item["reference"] > 0]
+    net_baseline = float(np.median(net_values)) if net_values else 1.0
+    reference_baseline = float(np.median(reference_values)) if reference_values else 1.0
+    normalized = {}
+    for frame, item in flows.items():
+        net_ratio = item["net"] / max(net_baseline, 1e-4)
+        reference_ratio = item["reference"] / max(reference_baseline, 1e-4)
+        # Clamp the divisor so a quiet reference patch cannot create an infinite
+        # response; this is a relative signal, not a make classifier.
+        normalized[frame] = {"strength": net_ratio / max(.7, reference_ratio), **item}
+    return normalized
+
+
+def _draw_make_animation(frame: np.ndarray, rim: tuple[float, float, float, float], elapsed_s: float,
+                         likely: bool = False) -> None:
+    """Overlay a short green pulse at a detected make without hiding the play."""
+    if elapsed_s < -.06 or elapsed_s > .85:
+        return
+    height, width = frame.shape[:2]
+    x, y, rw, rh = rim
+    center = (int((x + .5 * rw) * width), int((y + .55 * rh) * height))
+    phase = max(0.0, elapsed_s) / .85
+    pulse = 1.0 - phase
+    overlay = frame.copy()
+    axes = (max(14, int(rw * width * (.8 + 1.8 * phase))), max(10, int(rh * height * (1.5 + 2.0 * phase))))
+    cv2.ellipse(overlay, center, axes, 0, 0, 360, (50, 255, 70), max(2, int(7 * pulse)), cv2.LINE_AA)
+    cv2.ellipse(overlay, center, (max(9, axes[0] // 2), max(7, axes[1] // 2)), 0, 0, 360, (40, 230, 60), -1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, .16 + .22 * pulse, frame, .84 - .22 * pulse, 0, frame)
+    label = "LIKELY MAKE" if likely else "MAKE"
+    cv2.putText(frame, label, (max(12, center[0] - axes[0]), max(30, center[1] - axes[1] - 12)),
+                cv2.FONT_HERSHEY_DUPLEX, .75, (70, 255, 90), 2, cv2.LINE_AA)
+
+
+def _add_make_animations(source: Path, destination: Path, shots: list, output_fps: float, source_fps: float,
+                         rim: RimInput) -> None:
+    if rim is None or not any(s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots):
+        source.replace(destination)
+        return
+    capture = cv2.VideoCapture(str(source))
+    width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    writer = cv2.VideoWriter(str(destination), cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (width, height))
+    if not capture.isOpened() or not writer.isOpened():
+        capture.release()
+        writer.release()
+        source.replace(destination)
+        return
+    index = 0
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        time_s = index / output_fps
+        frame_rim = _rim_at(rim, round(time_s * source_fps))
+        for shot in shots:
+            if (frame_rim is not None and shot.outcome in {"made", "likely made"}
+                    and shot.outcome_frame is not None):
+                _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
+                                     shot.outcome == "likely made")
+        writer.write(frame)
+        index += 1
+    capture.release()
+    writer.release()
+    source.unlink(missing_ok=True)
 
 
 def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], ball: Detection | None,
@@ -213,12 +348,14 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     balls: list[Detection] = []
     poses: list[PoseFrame] = []
     player_frames: list[dict] = []
-    flows: dict[int, float] = {}
+    flows: dict[int, dict[str, float]] = {}
     previous_ball: Detection | None = None
     previous_gray: np.ndarray | None = None
     processed = 0
     cut_frames = []
     raw_people_counts = []
+    tracked_rims: dict[int, tuple[float, float, float, float]] = {}
+    rim_tracker = RimTracker(rim, width, height) if profile == "moving" and rim else None
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
     with ExitStack() as resources:
         resources.callback(capture.release)
@@ -234,10 +371,16 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                 continue
             time_s = frame_no / fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            if game_mode and scene_cut(previous_gray, gray):
+            cut = bool(game_mode and scene_cut(previous_gray, gray))
+            if cut:
                 cut_frames.append(frame_no)
                 pose_tracker.reset()
                 previous_ball = None
+                if rim_tracker:
+                    rim_tracker.stop_at_cut()
+            frame_rim = rim_tracker.update(frame) if rim_tracker else rim
+            if frame_rim is not None and rim_tracker:
+                tracked_rims[frame_no] = frame_rim
             players = []
             landmark_maps = []
             if court_vision:
@@ -259,12 +402,12 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             if ball:
                 balls.append(ball)
                 previous_ball = ball
-            flows[frame_no] = _net_flow(previous_gray, gray, rim)
+            flows[frame_no] = _net_flow(previous_gray, gray, frame_rim)
             previous_gray = gray
             for visible_pose, player in zip(landmark_maps, players):
                 player_label = f"P{player.track_id}" if mode == "one_on_one" and player.track_id else None
                 _draw(frame, visible_pose, None, None, handedness, player_label)
-            _draw(frame, {}, ball, rim)
+            _draw(frame, {}, ball, frame_rim)
             if court:
                 polygon = np.rint(np.asarray(court) * (width, height)).astype(np.int32)
                 cv2.polylines(frame, [polygon], True, (255, 210, 80), 2)
@@ -281,11 +424,11 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             "players": [{"frame": f["frame"], "time_s": f["time_s"],
                          "players": [asdict(p) for p in f["players"]]} for f in player_frames],
         }, default=lambda value: float(value)))
-    nonzero_flow = [v for v in flows.values() if v > 0]
-    baseline = float(np.median(nonzero_flow)) if nonzero_flow else 1.0
-    normalized_flow = {frame: value / max(baseline, 1e-5) for frame, value in flows.items()}
-    # A marked rim is a fixed image coordinate: never reuse it across broadcast pans/cuts.
-    scoring_rim = None if game_mode and profile in {"broadcast", "elevated"} else rim
+    normalized_flow = _normalize_net_flow(flows)
+    # Fixed broadcast boxes remain unsafe. Moving mode instead uses a CSRT box
+    # at each source frame and stops supplying it after a cut or tracking loss.
+    scoring_rim: RimInput = (tracked_rims if profile == "moving" and tracked_rims else
+                             None if game_mode and profile in {"broadcast", "elevated"} else rim)
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
@@ -312,19 +455,22 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     if game_mode:
         view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
 
-    report(.92, "Encoding review video")
+    report(.92, "Marking verified makes in review video")
+    marked_output = output_dir / "annotated_marked.mp4"
+    _add_make_animations(raw_output, marked_output, shots, analyzed_fps, fps, scoring_rim)
+    report(.95, "Encoding review video")
     annotated = output_dir / "annotated.mp4"
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
-        command = [ffmpeg, "-y", "-loglevel", "error", "-i", str(raw_output), "-c:v", "libx264",
+        command = [ffmpeg, "-y", "-loglevel", "error", "-i", str(marked_output), "-c:v", "libx264",
                    "-preset", "fast", "-crf", "22", "-movflags", "+faststart", "-an", str(annotated)]
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode == 0:
-            raw_output.unlink(missing_ok=True)
+            marked_output.unlink(missing_ok=True)
         else:
-            raw_output.replace(annotated)
+            marked_output.replace(annotated)
     else:
-        raw_output.replace(annotated)
+        marked_output.replace(annotated)
     result = {
         "video": {"duration_s": round(total / fps, 2), "fps": round(fps, 2), "resolution": f"{width}×{height}",
                   "analyzed_fps": round(analyzed_fps, 2)},
@@ -336,7 +482,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                    "ball_device": "cpu" if isinstance(ball_model, BasketballDetector) else device,
                    "input_size": court_vision.imgsz if court_vision else 640,
                    "ball_input_size": 640 if isinstance(ball_model, BasketballDetector) else (court_vision.imgsz if court_vision else 640),
-                   "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile == "broadcast"),
+                   "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile in {"broadcast", "moving"}),
                    "overlapping_crops": bool(court_vision and court_vision.tiled)},
         "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
         "diagnostics": {"pose_frames": sum(bool(p["players"]) for p in player_frames),
@@ -347,10 +493,12 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                         "scene_cuts": len(cut_frames), "scene_cut_times_s": [round(f / fps, 3) for f in cut_frames],
                         "court_filtered": court is not None,
                         "ball_detections": len(observed_balls),
-                        "rim_marked": rim is not None},
+                        "rim_marked": rim is not None,
+                        "rim_tracking_frames": len(tracked_rims),
+                        "rim_tracking_lost": bool(rim_tracker and rim_tracker.lost)},
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
-            "Make/miss is inferred from visible ball/rim geometry and net motion; occlusion can lower confidence.",
+            "Make/miss is inferred from visible ball/rim geometry. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make.",
             "Feedback is descriptive and should complement, not replace, coaching judgment.",
             "Shot candidates and outcomes require video review; passes, occlusion and camera movement can cause errors.",
         ],
@@ -362,6 +510,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             result["limitations"].append("No playing-area polygon supplied. Automatic player/referee filtering is used only with the default broadcast detector and can make mistakes; mark the court to further exclude the sidelines.")
         if profile in {"broadcast", "elevated"}:
             result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip.")
+        if profile == "moving":
+            result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on the video's first frame and review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")

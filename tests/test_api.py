@@ -41,6 +41,22 @@ def test_upload_forwards_broadcast_court(client, monkeypatch):
     assert calls[0][5:] == ("broadcast", court)
 
 
+def test_upload_accepts_moving_camera_profile(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": "moving",
+                                 "rim": json.dumps([.7, .2, .1, .05])})
+    assert response.status_code == 202
+    assert calls[0][5] == "moving"
+
+
+def test_moving_camera_requires_first_frame_rim(client):
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": "moving"})
+    assert response.status_code == 422
+
+
 @pytest.mark.parametrize("data", [
     {"mode": "invalid"}, {"handedness": "either"},
     {"camera": "unknown"}, {"court": "oops"}, {"court": "[1,2,3]"},

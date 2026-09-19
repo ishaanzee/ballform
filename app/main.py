@@ -69,7 +69,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
     if camera not in CAMERAS:
-        raise HTTPException(422, "Camera must be auto, broadcast, elevated or courtside.")
+        raise HTTPException(422, "Camera must be auto, broadcast, elevated, moving or courtside.")
     try:
         court_polygon = validate_court(json.loads(court)) if court else None
     except (ValueError, TypeError):
@@ -88,6 +88,8 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
             rim_box = values
         except (ValueError, TypeError, json.JSONDecodeError):
             raise HTTPException(422, "Rim must be a normalized [x, y, width, height] box.") from None
+    if camera == "moving" and rim_box is None:
+        raise HTTPException(422, "Moving camera analysis requires a rim box marked on the first frame.")
     job_id = uuid.uuid4().hex[:12]
     directory = JOBS_DIR / job_id
     directory.mkdir()

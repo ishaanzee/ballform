@@ -79,6 +79,7 @@ def test_cut_detection_and_profiles():
     assert scene_cut(old, old+200)
     assert camera_profile('auto', 'one_on_one') == 'broadcast'
     assert camera_profile('auto', 'form') == 'courtside'
+    assert camera_profile('moving', 'one_on_one') == 'moving'
 
 
 def test_basketball_detector_rgb_normalization_and_box_decode():
