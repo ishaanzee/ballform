@@ -8,12 +8,10 @@ The numbers are useful review signals, not a scouting department in a box. Compa
 
 ## see it on a real clip
 
-[![Before: raw shooting clip](https://img.youtube.com/vi/6gkVcpQtEcA/0.jpg)](https://www.youtube.com/watch?v=6gkVcpQtEcA)
-before
+<a href="https://www.youtube.com/watch?v=6gkVcpQtEcA"><img src="https://img.youtube.com/vi/6gkVcpQtEcA/0.jpg" alt="Before: raw shooting clip" width="640" height="360"></a>
 
 
-[![After: Ballform review](https://img.youtube.com/vi/uuiYnWBlgpQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=uuiYnWBlgpQ)
-after
+<a href="https://www.youtube.com/watch?v=uuiYnWBlgpQ"><img src="https://img.youtube.com/vi/uuiYnWBlgpQ/maxresdefault.jpg" alt="After: Ballform review" width="640" height="360"></a>
 
 
 ![Before shot details](docs/demo/shot-details-before.png)
