@@ -32,14 +32,16 @@ def _update(job_id: str, **values) -> None:
 
 
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
-         mode: str = "form", handedness: str = "right", camera: str = "auto", court=None) -> None:
+         mode: str = "form", handedness: str = "right", camera: str = "auto", court=None,
+         rim_frame: int | None = None, rim_time_s: float | None = None) -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
             result = analyze_video(input_path, input_path.parent, rim,
                                    lambda p, m: _update(job_id, progress=round(p, 3), message=m),
-                                   mode=mode, handedness=handedness, camera=camera, court=court)
+                                   mode=mode, handedness=handedness, camera=camera, court=court,
+                                   rim_frame=rim_frame, rim_time_s=rim_time_s)
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -63,7 +65,8 @@ def index() -> FileResponse:
 @app.post("/api/jobs", status_code=202)
 async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None),
                      mode: str = Form("form"), handedness: str = Form("right"),
-                     camera: str = Form("auto"), court: str | None = Form(None)) -> dict:
+                     camera: str = Form("auto"), court: str | None = Form(None),
+                     rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None)) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
@@ -89,7 +92,23 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
         except (ValueError, TypeError, json.JSONDecodeError):
             raise HTTPException(422, "Rim must be a normalized [x, y, width, height] box.") from None
     if camera == "moving" and rim_box is None:
-        raise HTTPException(422, "Moving camera analysis requires a rim box marked on the first frame.")
+        raise HTTPException(422, "Moving camera analysis requires a marked rim box.")
+    anchor_frame = None
+    if rim_frame is not None:
+        try:
+            anchor_frame = int(rim_frame)
+            if anchor_frame < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(422, "rim_frame must be a non-negative video frame number.") from None
+    anchor_time = None
+    if rim_time_s is not None:
+        try:
+            anchor_time = float(rim_time_s)
+            if not math.isfinite(anchor_time) or anchor_time < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(422, "rim_time_s must be a non-negative video time.") from None
     job_id = uuid.uuid4().hex[:12]
     directory = JOBS_DIR / job_id
     directory.mkdir()
@@ -105,7 +124,11 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                 raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
             target.write(chunk)
     _update(job_id, status="queued", progress=0.0, message="Queued")
-    background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
+    if anchor_frame is None and anchor_time is None:
+        background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
+    else:
+        background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
+                            rim_frame=anchor_frame, rim_time_s=anchor_time)
     return {"job_id": job_id}
 
 

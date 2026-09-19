@@ -57,6 +57,16 @@ def test_moving_camera_requires_first_frame_rim(client):
     assert response.status_code == 422
 
 
+def test_upload_accepts_rim_frame(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": "moving",
+                                 "rim": json.dumps([.7, .2, .1, .05]), "rim_frame": "120"})
+    assert response.status_code == 202
+    assert calls[0][1]["rim_frame"] == 120
+
+
 @pytest.mark.parametrize("data", [
     {"mode": "invalid"}, {"handedness": "either"},
     {"camera": "unknown"}, {"court": "oops"}, {"court": "[1,2,3]"},

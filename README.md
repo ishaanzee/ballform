@@ -35,7 +35,7 @@ The court polygon is optional. If you draw one, keep it convex and cover the pla
 
 `NBA / elevated broadcast` is for player and ball tracking in a wide view. It intentionally does not claim make/miss from a rim box that is frozen while the camera pans.
 
-`Moving broadcast + tracked rim` is the extra option for a continuous pan or moderate zoom. Pause the preview on the first frame, mark the rim, and let the local CSRT tracker follow it. It can score the rim crossing, use net motion as supporting evidence, and place the green make pulse over the moving hoop. A hard cut, a lost track, or an implausible tracker jump ends outcome scoring instead of producing a confident-looking lie. The first-frame rim box is required for this mode.
+`Moving broadcast + tracked rim` is the extra option for a continuous pan or moderate zoom. Scrub to any frame where the hoop is clear, mark the rim, and let the local CSRT tracker follow it forward and backward from that timestamp. It can score the rim crossing, use net motion as supporting evidence, and place the green make pulse over the moving hoop. A hard cut, a lost track, or an implausible tracker jump ends outcome scoring instead of producing a confident-looking lie.
 
 The make classifier wants a visible downward crossing through the rim. If the ball vanishes at the hoop, it can call a **likely make** only when the descending path projects through the rim and localized net motion arrives afterward. Net movement by itself never turns an airball into a make. Green animation means the analyzer found a verified or likely make; it is not a broadcast replay graphic.
 

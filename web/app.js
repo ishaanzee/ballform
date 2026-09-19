@@ -12,12 +12,11 @@ function updateSettings() {
   $('#modeHelp').textContent = game ? 'For NBA broadcasts choose the elevated broadcast camera. Mark the playing area to exclude spectators and benches. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
-  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: pause on the first frame and drag a snug box around the rim. Continuous pans and moderate zooms are supported; cuts stop outcome tracking. You may also mark the playing area.' : 'Playing area: click corners around the visible court in order. Leave benches and spectators outside. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.') : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking. You may also mark the playing area.' : 'Playing area: click corners around the visible court in order. Leave benches and spectators outside. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.') : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
 }
 $('#analysisMode').onchange = updateSettings;
 $('#cameraProfile').onchange = () => {
   if (['broadcast','elevated','moving'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
-  if ($('#cameraProfile').value === 'moving' && preview.src) preview.currentTime = 0;
   updateSettings();
 };
 $('#markRim').onclick = () => {marking='rim';};
@@ -99,6 +98,7 @@ $('#analyze').onclick = async () => {
   $('#markStep').classList.add('hidden'); $('#progressStep').classList.remove('hidden');
   $('#settings').classList.add('hidden'); $('#retry').classList.add('hidden'); $('#progressText').classList.remove('error');
   const form=new FormData(); form.append('video',file); if(rimBox)form.append('rim',JSON.stringify(rimBox));
+  if (rimBox) form.append('rim_time_s', String(Math.max(0, preview.currentTime)));
   form.append('mode', $('#analysisMode').value); form.append('handedness', $('#handedness').value);
   form.append('camera', $('#cameraProfile').value);
   if(courtPoints.length)form.append('court',JSON.stringify(courtPoints));

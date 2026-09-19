@@ -91,6 +91,58 @@ class RimTracker:
         self.lost = True
 
 
+def _track_rim_bidirectional(input_path: Path, initial: tuple[float, float, float, float],
+                             anchor_frame: int, width: int, height: int, total: int
+                             ) -> tuple[dict[int, tuple[float, float, float, float]], bool]:
+    """Track the marked rim forward and backward from its annotation frame."""
+    if anchor_frame < 0 or anchor_frame >= total:
+        return {}, True
+    forward, backward = {}, {}
+    capture = cv2.VideoCapture(str(input_path))
+    if not capture.isOpened():
+        return {}, True
+    capture.set(cv2.CAP_PROP_POS_FRAMES, anchor_frame)
+    ok, frame = capture.read()
+    if not ok:
+        capture.release()
+        return {}, True
+    tracker = RimTracker(initial, width, height)
+    forward[anchor_frame] = tracker.update(frame)  # type: ignore[assignment]
+    for frame_no in range(anchor_frame + 1, total):
+        ok, frame = capture.read()
+        if not ok:
+            break
+        box = tracker.update(frame)
+        if box is None:
+            break
+        forward[frame_no] = box
+    lost = tracker.lost
+    capture.release()
+    capture = cv2.VideoCapture(str(input_path))
+    if not capture.isOpened():
+        return forward, True
+    tracker = RimTracker(initial, width, height)
+    capture.set(cv2.CAP_PROP_POS_FRAMES, anchor_frame)
+    ok, anchor = capture.read()
+    if not ok:
+        capture.release()
+        return forward, True
+    tracker.update(anchor)
+    for frame_no in range(anchor_frame - 1, -1, -1):
+        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        ok, frame = capture.read()
+        if not ok:
+            lost = True
+            break
+        box = tracker.update(frame)
+        if box is None:
+            lost = True
+            break
+        backward[frame_no] = box
+    capture.release()
+    return {**backward, **forward}, lost
+
+
 def _ensure_model(path: Path, url: str, sha256: str | None = None) -> Path:
     def valid(candidate):
         if not candidate.exists() or candidate.stat().st_size <= 1_000_000:
@@ -293,7 +345,8 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
 def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
-                  court: list[list[float]] | None = None) -> dict:
+                  court: list[list[float]] | None = None, rim_frame: int | None = None,
+                  rim_time_s: float | None = None) -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
@@ -355,7 +408,12 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     cut_frames = []
     raw_people_counts = []
     tracked_rims: dict[int, tuple[float, float, float, float]] = {}
-    rim_tracker = RimTracker(rim, width, height) if profile == "moving" and rim else None
+    rim_tracking_lost = False
+    if profile == "moving" and rim:
+        report(.06, "Tracking the marked rim forward and backward")
+        tracked_rims, rim_tracking_lost = _track_rim_bidirectional(
+            input_path, rim, (rim_frame if rim_frame is not None else
+                              round((rim_time_s or 0.0) * fps)), width, height, total)
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
     with ExitStack() as resources:
         resources.callback(capture.release)
@@ -376,11 +434,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                 cut_frames.append(frame_no)
                 pose_tracker.reset()
                 previous_ball = None
-                if rim_tracker:
-                    rim_tracker.stop_at_cut()
-            frame_rim = rim_tracker.update(frame) if rim_tracker else rim
-            if frame_rim is not None and rim_tracker:
-                tracked_rims[frame_no] = frame_rim
+            frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
             players = []
             landmark_maps = []
             if court_vision:
@@ -495,7 +549,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                         "ball_detections": len(observed_balls),
                         "rim_marked": rim is not None,
                         "rim_tracking_frames": len(tracked_rims),
-                        "rim_tracking_lost": bool(rim_tracker and rim_tracker.lost)},
+                        "rim_tracking_lost": rim_tracking_lost},
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
             "Make/miss is inferred from visible ball/rim geometry. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make.",
