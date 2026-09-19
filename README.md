@@ -1,114 +1,94 @@
-# Ballform
+# ballform
 
-Free, open-source basketball video analysis that runs on the user's own computer. Choose **Single-person shooting form** for left- or right-arm mechanics, or **Game / 1-on-1 / 5-on-5** for projected shooter–defender separation and contest review. Individual form uses MediaPipe; game footage uses multi-person YOLO pose and a basketball-trained RF-DETR detector. Uploaded footage and model inference stay local.
+Ballform is a basketball video analyzer for people who want more than “nice shot.”
 
-## Run locally
+It looks at a single shooter’s mechanics, or at the little geometry of a game possession: who had the ball, who was the primary defender, how much space existed at release, whether the contest got tighter, and whether the shot got up cleanly. It runs on your machine. Your clips do not get uploaded to somebody else’s dashboard, and there is no subscription hiding behind the demo.
 
-Use Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv/). After cloning the repository, run:
+The numbers are useful review signals, not a scouting department in a box. Compare clips from the same camera. Watch the annotated video. If the tracker is unsure, the report should say so.
+
+## get it running
+
+You need Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv):
 
 ```bash
 uv sync --extra dev --python 3.12
 uv run uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000>. No Node.js, frontend build, cloud account, environment file, or access token is required for local use. On first analysis, the MediaPipe pose model and YOLO weights download into `models/`; later runs can work offline. Install `ffmpeg` for browser-friendly H.264 review videos.
+Open <http://127.0.0.1:8000>. Thats it. `ffmpeg` is worth installing if you want clean H.264 review videos in the browser.
 
-Uploaded clips and generated reports are stored under `data/jobs/`. Stop the server with `Ctrl+C`.
+The first run downloads the pose and detection weights into `models/`. They are cached after that. Uploads, reports, observations, and rendered videos live in `data/jobs/`. Stop the server with `Ctrl+C`.
 
-## Upload from an iPhone with Tailscale
+## getting a clip that does not sabotage the model
 
-Tailscale is the recommended transport. It works across isolated school, guest, and home networks without using a phone hotspot, while inference and stored footage remain on the Mac.
+For form work, keep the shooting arm, ball, feet, rim, and net visible. A side view is best for release and arc; a rear-oblique view is better for alignment. 60 fps and 1080p are a good target. A phone three to six feet high is usually enough. Do not digitally zoom halfway through the possession.
 
-1. Install [Tailscale for macOS](https://tailscale.com/download/mac) and [Tailscale for iOS](https://tailscale.com/download/ios).
-2. Sign into the same Tailscale account on both devices and switch both connections on.
-3. Start Ballform in required-Tailscale mode:
+For game footage, short continuous half-court possessions are the sweet spot. NBA skycam and elevated pickup clips are supported, but replays, cuts, graphics, extreme zooms, and a rim that disappears behind the broadcast edit are still hard problems. A five-on-five clip is fine even when the UI says 1-on-1; the analyzer still tries to identify the ball carrier and the primary contesting defender.
+
+The court polygon is optional. If you draw one, keep it convex and cover the playable area, not the benches. It stays fixed in image coordinates, so split a clip when the camera changes to another angle.
+
+## camera choices
+
+`Auto` is a preset: close-up pipeline for form, wide pipeline for game mode.
+
+`Stationary courtside` is the cleanest choice when you want make/miss. Mark a tight rim box in the preview.
+
+`NBA / elevated broadcast` is for player and ball tracking in a wide view. It intentionally does not claim make/miss from a rim box that is frozen while the camera pans.
+
+`Moving broadcast + tracked rim` is the extra option for a continuous pan or moderate zoom. Pause the preview on the first frame, mark the rim, and let the local CSRT tracker follow it. It can score the rim crossing, use net motion as supporting evidence, and place the green make pulse over the moving hoop. A hard cut, a lost track, or an implausible tracker jump ends outcome scoring instead of producing a confident-looking lie. The first-frame rim box is required for this mode.
+
+The make classifier wants a visible downward crossing through the rim. If the ball vanishes at the hoop, it can call a **likely make** only when the descending path projects through the rim and localized net motion arrives afterward. Net movement by itself never turns an airball into a make. Green animation means the analyzer found a verified or likely make; it is not a broadcast replay graphic.
+
+## what game mode actually measures
+
+The game pass uses multi-person pose detection, a basketball-trained detector, motion and jersey appearance to keep track of people. It chooses a shooter from recent hand/ball contact and release evidence, then chooses the nearest plausible opposing contest. Persistent IDs make the pre-release comparison less random, but crowded frames, similar jerseys, tiny players, officials, and occlusion can still break identity.
+
+The shot-space score is deliberately transparent:
+
+```text
+65% separation score + 35% contest-clearance score
+```
+
+Separation is projected hip-to-hip distance in shooter torso lengths. Contest clearance is projected ball-to-defender-wrist distance in the same units. Separation change over roughly half a second is reported as context, not secretly folded into the grade. The score is a 0–100 review heuristic, not make probability, expected points, or a professional player grade. Missing evidence stays missing; it does not become a zero.
+
+Form mode reports 2D image-plane estimates such as release timing, launch angle, elbow angle, and upper-arm elevation. These are good for comparing your own reps from the same setup. They are not calibrated 3D biomechanics.
+
+## phone upload, still local
+
+If the clip is on an iPhone, install [Tailscale for macOS](https://tailscale.com/download/mac) and [Tailscale for iOS](https://tailscale.com/download/ios), sign into the same account, then run:
 
 ```bash
 uv run ballform-share --network tailscale
 ```
 
-The command verifies that Tailscale is connected, discovers the Mac's private Tailscale address, and prints a QR code containing a temporary Ballform access token. Scan it with the iPhone Camera app, open the page in Safari, then choose an existing clip from Photos or tap **Record a new clip**. Upload progress and analysis status stay visible on the phone; if Safari reloads, it reconnects to the current job.
+Scan the QR code in the terminal with the iPhone camera. Safari opens a private pairing link to the Mac. The video still runs on the Mac and stays on the Mac; Tailscale is only the encrypted pipe. Keep the terminal and Tailscale open while uploading. `--network lan` is available if both devices are on the same Wi-Fi. The older `ballform-lan` command remains available.
 
-Keep Tailscale connected and the terminal open during the transfer. Press `Ctrl+C` to shut down phone access and invalidate the pairing link. If macOS asks whether Python may accept incoming connections, choose **Allow**. This mode:
+## models, memory, and reality
 
-- listens only while the command is running;
-- requires the random token embedded in the QR link for every job/video API request;
-- makes no cloud or analytics requests;
-- carries phone-to-Mac traffic inside Tailscale's encrypted connection;
-- serializes analyses so concurrent phone uploads do not compete for the GPU.
+Game mode uses YOLO11m-pose with overlapping wide-view crops and a basketball-trained RF-DETR Medium detector. The weights are roughly 170 MB together, but inference needs more working memory. The pipeline processes frames and crops sequentially and is intended for a apple silicon with 36 GB RAM (16 should work w smaller clips). Apple GPU (MPS) is used for pose when available; the portable ONNX ball detector runs on CPU. Wide-view analysis is offline processing, not real-time playback.
 
-Running `uv run ballform-share` without a `--network` option automatically prefers Tailscale when it is connected and otherwise falls back to local Wi-Fi. Force ordinary local networking with `--network lan`; the legacy `ballform-lan` command remains available.
+You can experiment with other local Ultralytics checkpoints:
 
-If required-Tailscale mode reports that Tailscale is stopped, open the app on both devices and enable it before retrying.
+```bash
+export BALLFORM_YOLO_MODEL=/path/to/model.pt
+export BALLFORM_GAME_POSE_MODEL=/path/to/pose.pt
+```
 
-## Open-source license
+The replacement ball model needs COCO class 32 (`sports ball`). A bigger generic checkpoint is not automatically better on NBA broadcasts or pickup footage, so compare its annotated output before trusting it.
 
-Ballform is licensed under **AGPL-3.0-only** because it integrates the AGPL-licensed Ultralytics package and model. MediaPipe is Apache-2.0. Downloaded model weights, uploaded footage, generated reports, caches, and pairing credentials are excluded from git. See `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md`, and `SECURITY.md` before distributing a modified service.
+## limits worth knowing before you trust a number
 
-## Capture guidance
+Camera movement changes apparent distances. Jerseys can look alike. Players overlap. A ball can be hidden for exactly the frames that matter. Passes and slow-motion edits can resemble shots. Cuts reset tracking. The analyzer reports evidence and confidence, but this project has not been calibrated against a labeled NBA shot-outcome dataset. Treat it like a sharp review assistant, not an oracle.
 
-- Record at 60 fps if possible; 1080p is enough.
-- Keep the shooter, nearby defenders, ball flight, rim, and net in frame from gather through result. In 5-on-5, a half-court view usually preserves more player detail than a distant full-court view.
-- Put the phone 3–6 ft high and avoid digital zoom or moving the camera.
-- Side and rear-oblique views work. A side view is best for release/arc; rear-oblique is better for elbow alignment.
-- Drag a tight box around the rim in the preview before analysis.
+## code map
 
-## NBA broadcasts and elevated pickup footage
+`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/game.py` handles shooter/defender association and the shot-space score. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
 
-1. Select **Game / 1-on-1 / 5-on-5**, then **NBA / elevated broadcast**, **Moving broadcast + tracked rim**, or **Pickup / elevated wide view**. Auto uses the wide broadcast pipeline for game mode and the close-up pipeline for form mode; it is a preset, not automatic camera calibration.
-2. Prefer a short, continuous half-court possession at the original resolution. Avoid clips with replays, intro graphics and multiple camera angles when possible.
-3. Optionally scrub to the game action, choose **Mark playing area**, and click 3–8 corners around the visible court in order. The polygon must be convex. Leave spectators and benches outside. This filters by players' feet, so their heads can extend above the selected area. Use **Clear current selection** to redraw. NBA broadcast mode also filters players/referees automatically; a polygon is especially useful for pickup footage or if sideline people slip through.
-4. This polygon stays fixed in image coordinates: choose a region covering play throughout the clip. Split clips with substantial pans or changing camera views and mark each separately. It is an inclusion mask, not a measurement in feet/meters.
-5. For make/miss on a continuous moving shot, choose **Moving broadcast + tracked rim**, pause on the first frame, and drag a tight box around the rim. The local CSRT tracker follows pans and moderate zooms. It deliberately stops at a camera cut or tracking failure rather than carrying a false hoop location into scoring.
-6. Click **Analyze game**. Review the annotated player IDs, each shot's evidence and the exported JSON. Both hands are checked automatically in game mode.
+Run the checks with:
 
-Wide game mode uses **YOLO11m-pose** for multi-person keypoints at a 1280-pixel input size plus two overlapping 960-pixel crop passes. Duplicate people are merged back into original-frame coordinates. Small players are checked by torso pixel size rather than requiring their torso to fill 4% of the entire image. **Stationary courtside** uses the game pose model at 960 pixels without extra crops. Pose inference follows the [Ultralytics model documentation](https://docs.ultralytics.com/models/yolo11/) and [prediction API](https://docs.ultralytics.com/modes/predict/).
+```bash
+uv run pytest -q
+node --check web/app.js
+```
 
-Ball detection uses a [basketball-trained RF-DETR Medium checkpoint](https://huggingface.co/ortizeg/basketball-rf-detr-m-640), with the publisher's 640-pixel RGB/ImageNet preprocessing and sigmoid/top-300 decoding. When full-frame ball evidence is weak, wide mode checks overlapping crops. Broadcast mode also matches poses to this detector's player/referee classes to exclude officials and spectators automatically. Pickup/elevated and courtside modes do not apply that NBA-trained role filter; use a playing-area polygon there. The checkpoint is pinned to a revision and SHA-256 checked on download. Its training data covers a small number of NBA games; generalization to new arenas and pickup footage is not guaranteed.
-
-The two game checkpoints total approximately **170 MB on disk**. Inference uses more memory than that; sequential, single-frame/crop inference bounds the working set. Pose inference selects Apple GPU (MPS) when available, otherwise CPU; RF-DETR uses the portable ONNX CPU runtime. These models are intended for local M3 Pro 36 GB use; wide-view analysis is offline processing, not a promise of real-time playback. Run `uv sync --extra dev` after updating to install the free ONNX runtime. No paid service is needed. First game analysis downloads weights; subsequent analysis works offline.
-
-Jersey colour uses dominant fabric colour to reduce interference from numbers. In crowded frames, a third appearance group can remain unassigned. Team assignment remains a colour heuristic even when the detector filters referees. Obscured jerseys, similar pickup shirts and spectators wearing team colours can still prevent a reliable matchup. The court polygon can further restrict the region if the automatic broadcast filtering includes someone from the sideline.
-
-Abrupt camera cuts reset player and ball tracking and split shot segmentation so arcs are not joined across edits. Standard broadcast/elevated mode still withholds make/miss because its rim box is fixed. **Moving broadcast + tracked rim** uses a user-initialized per-frame rim track for outcome geometry, net evidence, and the green make pulse; it withholds outcomes after a cut or tracking loss. A fixed-camera clip can use **Stationary courtside**. A make requires a visible downward rim-plane crossing, or (when the ball is occluded) a descending path projected through the rim plus localized net motion; net motion by itself never calls a make, so net-brushing airballs remain unconfirmed. Shot-space scores remain projected, uncalibrated measurements at every camera angle.
-
-Game release detection checks both hands and requires ball contact at or above shoulder height followed by an arc rising at least 0.75 torso lengths above the release shoulders, reducing false shots from dribbles. Pre-release hand–ball observations support possession identity, so a background hand crossing the airborne ball does not automatically become the shooter. Fully occluded releases, flat arcs and underhand attempts can be omitted. Passes and slow-motion edits still need review; recorded clip time is not necessarily game time.
-
-## What the numbers mean
-
-All joint and launch angles are **2D image-plane estimates**. They are useful for comparing attempts recorded from the same camera position, not as calibrated 3D biomechanics. The outcome classifier reports its confidence and the exact evidence it used.
-
-### 1-on-1 game review
-
-Select **Game / 1-on-1 / 5-on-5** before uploading. The mode accepts isolated 1-on-1 clips or crowded 5-on-5 footage. It detects multiple people, filters them through an optional playing-area polygon, associates the shooter using raised-hand contact and recent possession, and groups jersey appearance into two teams. Defender selection prioritizes a nearby opposing raised-hand contest, then falls back to the nearest projected opposing hip center. This is a primary-contester estimate, not the player's tactical defensive assignment. Persistent player IDs carry that matchup into the pre-release separation measurement. Each detected shot offers a release review button, underlying measurements, evidence quality, and an exportable JSON report. Detected-person counts can include officials; they are not a verified count of players on court.
-
-- **Separation:** projected distance between player hip centers divided by the shooter's shoulder-to-hip torso length.
-- **Contest clearance:** projected distance from the ball to the nearest visible defender wrist, in the same torso units. This is a hand-contest proxy, not a measurement of a blocked shooting lane.
-- **Separation change:** change over approximately 0.5 seconds before release, when conservative player matching and stable body scale permit comparison. Positive values mean more projected space.
-- **Shot-space score (0–100):** 65% separation component plus 35% contest-clearance component. Separation maps 0.5–3 torso lengths to 0–100; clearance maps 0.15–1.5 to 0–100, both clipped at the endpoints. Separation change is descriptive and does not affect the score.
-
-The formula and thresholds are **unvalidated review heuristics**, not make probability, expected points, a professional player grade, or a claim of optimal shot selection. Evidence quality is also heuristic, not a statistical probability. No score is produced when shooter ownership is ambiguous, teams cannot be separated by jersey appearance, a nearby unidentified player could be the defender, required landmarks are occluded, or ball evidence is weak. Missing measurements remain unavailable, never zero.
-
-If exactly one defender hand is unobserved, the point score stays unavailable but the report supplies **possible score bounds**: separation's contribution alone is the lower bound; adding the visible hand's contest contribution gives the upper bound. The unseen hand could reduce clearance anywhere within that range. These bounds assume the measured separation, visible hand and matchup are correct; they are **not** a statistical confidence interval. Visible-hand clearance is labeled separately from complete contest clearance, and any supported separation measurement remains available.
-
-Footage is sampled at up to 30 FPS; exact release timing still has sampling and detection uncertainty. Distances are aspect-corrected but not court-calibrated: camera angle, depth, player overlap and movement affect the numbers. Compare attempts from a consistent camera setup and review detected shots and outcomes in the video. Passes can still be mistaken for shots. Game mode does not publish arm mechanics across players without reliable persistent identity. Use the separate form mode for individual biomechanics review.
-
-Track IDs are motion- and jersey-assisted; team grouping uses torso colour in the current lighting. Similar uniforms, severe overlap, a tiny player image, cuts, or moving cameras can still break identity. The analyzer reports its selection evidence and withholds uncertain matchups. Professional-use accuracy still needs evaluation on labeled representative game footage. A larger generic model improves detection, but it has not been fine-tuned or calibrated against NBA shot outcomes.
-
-## Architecture
-
-- `app/analyzer.py`: video decoding, pose/ball inference, net optical flow, annotation
-- `app/scoring.py`: shot segmentation, release detection, metrics, outcome evidence
-- `app/game.py`: conservative 1-on-1 association, projected measurements, transparent shot-space score
-- `app/tracking.py`: multi-player track IDs and jersey-colour descriptors
-- `app/vision.py`: wide-view multi-person inference, overlapping crops, court filtering and cut detection
-- `app/basketball.py`: local basketball-trained ball and player/referee detection
-- `app/main.py`: upload/job API
-- `app/lan.py`: tokenized LAN/Tailscale sharing and QR pairing
-- `web/`: dependency-free local upload and review interface
-
-Set `BALLFORM_YOLO_MODEL` to another Ultralytics detection checkpoint if desired. It must include COCO class 32 (`sports ball`). Set `BALLFORM_GAME_POSE_MODEL` to another Ultralytics COCO-17 pose checkpoint to experiment with larger models. Defaults are stored in `models/` and ignored by git. Larger checkpoints are not automatically more accurate on your footage; compare the annotated output.
-
-The upload API also accepts `camera=auto|broadcast|elevated|moving|courtside` and optional `court=[[x,y],...]` as a JSON form field with normalized coordinates. `camera=moving` requires a `rim=[x,y,width,height]` box marked on the first frame. Existing clients using `mode=one_on_one` continue to work and get the wide-view pipeline by default. The JSON report records the profile, model names, devices, crop usage, court polygon, scene cuts, rim-tracking coverage and detected-person counts. Game jobs also save `observations.json` beside `result.json` under `data/jobs/<job_id>/`: these are the detected balls and tracked poses used for scoring, allowing review without repeating model inference. Overriding `BALLFORM_YOLO_MODEL` selects a COCO ball model and disables the specialized broadcast role filter.
-
-Run regression checks with `uv run pytest -q` and `node --check web/app.js`.
+Ballform is AGPL-3.0-only because it integrates the AGPL-licensed Ultralytics package and model. MediaPipe is Apache-2.0. See `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md`, and `SECURITY.md` before distributing a modified service.
