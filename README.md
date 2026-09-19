@@ -6,6 +6,15 @@ It looks at a single shooter’s mechanics, or at the little geometry of a game 
 
 The numbers are useful review signals, not a scouting department in a box. Compare clips from the same camera. Watch the annotated video. If the tracker is unsure, the report should say so.
 
+## see it on a real clip
+
+[![Before: raw shooting clip](https://img.youtube.com/vi/6gkVcpQtEcA/maxresdefault.jpg)](https://www.youtube.com/watch?v=6gkVcpQtEcA)
+
+[![After: Ballform review](https://img.youtube.com/vi/uuiYnWBlgpQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=uuiYnWBlgpQ)
+
+The shot details are below the videos. Either commit the images to `docs/demo/` and keep these relative paths, or replace the paths with public image URLs. The image lines are commented until the files exist, so the README does not show broken placeholders.
+
+
 ## get it running
 
 You need Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv):
