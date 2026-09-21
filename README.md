@@ -6,13 +6,13 @@ It looks at a single shooter’s mechanics, or at the little geometry of a game 
 
 The numbers are useful review signals, not a scouting department in a box. Compare clips from the same camera. Watch the annotated video. If the tracker is unsure, the report should say so.
 
-## see it on a real clip
+## see it on a real clip [Full Demo](https://www.ishaanmehta.dev/projects/basketball)
 
 <a href="https://www.youtube.com/watch?v=6gkVcpQtEcA"><img src="https://img.youtube.com/vi/6gkVcpQtEcA/0.jpg" alt="Before: raw shooting clip" width="640" height="360"></a>
-
+raw shooting clip
 
 <a href="https://www.youtube.com/watch?v=uuiYnWBlgpQ"><img src="https://img.youtube.com/vi/uuiYnWBlgpQ/maxresdefault.jpg" alt="After: Ballform review" width="640" height="360"></a>
-
+after ballform
 
 ![Before shot details](docs/demo/shot-details-before.png)
 simple metrics
