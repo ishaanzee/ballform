@@ -15,40 +15,41 @@ def client(monkeypatch, tmp_path):
 
 def test_upload_forwards_game_options(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video", "video/mp4")},
                            data={"mode": "one_on_one", "handedness": "left"})
     assert response.status_code == 202
-    assert calls[0][3:] == ("one_on_one", "left", "auto", None)
-    assert calls[0][1].read_bytes() == b"video"
+    assert calls[0][0][3:] == ("one_on_one", "left", "auto", None)
+    assert calls[0][0][1].read_bytes() == b"video"
+    assert calls[0][1]["pose_model"] == "yolo26s-pose"
 
 
 def test_existing_upload_defaults_to_form(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post("/api/jobs", files={"video": ("shot.mp4", b"video")})
     assert response.status_code == 202
-    assert calls[0][3:] == ("form", "right", "auto", None)
+    assert calls[0][0][3:] == ("form", "right", "auto", None)
 
 
 def test_upload_forwards_broadcast_court(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     court = [[0, 0], [1, 0], [1, 1], [0, 1]]
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
                            data={"mode": "one_on_one", "camera": "broadcast", "court": json.dumps(court)})
     assert response.status_code == 202
-    assert calls[0][5:] == ("broadcast", court)
+    assert calls[0][0][5:] == ("broadcast", court)
 
 
 def test_upload_accepts_moving_camera_profile(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "_run", lambda *args: calls.append(args))
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
                            data={"mode": "one_on_one", "camera": "moving",
                                  "rim": json.dumps([.7, .2, .1, .05])})
     assert response.status_code == 202
-    assert calls[0][5] == "moving"
+    assert calls[0][0][5] == "moving"
 
 
 def test_moving_camera_requires_first_frame_rim(client):
@@ -73,10 +74,10 @@ def test_upload_forwards_selected_pose_model(client, monkeypatch):
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
                            data={"mode": "one_on_one", "camera": "moving",
                                  "rim": json.dumps([.7, .2, .1, .05]),
-                                 "pose_model": "yolo26s-pose"})
+                                 "pose_model": "yolo26m-pose"})
     assert response.status_code == 202
-    assert response.json()["pose_model_requested"] == "yolo26s-pose"
-    assert calls[0][1]["pose_model"] == "yolo26s-pose"
+    assert response.json()["pose_model_requested"] == "yolo26m-pose"
+    assert calls[0][1]["pose_model"] == "yolo26m-pose"
 
 
 def test_run_reports_the_pose_checkpoint_loaded_by_analyzer(monkeypatch, tmp_path):
@@ -97,12 +98,12 @@ def test_run_reports_the_pose_checkpoint_loaded_by_analyzer(monkeypatch, tmp_pat
 
 def test_app_page_and_assets_disable_stale_caching(client):
     assert client.get("/").headers["cache-control"] == "no-store"
-    assert client.get("/assets/app.js?v=pose-model-confirmation-1").headers["cache-control"] == "no-store"
+    assert client.get("/assets/app.js?v=game-models-shooter-overlay-2").headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize("data", [
     {"mode": "invalid"}, {"handedness": "either"},
-    {"camera": "unknown"}, {"pose_model": "unknown"},
+    {"camera": "unknown"}, {"pose_model": "unknown"}, {"pose_model": "yolo11m-pose"},
     {"court": "oops"}, {"court": "[1,2,3]"},
     {"court": "[[0,0],[1,1],[0,1],[1,0]]"},
     {"rim": json.dumps([float("nan"), .2, .1, .1])},

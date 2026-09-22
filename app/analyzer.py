@@ -33,7 +33,6 @@ GAME_POSE_MODEL = ROOT / "models" / "pose_landmarker_full.task"
 GAME_POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
 BALL_MODEL = ROOT / "models" / "yolo11n.pt"
 BALL_MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt"
-COURT_POSE_MODEL = ROOT / "models" / "yolo11m-pose.pt"
 MODEL_RELEASE = "https://github.com/ultralytics/assets/releases/download/v8.4.0/"
 POSE_NAMES = {
     0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",
@@ -312,9 +311,28 @@ def _draw_make_animation(frame: np.ndarray, rim: tuple[float, float, float, floa
                 cv2.FONT_HERSHEY_DUPLEX, .75, (70, 255, 90), 2, cv2.LINE_AA)
 
 
-def _add_make_animations(source: Path, destination: Path, shots: list, output_fps: float, source_fps: float,
-                         rim: RimInput) -> None:
-    if rim is None or not any(s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots):
+def _shooter_intervals(shots: list, fps: float) -> list[tuple[int, int, int]]:
+    """Return source-frame intervals from each identified release through its rim event."""
+    intervals = []
+    for shot in shots:
+        game = shot.game or {}
+        shooter = (game.get("players") or {}).get("shooter_track_id")
+        if shooter is None:
+            continue
+        start = game.get("release_frame")
+        start = round(shot.release_s * fps) if start is None else int(start)
+        end = shot.outcome_frame if shot.outcome_frame is not None else round(shot.end_s * fps)
+        if end >= start:
+            intervals.append((start, int(end), int(shooter)))
+    return intervals
+
+
+def _add_review_overlays(source: Path, destination: Path, shots: list, player_frames: list[dict],
+                         output_fps: float, source_fps: float, rim: RimInput) -> None:
+    shooter_intervals = _shooter_intervals(shots, source_fps)
+    has_makes = rim is not None and any(
+        s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots)
+    if not shooter_intervals and not has_makes:
         source.replace(destination)
         return
     capture = cv2.VideoCapture(str(source))
@@ -331,12 +349,23 @@ def _add_make_animations(source: Path, destination: Path, shots: list, output_fp
         if not ok:
             break
         time_s = index / output_fps
+        source_frame = (player_frames[index]["frame"] if index < len(player_frames)
+                        else round(time_s * source_fps))
+        if index < len(player_frames):
+            for start, end, shooter_id in shooter_intervals:
+                if start <= source_frame <= end:
+                    pose = next((p for p in player_frames[index]["players"]
+                                 if p.track_id == shooter_id), None)
+                    if pose is not None:
+                        landmarks = {idx: pose.landmarks[name] for idx, name in POSE_NAMES.items()
+                                     if name in pose.landmarks}
+                        _draw(frame, landmarks, None, None, label=f"P{shooter_id} · SHOOTER", handler=True)
         frame_rim = _rim_at(rim, round(time_s * source_fps))
-        for shot in shots:
-            if (frame_rim is not None and shot.outcome in {"made", "likely made"}
-                    and shot.outcome_frame is not None):
-                _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
-                                     shot.outcome == "likely made")
+        if frame_rim is not None:
+            for shot in shots:
+                if shot.outcome in {"made", "likely made"} and shot.outcome_frame is not None:
+                    _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
+                                         shot.outcome == "likely made")
         writer.write(frame)
         index += 1
     capture.release()
@@ -375,7 +404,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
-                  rim_time_s: float | None = None, pose_model: str = "yolo11m-pose") -> dict:
+                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
@@ -387,12 +416,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     device = _device()
     game_pose_path = None
     if game_mode:
-        if pose_model not in {"yolo11m-pose", "yolo26m-pose", "yolo26s-pose"}:
+        if pose_model not in {"yolo26m-pose", "yolo26s-pose"}:
             raise ValueError("Unknown game pose model")
-        configured_model = os.environ.get("BALLFORM_GAME_POSE_MODEL") if pose_model == "yolo11m-pose" else None
         selected_path = ROOT / "models" / f"{pose_model}.pt"
-        game_pose_path = configured_model or str(_ensure_model(
-            selected_path, MODEL_RELEASE + selected_path.name))
+        game_pose_path = str(_ensure_model(selected_path, MODEL_RELEASE + selected_path.name))
         game_pose_model = YOLO(game_pose_path)
         report(.04, f"Pose model loaded: {Path(game_pose_path).name}")
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
@@ -579,7 +606,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
 
     report(.92, "Marking verified makes in review video")
     marked_output = output_dir / "annotated_marked.mp4"
-    _add_make_animations(raw_output, marked_output, shots, analyzed_fps, fps, scoring_rim)
+    _add_review_overlays(raw_output, marked_output, shots, player_frames, analyzed_fps, fps, scoring_rim)
     report(.95, "Encoding review video")
     annotated = output_dir / "annotated.mp4"
     ffmpeg = shutil.which("ffmpeg")
@@ -646,7 +673,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
-                  rim_time_s: float | None = None, pose_model: str = "yolo11m-pose") -> dict:
+                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
     """Run analysis and append elapsed time plus sampled peak process memory."""
     process = psutil.Process()
     peak_rss = [process.memory_info().rss]

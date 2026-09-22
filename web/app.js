@@ -7,7 +7,7 @@ const jobKey = `ballform-job:${token || 'local'}`;
 let file, dragStart, rimBox, report;
 let courtPoints = [], marking = 'rim';
 let selectedPoseModelForJob = null;
-const poseModelLabels = {'yolo11m-pose':'YOLO11m pose','yolo26m-pose':'YOLO26m pose','yolo26s-pose':'YOLO26s pose'};
+const poseModelLabels = {'yolo26m-pose':'YOLO26m pose','yolo26s-pose':'YOLO26s pose'};
 function updateSettings() {
   const game = $('#analysisMode').value === 'one_on_one';
   $('#handedness').disabled = game;

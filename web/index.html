@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>Ballform — Shot mechanics, frame by frame</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=pose-model-confirmation-1">
+  <link rel="stylesheet" href="/assets/styles.css?v=game-models-shooter-overlay-2">
 </head>
 <body>
   <header><a class="brand" id="homeLink" href="/"><span>BF</span> BALLFORM</a><div class="local" id="modeLabel">● RUNS LOCALLY</div></header>
@@ -22,7 +22,7 @@
         <label>Analysis mode<select id="analysisMode" aria-describedby="modeHelp"><option value="form">Single-person shooting form</option><option value="one_on_one">Game / 1-on-1 / 5-on-5</option></select></label>
         <label>Camera / footage<select id="cameraProfile"><option value="auto">Auto (wide view for games)</option><option value="broadcast">NBA / elevated broadcast (no outcome)</option><option value="moving">Moving broadcast + tracked rim</option><option value="elevated">Pickup / elevated wide view</option><option value="courtside">Stationary courtside / side view</option></select></label>
         <label>Shooting hand<select id="handedness"><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
-        <label id="poseModelField">Game pose model<select id="poseModel" aria-describedby="poseModelHelp"><option value="yolo11m-pose">YOLO11m · current baseline</option><option value="yolo26m-pose">YOLO26m · newer medium</option><option value="yolo26s-pose">YOLO26s · smaller, speed-oriented</option></select><small id="poseModelHelp">Used for Game / 1-on-1 / 5-on-5 analysis. Compare the same clip and settings; the smaller model may be faster but can miss more detail.</small></label>
+        <label id="poseModelField">Game pose model<select id="poseModel" aria-describedby="poseModelHelp"><option value="yolo26s-pose">YOLO26s · speed-first default</option><option value="yolo26m-pose">YOLO26m · medium</option></select><small id="poseModelHelp">Used for Game / 1-on-1 / 5-on-5 analysis. Compare the same clip and settings; YOLO26s is faster on your sample, while quality depends on the footage.</small></label>
         <p id="modeHelp">Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.</p>
       </div>
       <label class="drop" id="drop">
@@ -71,6 +71,6 @@
     </section>
   </main>
   <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
-  <script src="/assets/app.js?v=pose-model-confirmation-1"></script>
+  <script src="/assets/app.js?v=game-models-shooter-overlay-2"></script>
 </body>
 </html>

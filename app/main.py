@@ -34,7 +34,7 @@ def _update(job_id: str, **values) -> None:
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
          mode: str = "form", handedness: str = "right", camera: str = "auto", court=None,
          rim_frame: int | None = None, rim_time_s: float | None = None,
-         pose_model: str = "yolo11m-pose") -> None:
+         pose_model: str = "yolo26s-pose") -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
@@ -79,15 +79,15 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                      mode: str = Form("form"), handedness: str = Form("right"),
                      camera: str = Form("auto"), court: str | None = Form(None),
                      rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
-                     pose_model: str = Form("yolo11m-pose")) -> dict:
+                     pose_model: str = Form("yolo26s-pose")) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
     if camera not in CAMERAS:
         raise HTTPException(422, "Camera must be auto, broadcast, elevated, moving or courtside.")
-    if pose_model not in {"yolo11m-pose", "yolo26m-pose", "yolo26s-pose"}:
-        raise HTTPException(422, "Pose model must be yolo11m-pose, yolo26m-pose or yolo26s-pose.")
+    if pose_model not in {"yolo26m-pose", "yolo26s-pose"}:
+        raise HTTPException(422, "Pose model must be yolo26m-pose or yolo26s-pose.")
     try:
         court_polygon = validate_court(json.loads(court)) if court else None
     except (ValueError, TypeError):
@@ -141,11 +141,8 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
     _update(job_id, status="queued", progress=0.0, message="Queued",
             pose_model_requested=pose_model if mode == "one_on_one" else None)
     if anchor_frame is None and anchor_time is None:
-        if pose_model == "yolo11m-pose":
-            background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
-        else:
-            background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
-                                pose_model=pose_model)
+        background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
+                            pose_model=pose_model)
     else:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
                             rim_frame=anchor_frame, rim_time_s=anchor_time, pose_model=pose_model)
