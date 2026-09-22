@@ -79,7 +79,7 @@ Scan the QR code in the terminal with the iPhone camera. Safari opens a private 
 
 ## models, memory, and reality
 
-Game mode uses YOLO11m-pose with overlapping wide-view crops and a basketball-trained RF-DETR Medium detector. The weights are roughly 170 MB together, but inference needs more working memory. The pipeline processes frames and crops sequentially and is intended for a apple silicon with 36 GB RAM (16 should work w smaller clips). Apple GPU (MPS) is used for pose when available; the portable ONNX ball detector runs on CPU. Wide-view analysis is offline processing, not real-time playback.
+Game mode defaults to YOLO11m-pose and offers YOLO26m-pose and YOLO26s-pose in the model selector. YOLO26s is a smaller speed candidate, but its speed and tracking quality depend on the clip and Mac; compare the same clip with the saved processing-time and memory figures. Only one analysis runs at a time. Game analysis also uses overlapping wide-view crops and a basketball-trained RF-DETR Medium detector. The pipeline processes frames and crops sequentially and is intended for Apple silicon with 36 GB RAM (16 GB should work with smaller clips). Apple GPU (MPS) is used for pose when available; the portable ONNX ball detector runs on CPU. Wide-view analysis is offline processing, not real-time playback.
 
 You can experiment with other local Ultralytics checkpoints:
 

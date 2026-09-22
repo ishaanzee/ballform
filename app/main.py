@@ -33,15 +33,24 @@ def _update(job_id: str, **values) -> None:
 
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
          mode: str = "form", handedness: str = "right", camera: str = "auto", court=None,
-         rim_frame: int | None = None, rim_time_s: float | None = None) -> None:
+         rim_frame: int | None = None, rim_time_s: float | None = None,
+         pose_model: str = "yolo11m-pose") -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
+
+            def progress(value: float, message: str) -> None:
+                updates = {"progress": round(value, 3), "message": message}
+                prefix = "Pose model loaded: "
+                if message.startswith(prefix):
+                    updates["pose_model_loaded"] = message.removeprefix(prefix)
+                _update(job_id, **updates)
+
             result = analyze_video(input_path, input_path.parent, rim,
-                                   lambda p, m: _update(job_id, progress=round(p, 3), message=m),
+                                   progress,
                                    mode=mode, handedness=handedness, camera=camera, court=court,
-                                   rim_frame=rim_frame, rim_time_s=rim_time_s)
+                                   rim_frame=rim_frame, rim_time_s=rim_time_s, pose_model=pose_model)
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -54,7 +63,10 @@ async def require_lan_token(request: Request, call_next):
         supplied = request.query_params.get("token") or request.headers.get("x-ballform-token")
         if not supplied or not secrets.compare_digest(supplied, ACCESS_TOKEN):
             return JSONResponse({"detail": "Invalid or missing Ballform pairing token."}, status_code=401)
-    return await call_next(request)
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/")
@@ -66,13 +78,16 @@ def index() -> FileResponse:
 async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None),
                      mode: str = Form("form"), handedness: str = Form("right"),
                      camera: str = Form("auto"), court: str | None = Form(None),
-                     rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None)) -> dict:
+                     rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
+                     pose_model: str = Form("yolo11m-pose")) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
     if camera not in CAMERAS:
         raise HTTPException(422, "Camera must be auto, broadcast, elevated, moving or courtside.")
+    if pose_model not in {"yolo11m-pose", "yolo26m-pose", "yolo26s-pose"}:
+        raise HTTPException(422, "Pose model must be yolo11m-pose, yolo26m-pose or yolo26s-pose.")
     try:
         court_polygon = validate_court(json.loads(court)) if court else None
     except (ValueError, TypeError):
@@ -123,13 +138,18 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                 directory.rmdir()
                 raise HTTPException(413, "Video exceeds the 750 MB local upload limit.")
             target.write(chunk)
-    _update(job_id, status="queued", progress=0.0, message="Queued")
+    _update(job_id, status="queued", progress=0.0, message="Queued",
+            pose_model_requested=pose_model if mode == "one_on_one" else None)
     if anchor_frame is None and anchor_time is None:
-        background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
+        if pose_model == "yolo11m-pose":
+            background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon)
+        else:
+            background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
+                                pose_model=pose_model)
     else:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
-                            rim_frame=anchor_frame, rim_time_s=anchor_time)
-    return {"job_id": job_id}
+                            rim_frame=anchor_frame, rim_time_s=anchor_time, pose_model=pose_model)
+    return {"job_id": job_id, "pose_model_requested": pose_model if mode == "one_on_one" else None}
 
 
 @app.get("/api/jobs/{job_id}")

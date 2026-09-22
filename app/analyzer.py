@@ -5,6 +5,8 @@ import hashlib
 import os
 import shutil
 import subprocess
+import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -14,6 +16,7 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
+import psutil
 from ultralytics import YOLO
 
 from app.models import Detection, PoseFrame
@@ -343,21 +346,23 @@ def _add_make_animations(source: Path, destination: Path, shots: list, output_fp
 
 def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], ball: Detection | None,
           rim: tuple[float, float, float, float] | None, handedness: str = "right",
-          label: str | None = None) -> None:
+          label: str | None = None, handler: bool = False) -> None:
     h, w = frame.shape[:2]
+    pose_color = (35, 45, 245) if handler else (65, 235, 180)
     for a, b in SKELETON:
         if a in landmarks and b in landmarks and landmarks[a][2] > .35 and landmarks[b][2] > .35:
             p1 = int(landmarks[a][0] * w), int(landmarks[a][1] * h)
             p2 = int(landmarks[b][0] * w), int(landmarks[b][1] * h)
-            cv2.line(frame, p1, p2, (65, 235, 180), 3, cv2.LINE_AA)
+            cv2.line(frame, p1, p2, pose_color, 3, cv2.LINE_AA)
     for idx in ((12, 14, 16) if handedness == "right" else (11, 13, 15)):
         if idx in landmarks and landmarks[idx][2] > .35:
-            cv2.circle(frame, (int(landmarks[idx][0] * w), int(landmarks[idx][1] * h)), 5, (15, 245, 255), -1)
+            cv2.circle(frame, (int(landmarks[idx][0] * w), int(landmarks[idx][1] * h)), 5,
+                       pose_color if handler else (15, 245, 255), -1)
     if label and landmarks:
         anchor = next((landmarks[idx] for idx in (0, 11, 12) if idx in landmarks and landmarks[idx][2] > .35), None)
         if anchor:
             cv2.putText(frame, label, (int(anchor[0] * w), max(20, int(anchor[1] * h) - 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, .55, (65, 235, 180), 2, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, .55, pose_color, 2, cv2.LINE_AA)
     if ball:
         center = int(ball.x * w), int(ball.y * h)
         cv2.circle(frame, center, max(7, int(ball.radius * max(w, h))), (30, 130, 255), 3, cv2.LINE_AA)
@@ -366,11 +371,11 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
         cv2.rectangle(frame, (int(x*w), int(y*h)), (int((x+rw)*w), int((y+rh)*h)), (255, 180, 30), 2)
 
 
-def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
+def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
-                  rim_time_s: float | None = None) -> dict:
+                  rim_time_s: float | None = None, pose_model: str = "yolo11m-pose") -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
@@ -382,9 +387,14 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     device = _device()
     game_pose_path = None
     if game_mode:
-        game_pose_path = os.environ.get("BALLFORM_GAME_POSE_MODEL") or str(_ensure_model(
-            COURT_POSE_MODEL, MODEL_RELEASE + COURT_POSE_MODEL.name))
+        if pose_model not in {"yolo11m-pose", "yolo26m-pose", "yolo26s-pose"}:
+            raise ValueError("Unknown game pose model")
+        configured_model = os.environ.get("BALLFORM_GAME_POSE_MODEL") if pose_model == "yolo11m-pose" else None
+        selected_path = ROOT / "models" / f"{pose_model}.pt"
+        game_pose_path = configured_model or str(_ensure_model(
+            selected_path, MODEL_RELEASE + selected_path.name))
         game_pose_model = YOLO(game_pose_path)
+        report(.04, f"Pose model loaded: {Path(game_pose_path).name}")
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     if game_mode and not configured_ball_model:
         ball_model_path = str(_ensure_model(ROOT / "models" / MODEL_FILENAME, MODEL_URL, MODEL_SHA256))
@@ -486,9 +496,39 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                 previous_ball = ball
             flows[frame_no] = _net_flow(previous_gray, gray, frame_rim)
             previous_gray = gray
+            handler_track_id = None
+            if game_mode and ball and players:
+                aspect = width / height
+                proximities = []
+                for player in players:
+                    wrists = [player.landmarks.get(name) for name in
+                              ("left_wrist", "right_wrist")]
+                    body = [player.landmarks.get(name) for name in
+                            ("left_shoulder", "right_shoulder", "left_hip", "right_hip")]
+                    if any(point is None or point[2] < .65 for point in body):
+                        continue
+                    shoulder = ((body[0][0] + body[1][0]) * aspect / 2,
+                                (body[0][1] + body[1][1]) / 2)
+                    hip = ((body[2][0] + body[3][0]) * aspect / 2,
+                           (body[2][1] + body[3][1]) / 2)
+                    torso = float(np.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1]))
+                    if torso < .008:
+                        continue
+                    distances = [float(np.hypot(point[0] * aspect - ball.x * aspect,
+                                                point[1] - ball.y)) / torso
+                                 for point in wrists if point is not None and point[2] >= .65]
+                    if distances:
+                        proximities.append((min(distances), player.track_id))
+                proximities.sort()
+                if (proximities and proximities[0][0] <= .9
+                        and (len(proximities) == 1 or proximities[1][0] - proximities[0][0] >= .3)):
+                    handler_track_id = proximities[0][1]
             for visible_pose, player in zip(landmark_maps, players):
                 player_label = f"P{player.track_id}" if mode == "one_on_one" and player.track_id else None
-                _draw(frame, visible_pose, None, None, handedness, player_label)
+                is_handler = game_mode and player.track_id == handler_track_id
+                if is_handler and player_label:
+                    player_label += " · BALL"
+                _draw(frame, visible_pose, None, None, handedness, player_label, is_handler)
             _draw(frame, {}, ball, frame_rim)
             if court:
                 polygon = np.rint(np.asarray(court) * (width, height)).astype(np.int32)
@@ -560,6 +600,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         "mode": mode, "handedness": handedness, "game_summary": game_summary,
         "camera_profile": profile, "court_polygon": court,
         "vision": {"pose_model": Path(game_pose_path).name if game_pose_path else pose_path.name,
+                   "pose_model_requested": pose_model if game_mode else None,
+                   "pose_model_choice": pose_model if game_mode else None,
                    "ball_model": Path(ball_model_path).name, "device": device,
                    "ball_device": "cpu" if isinstance(ball_model, BasketballDetector) else device,
                    "input_size": court_vision.imgsz if court_vision else 640,
@@ -597,4 +639,43 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
+    return result
+
+
+def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
+                  progress: Callable[[float, str], None] | None = None,
+                  mode: str = "form", handedness: str = "right", camera: str = "auto",
+                  court: list[list[float]] | None = None, rim_frame: int | None = None,
+                  rim_time_s: float | None = None, pose_model: str = "yolo11m-pose") -> dict:
+    """Run analysis and append elapsed time plus sampled peak process memory."""
+    process = psutil.Process()
+    peak_rss = [process.memory_info().rss]
+    stop = threading.Event()
+
+    def sample_memory():
+        while not stop.wait(.1):
+            try:
+                peak_rss[0] = max(peak_rss[0], process.memory_info().rss)
+            except psutil.Error:
+                return
+
+    sampler = threading.Thread(target=sample_memory, name="ballform-memory-sampler", daemon=True)
+    started = time.perf_counter()
+    sampler.start()
+    try:
+        result = _analyze_video(input_path, output_dir, rim, progress, mode, handedness, camera,
+                                court, rim_frame, rim_time_s, pose_model)
+    finally:
+        stop.set()
+        sampler.join()
+        try:
+            peak_rss[0] = max(peak_rss[0], process.memory_info().rss)
+        except psutil.Error:
+            pass
+    result["performance"] = {
+        "elapsed_seconds": round(time.perf_counter() - started, 2),
+        "peak_process_memory_mb": round(peak_rss[0] / (1024 * 1024), 1),
+        "memory_note": "Peak resident memory of the Ballform process sampled during this analysis; includes the app and loaded models.",
+    }
+    (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     return result

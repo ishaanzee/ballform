@@ -61,6 +61,7 @@ dependencies = [
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "onnxruntime" },
     { name = "opencv-contrib-python" },
+    { name = "psutil" },
     { name = "python-multipart" },
     { name = "qrcode" },
     { name = "ultralytics" },
@@ -81,10 +82,11 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "onnxruntime", specifier = ">=1.20,<2" },
     { name = "opencv-contrib-python", specifier = ">=4.10,<5" },
+    { name = "psutil", specifier = ">=6,<8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "python-multipart", specifier = ">=0.0.18,<1" },
     { name = "qrcode", specifier = ">=8.0,<9" },
-    { name = "ultralytics", specifier = ">=8.3,<9" },
+    { name = "ultralytics", specifier = ">=8.4.0,<9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
 provides-extras = ["dev"]
