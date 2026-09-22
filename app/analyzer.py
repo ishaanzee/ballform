@@ -411,6 +411,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     profile = camera_profile(camera, mode)
     court = validate_court(court)
     game_mode = mode == "one_on_one"
+    stage_times = {}
+    stage_started = time.perf_counter()
     report(0.02, "Loading local vision models")
     pose_path = None if game_mode else ensure_pose_model()
     device = _device()
@@ -447,6 +449,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     if not writer.isOpened():
         capture.release()
         raise RuntimeError("Could not initialize the annotated video writer.")
+    stage_times["model_loading_and_setup"] = time.perf_counter() - stage_started
 
     options = None if game_mode else mp.tasks.vision.PoseLandmarkerOptions(
         # Explicit CPU delegate avoids MediaPipe attempting to create a Metal/OpenGL
@@ -472,15 +475,20 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     raw_people_counts = []
     tracked_rims: dict[int, tuple[float, float, float, float]] = {}
     rim_tracking_lost = False
+    stage_started = time.perf_counter()
     if profile == "moving" and rim:
         report(.06, "Tracking the marked rim forward and backward")
         tracked_rims, rim_tracking_lost = _track_rim_bidirectional(
             input_path, rim, (rim_frame if rim_frame is not None else
                               round((rim_time_s or 0.0) * fps)), width, height, total)
+    stage_times["rim_tracking"] = time.perf_counter() - stage_started
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
+    stage_started = time.perf_counter()
     with ExitStack() as resources:
         resources.callback(capture.release)
         resources.callback(writer.release)
+        if court_vision:
+            resources.callback(court_vision.close)
         landmarker = None if game_mode else resources.enter_context(mp.tasks.vision.PoseLandmarker.create_from_options(options))
         frame_no = -1
         while True:
@@ -564,6 +572,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             processed += 1
             if processed % 5 == 0:
                 report(min(.88, .08 + .78 * frame_no / max(1, total)), f"Analyzing frame {frame_no:,} of {total:,}")
+    stage_times["frame_processing"] = time.perf_counter() - stage_started
+    stage_started = time.perf_counter()
     observed_balls = list(balls)
     if game_mode:
         # Keep the measured inputs so scoring can be reviewed without rerunning inference.
@@ -603,11 +613,15 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     view, view_confidence = classify_view(poses, aspect_ratio=width / height)
     if game_mode:
         view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
+    stage_times["scoring_and_observations"] = time.perf_counter() - stage_started
 
     report(.92, "Marking verified makes in review video")
+    stage_started = time.perf_counter()
     marked_output = output_dir / "annotated_marked.mp4"
     _add_review_overlays(raw_output, marked_output, shots, player_frames, analyzed_fps, fps, scoring_rim)
+    stage_times["review_overlays"] = time.perf_counter() - stage_started
     report(.95, "Encoding review video")
+    stage_started = time.perf_counter()
     annotated = output_dir / "annotated.mp4"
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
@@ -620,6 +634,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             marked_output.replace(annotated)
     else:
         marked_output.replace(annotated)
+    stage_times["video_encoding"] = time.perf_counter() - stage_started
+    if court_vision:
+        stage_times["pose_inference_and_readback"] = court_vision.timing_seconds["pose"]
+        stage_times["ball_inference_and_readback"] = court_vision.timing_seconds["ball"]
+        stage_times["vision_wall_time"] = court_vision.timing_seconds["total"]
     result = {
         "video": {"duration_s": round(total / fps, 2), "fps": round(fps, 2), "resolution": f"{width}×{height}",
                   "analyzed_fps": round(analyzed_fps, 2)},
@@ -634,7 +653,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "input_size": court_vision.imgsz if court_vision else 640,
                    "ball_input_size": 640 if isinstance(ball_model, BasketballDetector) else (court_vision.imgsz if court_vision else 640),
                    "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile in {"broadcast", "moving"}),
-                   "overlapping_crops": bool(court_vision and court_vision.tiled)},
+                   "overlapping_crops": bool(court_vision and court_vision.tiled),
+                   "cpu_ball_crops_overlapped_with_gpu_pose": bool(court_vision and court_vision.ball_crop_overlap_frames)},
         "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
         "diagnostics": {"pose_frames": sum(bool(p["players"]) for p in player_frames),
                         "two_player_frames": sum(len(p["players"]) == 2 for p in player_frames),
@@ -646,7 +666,14 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "ball_detections": len(observed_balls),
                         "rim_marked": rim is not None,
                         "rim_tracking_frames": len(tracked_rims),
-                        "rim_tracking_lost": rim_tracking_lost},
+                        "rim_tracking_lost": rim_tracking_lost,
+                        "pose_predict_calls": court_vision.pose_predict_calls if court_vision else None,
+                        "pose_images": court_vision.pose_images if court_vision else None,
+                        "ball_crop_overlap_frames": court_vision.ball_crop_overlap_frames if court_vision else None},
+        "performance": {
+            "stages_seconds": {name: round(seconds, 2) for name, seconds in stage_times.items()},
+            "timing_note": "Pose, ball, and vision wall time are parts of frame processing, not additional stages. Pose and ball can overlap, so do not add them together. GPU timing includes tensor readback.",
+        },
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
             "Make/miss is inferred from visible ball/rim geometry. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make.",
@@ -699,10 +726,10 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
             peak_rss[0] = max(peak_rss[0], process.memory_info().rss)
         except psutil.Error:
             pass
-    result["performance"] = {
+    result.setdefault("performance", {}).update({
         "elapsed_seconds": round(time.perf_counter() - started, 2),
         "peak_process_memory_mb": round(peak_rss[0] / (1024 * 1024), 1),
         "memory_note": "Peak resident memory of the Ballform process sampled during this analysis; includes the app and loaded models.",
-    }
+    })
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     return result

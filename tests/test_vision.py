@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
+from types import SimpleNamespace
+from threading import Event
 
-from app.vision import CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
+import app.vision as vision_module
+
+from app.vision import CourtVision, CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
 from app.basketball import decode, preprocess
 from app.game import _body, _appearance_groups
 from app.models import PoseFrame
@@ -22,6 +26,88 @@ def test_overlapping_crop_detections_merge_without_losing_nearby_player():
     duplicate = Person((.201, .3, .301, .6), .9, {})
     neighbor = Person((.27, .31, .38, .61), .9, {})
     assert merge_people([duplicate, neighbor, a]) == [a, neighbor]
+
+
+def test_side_crops_keep_original_image_size_and_coordinates():
+    class Tensor:
+        def __init__(self, value):
+            self.value = np.asarray(value)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.value
+
+    empty = SimpleNamespace(boxes=None, keypoints=None)
+    points = np.zeros((1, 17, 3))
+    points[0, :, 2] = .9
+    points[0, 5] = (220, 200, .9)
+    points[0, 6] = (260, 200, .9)
+    points[0, 11] = (220, 260, .9)
+    points[0, 12] = (260, 260, .9)
+    left_player = SimpleNamespace(
+        boxes=SimpleNamespace(xyxy=Tensor([[200, 180, 280, 300]]), conf=Tensor([.9])),
+        keypoints=SimpleNamespace(data=Tensor(points)))
+
+    class PoseModel:
+        def __init__(self):
+            self.calls = []
+
+        def predict(self, source, **kwargs):
+            self.calls.append((source, kwargs))
+            return [left_player] if len(self.calls) == 2 else [empty]
+
+    class BallModel:
+        def predict(self, source, **kwargs):
+            return [empty]
+
+    pose_model = PoseModel()
+    vision = CourtVision(pose_model, BallModel(), "mps", "moving")
+    poses, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0)
+
+    assert len(pose_model.calls) == 3
+    assert pose_model.calls[0][0].shape == (600, 1000, 3)
+    assert pose_model.calls[0][1]["imgsz"] == 1280
+    assert [source.shape for source, _ in pose_model.calls[1:]] == [(600, 600, 3)] * 2
+    assert [kwargs["imgsz"] for _, kwargs in pose_model.calls[1:]] == [960, 960]
+    assert len(poses) == 1 and ball is None
+    assert poses[0].landmarks["left_shoulder"][:2] == pytest.approx((.22, 1/3))
+    assert vision.pose_predict_calls == 3
+    assert vision.pose_images == 3
+    assert vision.ball_crop_overlap_frames == 0
+
+
+def test_cpu_ball_crop_detection_overlaps_pose_without_skipping_crops(monkeypatch):
+    pose_started = Event()
+
+    class BallDetector:
+        def __init__(self):
+            self.calls = 0
+
+        def detect(self, frame):
+            self.calls += 1
+            if self.calls == 1:
+                return [(4, .9, (.2, .2, .3, .6))]
+            assert pose_started.wait(1), "Side ball detection ran before pose inference"
+            return [(1, .8, (.45, .45, .55, .55))]
+
+    class PoseModel:
+        def predict(self, source, **kwargs):
+            pose_started.set()
+            return [SimpleNamespace(boxes=None, keypoints=None)]
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    detector = BallDetector()
+    vision = CourtVision(PoseModel(), detector, "mps", "moving")
+    try:
+        _, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0)
+    finally:
+        vision.close()
+    assert detector.calls == 3
+    assert vision.ball_crop_overlap_frames == 1
+    assert vision.pose_images == 3
+    assert ball is not None and ball.x == pytest.approx(.3)
 
 
 def test_court_filters_feet_not_head():
