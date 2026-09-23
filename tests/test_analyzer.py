@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analyzer import _review_highlight, _sampled_frames, _shooter_intervals
+from app.analyzer import _review_highlight, _sampled_frames, _shooter_intervals, _wait_summary
 from app.models import ShotResult
 from app.tracking import HandlerDecision
 
@@ -51,8 +51,9 @@ def test_frame_prefetch_preserves_source_order_and_stride():
             return [frame * 10]
 
     capture = Capture()
+    waits = {}
     with ThreadPoolExecutor(max_workers=1) as executor:
-        frames = _sampled_frames(capture, 2, Detector(), executor)
+        frames = _sampled_frames(capture, 2, Detector(), executor, waits)
         first = next(frames)
         assert first[:3] == (0, 0, [0])
         assert capture.index == 3  # Only one analyzed frame is buffered ahead.
@@ -60,6 +61,18 @@ def test_frame_prefetch_preserves_source_order_and_stride():
     assert [(frame_no, frame, objects) for frame_no, frame, objects, _ in rest] == [
         (2, 2, [20]), (4, 4, [40])]
     assert all(seconds >= 0 for _, _, _, seconds in [first, *rest])
+    assert set(waits) == {0, 2, 4}
+    assert all(seconds >= 0 for seconds in waits.values())
+
+
+def test_pipeline_wait_summary_reports_blocked_time_and_tail():
+    assert _wait_summary([])["frames"] == 0
+    summary = _wait_summary([0, .002, .004, .010])
+    assert summary["frames"] == 4
+    assert summary["blocked_frames_over_1ms"] == 3
+    assert summary["total_seconds"] == .016
+    assert summary["median_ms"] == 3.0
+    assert summary["max_ms"] == 10.0
 
 
 def test_serial_frame_reader_does_not_run_detector():

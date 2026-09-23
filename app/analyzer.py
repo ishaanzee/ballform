@@ -422,7 +422,8 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
         cv2.rectangle(frame, (int(x*w), int(y*h)), (int((x+rw)*w), int((y+rh)*h)), (255, 180, 30), 2)
 
 
-def _sampled_frames(capture, stride: int, detector=None, executor=None):
+def _sampled_frames(capture, stride: int, detector=None, executor=None,
+                    prefetch_waits: dict[int, float] | None = None):
     """Yield source frames in order while detecting the next frame in the background."""
     source_frame = -1
 
@@ -450,9 +451,25 @@ def _sampled_frames(capture, stride: int, detector=None, executor=None):
     while current is not None:
         following = read_next()
         following_future = executor.submit(detect_timed, following[1]) if following is not None else None
+        wait_started = time.perf_counter()
         objects, seconds = current_future.result()
+        if prefetch_waits is not None:
+            prefetch_waits[current[0]] = time.perf_counter() - wait_started
         yield (*current, objects, seconds)
         current, current_future = following, following_future
+
+
+def _wait_summary(samples: list[float]) -> dict:
+    """Summarize time the frame thread was blocked, not total worker runtime."""
+    if not samples:
+        return {"frames": 0, "blocked_frames_over_1ms": 0, "total_seconds": 0.0,
+                "median_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+    return {"frames": len(samples),
+            "blocked_frames_over_1ms": sum(value >= .001 for value in samples),
+            "total_seconds": round(sum(samples), 3),
+            "median_ms": round(float(np.percentile(samples, 50)) * 1000, 2),
+            "p95_ms": round(float(np.percentile(samples, 95)) * 1000, 2),
+            "max_ms": round(max(samples) * 1000, 2)}
 
 
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
@@ -560,6 +577,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     handler_tracker = BallHandlerTracker(width / height) if game_mode else None
     prefetch_ball_seconds = 0.0
     prefetched_frames = 0
+    prefetch_waits: dict[int, float] = {}
     stage_started = time.perf_counter()
     with ExitStack() as resources:
         resources.callback(capture.release)
@@ -571,7 +589,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                              if prefetch_detector else None)
         frame_no = -1
         for frame_no, frame, prefetched_objects, prefetch_seconds in _sampled_frames(
-                capture, stride, prefetch_detector, prefetch_executor):
+                capture, stride, prefetch_detector, prefetch_executor, prefetch_waits):
             if prefetched_objects is not None:
                 prefetched_frames += 1
                 prefetch_ball_seconds += prefetch_seconds
@@ -695,6 +713,29 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         stage_times["ball_inference_and_readback"] = court_vision.timing_seconds["ball"] + prefetch_ball_seconds
         stage_times["prefetched_full_ball_inference"] = prefetch_ball_seconds
         stage_times["vision_wall_time"] = court_vision.timing_seconds["total"]
+    side_crop_waits = court_vision.side_crop_waits if court_vision else {}
+    pipeline_waits = {
+        "prefetched_full_ball": _wait_summary(list(prefetch_waits.values())),
+        "side_ball_crops": _wait_summary(list(side_crop_waits.values())),
+        "side_crop_ball_candidates": sum(court_vision.side_crop_ball_candidates.values()) if court_vision else 0,
+        "side_crop_selected_frames": sum(court_vision.side_crop_ball_selected.values()) if court_vision else 0,
+        "combined_wait_seconds": round(sum(prefetch_waits.values()) + sum(side_crop_waits.values()), 3),
+        "fraction_of_frame_processing": round(
+            (sum(prefetch_waits.values()) + sum(side_crop_waits.values())) /
+            max(stage_times["frame_processing"], 1e-9), 3),
+    }
+    if game_mode:
+        (output_dir / "pipeline_timing.json").write_text(json.dumps({
+            "note": "Waits measure only time the frame thread blocked on an inference result. "
+                    "Zero means the worker finished before its result was needed.",
+            "frames": [{"frame": f["frame"],
+                        "prefetched_full_ball_wait_ms": round(prefetch_waits.get(f["frame"], 0) * 1000, 2),
+                        "side_ball_crops_wait_ms": round(side_crop_waits.get(f["frame"], 0) * 1000, 2),
+                        "side_ball_crops_triggered": f["frame"] in side_crop_waits,
+                        "side_ball_candidates": court_vision.side_crop_ball_candidates.get(f["frame"], 0),
+                        "selected_ball_from_side_crop": court_vision.side_crop_ball_selected.get(f["frame"], False)}
+                       for f in player_frames],
+        }, indent=2))
     result = {
         "video": {"duration_s": round(total / fps, 2), "fps": round(fps, 2), "resolution": f"{width}×{height}",
                   "analyzed_fps": round(analyzed_fps, 2)},
@@ -743,6 +784,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "prefetched_full_ball_frames": prefetched_frames},
         "performance": {
             "stages_seconds": {name: round(seconds, 2) for name, seconds in stage_times.items()},
+            "pipeline_waits": pipeline_waits,
+            "pipeline_timing_file": "pipeline_timing.json" if game_mode else None,
             "timing_note": "Pose and ball times are sums of inference work and can overlap each other and adjacent frames; do not add them to wall times. Vision wall time excludes prefetched full-frame detection. GPU timing includes tensor readback.",
         },
         "limitations": [

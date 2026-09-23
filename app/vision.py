@@ -96,6 +96,9 @@ class CourtVision:
         self.pose_predict_calls = 0
         self.pose_images = 0
         self.ball_crop_overlap_frames = 0
+        self.side_crop_waits: dict[int, float] = {}
+        self.side_crop_ball_candidates: dict[int, int] = {}
+        self.side_crop_ball_selected: dict[int, bool] = {}
         self._ball_executor = None
 
     def close(self):
@@ -183,15 +186,24 @@ class CourtVision:
                                            (by1 + by2 + 2*y1) / (2*height), float(confidence),
                                            max(bx2-bx1, by2-by1) / (2*max(width, height))))
         if side_ball_future is not None:
-            ball_regions.extend(side_ball_future.result())
-        for x1, y1, x2, y2, objects in ball_regions:
+            wait_started = time.perf_counter()
+            side_ball_regions = side_ball_future.result()
+            self.side_crop_waits[frame_no] = time.perf_counter() - wait_started
+            ball_regions.extend(side_ball_regions)
+        side_ball_ids = set()
+        for region_index, (x1, y1, x2, y2, objects) in enumerate(ball_regions):
             for category, confidence, box in objects:
                 if category not in BALL_CLASSES:
                     continue
                 bx1, by1, bx2, by2 = box
-                balls.append(Detection(frame_no, time_s, ((bx1+bx2)*(x2-x1)/2+x1)/width,
-                                       ((by1+by2)*(y2-y1)/2+y1)/height, confidence,
-                                       max((bx2-bx1)*(x2-x1), (by2-by1)*(y2-y1))/(2*max(width,height))))
+                candidate = Detection(frame_no, time_s, ((bx1+bx2)*(x2-x1)/2+x1)/width,
+                                      ((by1+by2)*(y2-y1)/2+y1)/height, confidence,
+                                      max((bx2-bx1)*(x2-x1), (by2-by1)*(y2-y1))/(2*max(width,height)))
+                balls.append(candidate)
+                if region_index > 0:
+                    side_ball_ids.add(id(candidate))
+        if side_ball_future is not None:
+            self.side_crop_ball_candidates[frame_no] = len(side_ball_ids)
         people = merge_people(candidates)
         self.raw_people = len(people)
         people = [p for p in people if on_court(p, self.court)]
@@ -228,6 +240,8 @@ class CourtVision:
             ball = selected if selected is not None and cost(selected) > -50 else None
         else:
             ball = max(balls, key=lambda b: b.confidence, default=None)
+        if side_ball_future is not None:
+            self.side_crop_ball_selected[frame_no] = ball is not None and id(ball) in side_ball_ids
         self.timing_seconds["total"] += time.perf_counter() - started
         return poses, maps, ball
 

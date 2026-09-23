@@ -106,6 +106,9 @@ def test_cpu_ball_crop_detection_overlaps_pose_without_skipping_crops(monkeypatc
         vision.close()
     assert detector.calls == 3
     assert vision.ball_crop_overlap_frames == 1
+    assert vision.side_crop_ball_candidates[0] == 2
+    assert vision.side_crop_ball_selected[0] is True
+    assert vision.side_crop_waits[0] >= 0
     assert vision.pose_images == 3
     assert ball is not None and ball.x == pytest.approx(.3)
 
@@ -126,6 +129,7 @@ def test_prefetched_full_frame_ball_objects_are_used_without_redetection(monkeyp
                                prefetched_objects=objects)
     assert ball is not None and ball.confidence == pytest.approx(.9)
     assert vision.ball_crop_overlap_frames == 0
+    assert vision.side_crop_ball_selected == {}
 
 
 def test_court_filters_feet_not_head():
