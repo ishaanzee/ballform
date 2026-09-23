@@ -1,6 +1,11 @@
 """Basketball-trained RF-DETR inference (pinned ONNX artifact; no hosted API)."""
 from __future__ import annotations
 
+import hashlib
+import logging
+import platform
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -43,16 +48,66 @@ def decode(boxes, logits, threshold=.25):
 
 
 class BasketballDetector:
-    def __init__(self, path):
+    def __init__(self, path, backend="auto"):
         import onnxruntime as ort
         ort.disable_telemetry_events()
+        if backend not in {"auto", "cpu", "coreml"}:
+            raise ValueError("Basketball detector backend must be 'auto', 'cpu', or 'coreml'.")
+        self.requested_backend = backend
+        self.fallback_reason = None
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
-        # ONNX CPU is portable and tested; YOLO pose independently uses Apple MPS.
-        self.session = ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
+        self._model_path = str(path)
+        self._session_options = options
+        coreml_available = "CoreMLExecutionProvider" in ort.get_available_providers()
+        chosen = ("coreml" if coreml_available and platform.system() == "Darwin"
+                  and platform.machine() == "arm64" else "cpu") if backend == "auto" else backend
+        if chosen == "coreml" and not coreml_available:
+            raise RuntimeError("This ONNX Runtime installation does not include the Core ML provider.")
+        try:
+            providers = ["CPUExecutionProvider"]
+            if chosen == "coreml":
+                # A content-specific cache avoids recompilation on every job
+                # and stale graphs if the ONNX file changes at the same path.
+                model_path = Path(path)
+                with model_path.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()[:20]
+                cache_dir = model_path.parent / "coreml-cache" / digest
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                providers.insert(0, ("CoreMLExecutionProvider", {
+                    "ModelFormat": "MLProgram",
+                    "MLComputeUnits": "CPUAndNeuralEngine",
+                    "RequireStaticInputShapes": "1",
+                    "ModelCacheDirectory": str(cache_dir),
+                }))
+            self.session = ort.InferenceSession(str(path), sess_options=options, providers=providers)
+            if chosen == "coreml" and "CoreMLExecutionProvider" not in self.session.get_providers():
+                raise RuntimeError("Core ML provider did not initialize for this model.")
+        except Exception as exc:
+            if backend != "auto" or chosen != "coreml":
+                raise
+            self.fallback_reason = f"Core ML initialization failed: {type(exc).__name__}: {exc}"
+            logging.warning("%s; using CPU detector", self.fallback_reason)
+            self.session = ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
+            chosen = "cpu"
+        self.backend = chosen
+        self.providers = self.session.get_providers()
 
     def detect(self, frame):
-        outputs = self.session.run(None, {self.session.get_inputs()[0].name: preprocess(frame)})
+        feed = {self.session.get_inputs()[0].name: preprocess(frame)}
+        try:
+            outputs = self.session.run(None, feed)
+        except Exception as exc:
+            if self.requested_backend != "auto" or self.backend != "coreml":
+                raise
+            import onnxruntime as ort
+            self.fallback_reason = f"Core ML inference failed: {type(exc).__name__}: {exc}"
+            logging.warning("%s; using CPU detector", self.fallback_reason)
+            self.session = ort.InferenceSession(self._model_path, sess_options=self._session_options,
+                                                providers=["CPUExecutionProvider"])
+            self.backend = "cpu"
+            self.providers = self.session.get_providers()
+            outputs = self.session.run(None, feed)
         boxes = next(value for value in outputs if value.shape[-1] == 4)
         logits = next(value for value in outputs if value.shape[-1] == 11)
         return decode(boxes, logits)

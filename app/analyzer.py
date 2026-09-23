@@ -427,7 +427,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     if game_mode and not configured_ball_model:
         ball_model_path = str(_ensure_model(ROOT / "models" / MODEL_FILENAME, MODEL_URL, MODEL_SHA256))
-        ball_model = BasketballDetector(ball_model_path)
+        ball_model = BasketballDetector(ball_model_path, backend=os.environ.get("BALLFORM_BALL_BACKEND", "auto"))
     else:
         ball_model_path = configured_ball_model or str(_ensure_model(BALL_MODEL, BALL_MODEL_URL))
         ball_model = YOLO(ball_model_path)
@@ -649,12 +649,17 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "pose_model_requested": pose_model if game_mode else None,
                    "pose_model_choice": pose_model if game_mode else None,
                    "ball_model": Path(ball_model_path).name, "device": device,
-                   "ball_device": "cpu" if isinstance(ball_model, BasketballDetector) else device,
+                   "ball_device": ("cpu+neural_engine_requested" if ball_model.backend == "coreml" else "cpu")
+                   if isinstance(ball_model, BasketballDetector) else device,
+                   "ball_backend": ball_model.backend if isinstance(ball_model, BasketballDetector) else "ultralytics",
+                   "ball_backend_requested": ball_model.requested_backend if isinstance(ball_model, BasketballDetector) else None,
+                   "ball_backend_fallback": ball_model.fallback_reason if isinstance(ball_model, BasketballDetector) else None,
+                   "ball_execution_providers": ball_model.providers if isinstance(ball_model, BasketballDetector) else None,
                    "input_size": court_vision.imgsz if court_vision else 640,
                    "ball_input_size": 640 if isinstance(ball_model, BasketballDetector) else (court_vision.imgsz if court_vision else 640),
                    "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile in {"broadcast", "moving"}),
                    "overlapping_crops": bool(court_vision and court_vision.tiled),
-                   "cpu_ball_crops_overlapped_with_gpu_pose": bool(court_vision and court_vision.ball_crop_overlap_frames)},
+                   "ball_crops_overlapped_with_pose": bool(court_vision and court_vision.ball_crop_overlap_frames)},
         "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
         "diagnostics": {"pose_frames": sum(bool(p["players"]) for p in player_frames),
                         "two_player_frames": sum(len(p["players"]) == 2 for p in player_frames),
