@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
@@ -400,6 +401,39 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
         cv2.rectangle(frame, (int(x*w), int(y*h)), (int((x+rw)*w), int((y+rh)*h)), (255, 180, 30), 2)
 
 
+def _sampled_frames(capture, stride: int, detector=None, executor=None):
+    """Yield source frames in order while detecting the next frame in the background."""
+    source_frame = -1
+
+    def read_next():
+        nonlocal source_frame
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                return None
+            source_frame += 1
+            if source_frame % stride == 0:
+                return source_frame, frame
+
+    def detect_timed(frame):
+        started = time.perf_counter()
+        return detector.detect(frame), time.perf_counter() - started
+
+    current = read_next()
+    if detector is None:
+        while current is not None:
+            yield (*current, None, 0.0)
+            current = read_next()
+        return
+    current_future = executor.submit(detect_timed, current[1]) if current is not None else None
+    while current is not None:
+        following = read_next()
+        following_future = executor.submit(detect_timed, following[1]) if following is not None else None
+        objects, seconds = current_future.result()
+        yield (*current, objects, seconds)
+        current, current_future = following, following_future
+
+
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
@@ -431,6 +465,25 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     else:
         ball_model_path = configured_ball_model or str(_ensure_model(BALL_MODEL, BALL_MODEL_URL))
         ball_model = YOLO(ball_model_path)
+    pipeline_request = os.environ.get("BALLFORM_FRAME_PIPELINE", "auto")
+    if pipeline_request not in {"auto", "1", "2"}:
+        raise ValueError("BALLFORM_FRAME_PIPELINE must be 'auto', '1', or '2'.")
+    pipeline_depth = (2 if game_mode and isinstance(ball_model, BasketballDetector)
+                      and ball_model.backend == "coreml" and device == "mps" else 1) if pipeline_request == "auto" else int(pipeline_request)
+    prefetch_detector = None
+    pipeline_fallback = None
+    if pipeline_depth == 2:
+        if not game_mode or not isinstance(ball_model, BasketballDetector):
+            raise ValueError("Two-frame inference requires the basketball-trained game detector.")
+        try:
+            # A second session is owned by the prefetch worker; the first session
+            # remains available for side crops on the current frame.
+            prefetch_detector = BasketballDetector(ball_model_path, backend=ball_model.backend)
+        except Exception as exc:
+            if pipeline_request == "2":
+                raise
+            pipeline_fallback = f"Prefetch detector initialization failed: {type(exc).__name__}: {exc}"
+            pipeline_depth = 1
     court_vision = CourtVision(game_pose_model, ball_model, device, profile, court) if game_mode else None
     capture = cv2.VideoCapture(str(input_path))
     if not capture.isOpened():
@@ -483,6 +536,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                               round((rim_time_s or 0.0) * fps)), width, height, total)
     stage_times["rim_tracking"] = time.perf_counter() - stage_started
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
+    prefetch_ball_seconds = 0.0
+    prefetched_frames = 0
     stage_started = time.perf_counter()
     with ExitStack() as resources:
         resources.callback(capture.release)
@@ -490,14 +545,14 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         if court_vision:
             resources.callback(court_vision.close)
         landmarker = None if game_mode else resources.enter_context(mp.tasks.vision.PoseLandmarker.create_from_options(options))
+        prefetch_executor = (resources.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="ballform-next-frame"))
+                             if prefetch_detector else None)
         frame_no = -1
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            frame_no += 1
-            if frame_no % stride:
-                continue
+        for frame_no, frame, prefetched_objects, prefetch_seconds in _sampled_frames(
+                capture, stride, prefetch_detector, prefetch_executor):
+            if prefetched_objects is not None:
+                prefetched_frames += 1
+                prefetch_ball_seconds += prefetch_seconds
             time_s = frame_no / fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             cut_frame = cut_detector.observe(frame_no, gray) if cut_detector else None
@@ -510,7 +565,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             players = []
             landmark_maps = []
             if court_vision:
-                players, landmark_maps, ball = court_vision.detect(frame, frame_no, time_s, previous_ball, prior_ball)
+                players, landmark_maps, ball = court_vision.detect(
+                    frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects=prefetched_objects)
                 raw_people_counts.append(court_vision.raw_people)
                 for pose in players:
                     pose.appearance = jersey_descriptor(frame, pose)
@@ -637,7 +693,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_times["video_encoding"] = time.perf_counter() - stage_started
     if court_vision:
         stage_times["pose_inference_and_readback"] = court_vision.timing_seconds["pose"]
-        stage_times["ball_inference_and_readback"] = court_vision.timing_seconds["ball"]
+        stage_times["ball_inference_and_readback"] = court_vision.timing_seconds["ball"] + prefetch_ball_seconds
+        stage_times["prefetched_full_ball_inference"] = prefetch_ball_seconds
         stage_times["vision_wall_time"] = court_vision.timing_seconds["total"]
     result = {
         "video": {"duration_s": round(total / fps, 2), "fps": round(fps, 2), "resolution": f"{width}×{height}",
@@ -655,6 +712,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "ball_backend_requested": ball_model.requested_backend if isinstance(ball_model, BasketballDetector) else None,
                    "ball_backend_fallback": ball_model.fallback_reason if isinstance(ball_model, BasketballDetector) else None,
                    "ball_execution_providers": ball_model.providers if isinstance(ball_model, BasketballDetector) else None,
+                   "frame_pipeline_depth": pipeline_depth,
+                   "frame_pipeline_requested": pipeline_request,
+                   "frame_pipeline_fallback": pipeline_fallback,
+                   "prefetch_ball_backend": prefetch_detector.backend if prefetch_detector else None,
+                   "prefetch_ball_fallback": prefetch_detector.fallback_reason if prefetch_detector else None,
                    "input_size": court_vision.imgsz if court_vision else 640,
                    "ball_input_size": 640 if isinstance(ball_model, BasketballDetector) else (court_vision.imgsz if court_vision else 640),
                    "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile in {"broadcast", "moving"}),
@@ -674,10 +736,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "rim_tracking_lost": rim_tracking_lost,
                         "pose_predict_calls": court_vision.pose_predict_calls if court_vision else None,
                         "pose_images": court_vision.pose_images if court_vision else None,
-                        "ball_crop_overlap_frames": court_vision.ball_crop_overlap_frames if court_vision else None},
+                        "ball_crop_overlap_frames": court_vision.ball_crop_overlap_frames if court_vision else None,
+                        "prefetched_full_ball_frames": prefetched_frames},
         "performance": {
             "stages_seconds": {name: round(seconds, 2) for name, seconds in stage_times.items()},
-            "timing_note": "Pose, ball, and vision wall time are parts of frame processing, not additional stages. Pose and ball can overlap, so do not add them together. GPU timing includes tensor readback.",
+            "timing_note": "Pose and ball times are sums of inference work and can overlap each other and adjacent frames; do not add them to wall times. Vision wall time excludes prefetched full-frame detection. GPU timing includes tensor readback.",
         },
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",

@@ -110,6 +110,24 @@ def test_cpu_ball_crop_detection_overlaps_pose_without_skipping_crops(monkeypatc
     assert ball is not None and ball.x == pytest.approx(.3)
 
 
+def test_prefetched_full_frame_ball_objects_are_used_without_redetection(monkeypatch):
+    class BallDetector:
+        def detect(self, frame):
+            raise AssertionError("Full-frame basketball detection should be prefetched")
+
+    class PoseModel:
+        def predict(self, source, **kwargs):
+            return [SimpleNamespace(boxes=None, keypoints=None)]
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    vision = CourtVision(PoseModel(), BallDetector(), "mps", "moving")
+    objects = [(4, .9, (.2, .2, .3, .6)), (1, .9, (.45, .45, .55, .55))]
+    _, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0,
+                               prefetched_objects=objects)
+    assert ball is not None and ball.confidence == pytest.approx(.9)
+    assert vision.ball_crop_overlap_frames == 0
+
+
 def test_court_filters_feet_not_head():
     person = Person((.4, .1, .6, .8), .9, {27: (.45, .8, .9), 28: (.55, .8, .9)})
     assert on_court(person, [[.1, .5], [.9, .5], [.9, .9], [.1, .9]])

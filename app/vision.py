@@ -128,11 +128,13 @@ class CourtVision:
         self.pose_images += 1
         return prepared
 
-    def detect(self, frame, frame_no, time_s, previous_ball=None, prior_ball=None):
+    def detect(self, frame, frame_no, time_s, previous_ball=None, prior_ball=None,
+               prefetched_objects=None):
         started = time.perf_counter()
         height, width = frame.shape[:2]
         candidates, balls = [], []
-        basketball_objects = self._detect_basketball_objects(frame) if isinstance(self.ball_model, BasketballDetector) else None
+        basketball_objects = (prefetched_objects if prefetched_objects is not None
+                              else self._detect_basketball_objects(frame)) if isinstance(self.ball_model, BasketballDetector) else None
         if (basketball_objects is not None and self.profile in {"broadcast", "moving"}
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0
