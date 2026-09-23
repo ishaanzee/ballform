@@ -23,7 +23,7 @@ from ultralytics import YOLO
 from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
-from app.tracking import PoseTracker, jersey_descriptor
+from app.tracking import BallHandlerTracker, PoseTracker, jersey_descriptor
 from app.vision import CourtVision, CutDetector, camera_profile, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 
@@ -328,12 +328,28 @@ def _shooter_intervals(shots: list, fps: float) -> list[tuple[int, int, int]]:
     return intervals
 
 
+def _review_highlight(source_frame: int, frame_data: dict,
+                      shooter_intervals: list[tuple[int, int, int]]) -> tuple[int | None, str | None]:
+    # A released shot belongs to its shooter until the rim event, even if another
+    # player becomes the likely next handler in the meantime.
+    for start, end, shooter_id in shooter_intervals:
+        if start <= source_frame <= end:
+            return shooter_id, f"P{shooter_id} SHOOTER"
+    decision = frame_data.get("handler")
+    if decision is None or decision.track_id is None:
+        return None, None
+    suffix = "BALL" if decision.source == "observed" else "BALL?"
+    return decision.track_id, f"P{decision.track_id} {suffix}"
+
+
 def _add_review_overlays(source: Path, destination: Path, shots: list, player_frames: list[dict],
                          output_fps: float, source_fps: float, rim: RimInput) -> None:
     shooter_intervals = _shooter_intervals(shots, source_fps)
     has_makes = rim is not None and any(
         s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots)
-    if not shooter_intervals and not has_makes:
+    has_handlers = any(f.get("handler") is not None and f["handler"].track_id is not None
+                       for f in player_frames)
+    if not shooter_intervals and not has_makes and not has_handlers:
         source.replace(destination)
         return
     capture = cv2.VideoCapture(str(source))
@@ -353,14 +369,13 @@ def _add_review_overlays(source: Path, destination: Path, shots: list, player_fr
         source_frame = (player_frames[index]["frame"] if index < len(player_frames)
                         else round(time_s * source_fps))
         if index < len(player_frames):
-            for start, end, shooter_id in shooter_intervals:
-                if start <= source_frame <= end:
-                    pose = next((p for p in player_frames[index]["players"]
-                                 if p.track_id == shooter_id), None)
-                    if pose is not None:
-                        landmarks = {idx: pose.landmarks[name] for idx, name in POSE_NAMES.items()
-                                     if name in pose.landmarks}
-                        _draw(frame, landmarks, None, None, label=f"P{shooter_id} · SHOOTER", handler=True)
+            frame_data = player_frames[index]
+            highlighted_id, label = _review_highlight(source_frame, frame_data, shooter_intervals)
+            pose = next((p for p in frame_data["players"] if p.track_id == highlighted_id), None)
+            if pose is not None:
+                landmarks = {idx: pose.landmarks[name] for idx, name in POSE_NAMES.items()
+                             if name in pose.landmarks}
+                _draw(frame, landmarks, None, None, label=label, handler=True)
         frame_rim = _rim_at(rim, round(time_s * source_fps))
         if frame_rim is not None:
             for shot in shots:
@@ -391,7 +406,13 @@ def _draw(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], b
     if label and landmarks:
         anchor = next((landmarks[idx] for idx in (0, 11, 12) if idx in landmarks and landmarks[idx][2] > .35), None)
         if anchor:
-            cv2.putText(frame, label, (int(anchor[0] * w), max(20, int(anchor[1] * h) - 10)),
+            x, y = int(anchor[0] * w), max(20, int(anchor[1] * h) - 10)
+            if handler:
+                (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, .55, 2)
+                cv2.rectangle(frame, (max(0, x - 3), max(0, y - text_h - 4)),
+                              (min(w - 1, x + text_w + 3), min(h - 1, y + baseline + 3)),
+                              (25, 25, 25), -1)
+            cv2.putText(frame, label, (x, y),
                         cv2.FONT_HERSHEY_SIMPLEX, .55, pose_color, 2, cv2.LINE_AA)
     if ball:
         center = int(ball.x * w), int(ball.y * h)
@@ -536,6 +557,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                               round((rim_time_s or 0.0) * fps)), width, height, total)
     stage_times["rim_tracking"] = time.perf_counter() - stage_started
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
+    handler_tracker = BallHandlerTracker(width / height) if game_mode else None
     prefetch_ball_seconds = 0.0
     prefetched_frames = 0
     stage_started = time.perf_counter()
@@ -559,6 +581,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             if cut_frame is not None:
                 cut_frames.append(cut_frame)
                 pose_tracker.reset()
+                if handler_tracker:
+                    handler_tracker.reset()
                 previous_ball = None
                 prior_ball = None
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
@@ -580,46 +604,18 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                     players.append(PoseFrame(frame_no, time_s, {name: landmark_map[idx] for idx, name in POSE_NAMES.items()}))
                 ball = _track_ball(ball_model, frame, previous_ball, prior_ball, frame_no, time_s, width, height)
             poses.extend(players)
-            player_frames.append({"frame": frame_no, "time_s": time_s, "players": players})
+            handler = handler_tracker.update(players, ball, time_s) if handler_tracker else None
+            player_frames.append({"frame": frame_no, "time_s": time_s, "players": players,
+                                  "handler": handler})
             if ball:
                 balls.append(ball)
                 prior_ball = previous_ball
                 previous_ball = ball
             flows[frame_no] = _net_flow(previous_gray, gray, frame_rim)
             previous_gray = gray
-            handler_track_id = None
-            if game_mode and ball and players:
-                aspect = width / height
-                proximities = []
-                for player in players:
-                    wrists = [player.landmarks.get(name) for name in
-                              ("left_wrist", "right_wrist")]
-                    body = [player.landmarks.get(name) for name in
-                            ("left_shoulder", "right_shoulder", "left_hip", "right_hip")]
-                    if any(point is None or point[2] < .65 for point in body):
-                        continue
-                    shoulder = ((body[0][0] + body[1][0]) * aspect / 2,
-                                (body[0][1] + body[1][1]) / 2)
-                    hip = ((body[2][0] + body[3][0]) * aspect / 2,
-                           (body[2][1] + body[3][1]) / 2)
-                    torso = float(np.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1]))
-                    if torso < .008:
-                        continue
-                    distances = [float(np.hypot(point[0] * aspect - ball.x * aspect,
-                                                point[1] - ball.y)) / torso
-                                 for point in wrists if point is not None and point[2] >= .65]
-                    if distances:
-                        proximities.append((min(distances), player.track_id))
-                proximities.sort()
-                if (proximities and proximities[0][0] <= .9
-                        and (len(proximities) == 1 or proximities[1][0] - proximities[0][0] >= .3)):
-                    handler_track_id = proximities[0][1]
             for visible_pose, player in zip(landmark_maps, players):
                 player_label = f"P{player.track_id}" if mode == "one_on_one" and player.track_id else None
-                is_handler = game_mode and player.track_id == handler_track_id
-                if is_handler and player_label:
-                    player_label += " · BALL"
-                _draw(frame, visible_pose, None, None, handedness, player_label, is_handler)
+                _draw(frame, visible_pose, None, None, handedness, player_label)
             _draw(frame, {}, ball, frame_rim)
             if court:
                 polygon = np.rint(np.asarray(court) * (width, height)).astype(np.int32)
@@ -632,12 +628,15 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_started = time.perf_counter()
     observed_balls = list(balls)
     if game_mode:
-        # Keep the measured inputs so scoring can be reviewed without rerunning inference.
+        # Keep measured inputs for scoring review; handler is a separate, inferred
+        # visual-annotation decision and is never fed back into shot scoring.
         (output_dir / "observations.json").write_text(json.dumps({
             "fps": fps, "width": width, "height": height, "cuts": cut_frames,
             "balls": [asdict(b) for b in observed_balls],
             "players": [{"frame": f["frame"], "time_s": f["time_s"],
-                         "players": [asdict(p) for p in f["players"]]} for f in player_frames],
+                         "players": [asdict(p) for p in f["players"]],
+                         "handler": asdict(f["handler"]) if f["handler"] else None}
+                        for f in player_frames],
         }, default=lambda value: float(value)))
     normalized_flow = _normalize_net_flow(flows)
     # Fixed broadcast boxes remain unsafe. Moving mode instead uses a CSRT box
@@ -731,6 +730,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "scene_cuts": len(cut_frames), "scene_cut_times_s": [round(f / fps, 3) for f in cut_frames],
                         "court_filtered": court is not None,
                         "ball_detections": len(observed_balls),
+                        "handler_observed_frames": sum(f["handler"] is not None and f["handler"].source == "observed"
+                                                       for f in player_frames),
+                        "handler_held_frames": sum(f["handler"] is not None and f["handler"].source == "held"
+                                                   for f in player_frames),
                         "rim_marked": rim is not None,
                         "rim_tracking_frames": len(tracked_rims),
                         "rim_tracking_lost": rim_tracking_lost,
@@ -759,6 +762,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         if profile == "moving":
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on any clear frame and review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
+        result["limitations"].append("Red BALL? highlights carry the last observed handler across short visibility gaps; they are uncertain visual annotations, not measured possession or scoring evidence.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
     return result

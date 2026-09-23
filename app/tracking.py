@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import cv2
 import numpy as np
 
-from app.models import PoseFrame
+from app.models import Detection, PoseFrame
 
 
 BODY_NAMES = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
@@ -169,3 +170,96 @@ class PoseTracker:
                 )
         pose.track_id = track.track_id
         pose.appearance = track.appearance
+
+
+@dataclass(frozen=True)
+class HandlerDecision:
+    track_id: int | None
+    source: Literal["observed", "held", "none"]
+
+
+class BallHandlerTracker:
+    """Smooth visual ball-handler labels without changing shot-scoring evidence."""
+
+    def __init__(self, aspect_ratio: float, occlusion_grace_s: float = .8,
+                 loose_ball_grace_s: float = .35):
+        self.aspect_ratio = aspect_ratio
+        self.occlusion_grace_s = occlusion_grace_s
+        self.loose_ball_grace_s = loose_ball_grace_s
+        self.reset()
+
+    def reset(self) -> None:
+        self.track_id: int | None = None
+        self.last_confirmed_s: float | None = None
+        self.pending_id: int | None = None
+        self.pending_count = 0
+        self.pending_time_s: float | None = None
+
+    def _direct_contact(self, players: list[PoseFrame], ball: Detection | None) -> tuple[float, int] | None:
+        if ball is None or ball.confidence < .45:
+            return None
+        candidates = []
+        for player in players:
+            if player.track_id is None:
+                continue
+            landmarks = player.landmarks
+            body = [landmarks.get(name) for name in
+                    ("left_shoulder", "right_shoulder", "left_hip", "right_hip")]
+            if any(point is None or point[2] < .65 for point in body):
+                continue
+            shoulder = ((body[0][0] + body[1][0]) * self.aspect_ratio / 2,
+                        (body[0][1] + body[1][1]) / 2)
+            hip = ((body[2][0] + body[3][0]) * self.aspect_ratio / 2,
+                   (body[2][1] + body[3][1]) / 2)
+            torso = math.dist(shoulder, hip)
+            if torso < .008:
+                continue
+            distances = [math.dist((point[0] * self.aspect_ratio, point[1]),
+                                   (ball.x * self.aspect_ratio, ball.y)) / torso
+                         for name in ("left_wrist", "right_wrist")
+                         if (point := landmarks.get(name)) is not None and point[2] >= .65]
+            if distances:
+                candidates.append((min(distances), player.track_id))
+        candidates.sort()
+        if (candidates and candidates[0][0] <= .9
+                and (len(candidates) == 1 or candidates[1][0] - candidates[0][0] >= .3)):
+            return candidates[0]
+        return None
+
+    def _confirm(self, track_id: int, time_s: float) -> HandlerDecision:
+        self.track_id = track_id
+        self.last_confirmed_s = time_s
+        self.pending_id = None
+        self.pending_count = 0
+        self.pending_time_s = None
+        return HandlerDecision(track_id, "observed")
+
+    def update(self, players: list[PoseFrame], ball: Detection | None, time_s: float) -> HandlerDecision:
+        visible_ids = {player.track_id for player in players}
+        direct = self._direct_contact(players, ball)
+        if direct is not None:
+            distance, candidate_id = direct
+            if candidate_id == self.track_id or self.track_id is None:
+                return self._confirm(candidate_id, time_s)
+            grace = self.occlusion_grace_s if ball is None else self.loose_ball_grace_s
+            if self.last_confirmed_s is None or time_s - self.last_confirmed_s > grace:
+                return self._confirm(candidate_id, time_s)
+            if self.pending_id == candidate_id and self.pending_time_s is not None and time_s - self.pending_time_s <= .12:
+                self.pending_count += 1
+            else:
+                self.pending_id = candidate_id
+                self.pending_count = 1
+            self.pending_time_s = time_s
+            # A near hand on one frame may be a defender contest or occlusion,
+            # not a possession change. Require two close, consecutive sightings.
+            if self.pending_count >= 2 and distance <= .65:
+                return self._confirm(candidate_id, time_s)
+        else:
+            self.pending_id = None
+            self.pending_count = 0
+            self.pending_time_s = None
+        grace = self.occlusion_grace_s if ball is None else self.loose_ball_grace_s
+        if self.track_id is not None and self.last_confirmed_s is not None and time_s - self.last_confirmed_s <= grace:
+            return HandlerDecision(self.track_id, "held") if self.track_id in visible_ids else HandlerDecision(None, "none")
+        self.reset()
+        return HandlerDecision(None, "none")

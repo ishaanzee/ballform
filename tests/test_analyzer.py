@@ -1,7 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analyzer import _sampled_frames, _shooter_intervals
+from app.analyzer import _review_highlight, _sampled_frames, _shooter_intervals
 from app.models import ShotResult
+from app.tracking import HandlerDecision
 
 
 def test_shooter_overlay_runs_from_release_through_rim_event():
@@ -22,6 +23,15 @@ def test_shooter_overlay_falls_back_to_detected_arc_end():
     )
 
     assert _shooter_intervals([shot], 30.0) == [(60, 105, 7)]
+
+
+def test_shooter_highlight_takes_priority_over_inferred_handler():
+    frame = {"handler": HandlerDecision(3, "held")}
+    intervals = [(60, 82, 7)]
+    assert _review_highlight(59, frame, intervals) == (3, "P3 BALL?")
+    assert _review_highlight(60, frame, intervals) == (7, "P7 SHOOTER")
+    assert _review_highlight(82, frame, intervals) == (7, "P7 SHOOTER")
+    assert _review_highlight(83, frame, intervals) == (3, "P3 BALL?")
 
 
 def test_frame_prefetch_preserves_source_order_and_stride():
