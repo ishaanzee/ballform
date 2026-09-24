@@ -85,6 +85,8 @@ On Apple-silicon Macs, the basketball detector now uses ONNX Runtime's Core ML p
 
 On a Mac using MPS pose and the Core ML basketball detector, game mode now keeps one additional frame in flight. A second detector session examines the next frame while the current frame's pose, tracking, and annotation finish; tracking and scoring still consume frames in source order. This preserves the full input resolution and analyzed frame rate. Set `BALLFORM_FRAME_PIPELINE=1` when starting the server to disable the overlap, or `BALLFORM_FRAME_PIPELINE=2` to request it explicitly. The report records the actual pipeline depth and any fallback. On the same 10-second moving-broadcast clip, the two-frame pipeline took 83.50s versus 102.48s with one frame; both runs produced identical observation files and shot results. More in-flight frames are not automatically faster because detector calls can contend for the same compute hardware.
 
+The server loads the game pose model and both detector sessions once and reuses them for every job, instead of reloading them per analysis; Core ML otherwise spends about 12s preparing each detector session on every load. On startup it preloads and warms the default models in the background (about 10s); a job submitted during that time waits until preloading finishes. On the 10-second sample this cut a job from 80.1s to about 55s with identical observations. Set `BALLFORM_PRELOAD=0` to load models on the first job instead. Each report lists any models loaded during that job under `vision.models_loaded_this_job`.
+
 You can experiment with other local Ultralytics checkpoints:
 
 ```bash

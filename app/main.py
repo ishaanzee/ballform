@@ -1,21 +1,42 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import secrets
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.analyzer import ROOT, analyze_video
+from app.analyzer import ROOT, analyze_video, preload_game_models
 from app.vision import CAMERAS, validate_court
 
-app = FastAPI(title="Ballform", version="0.1.0")
+
+def _preload() -> None:
+    # Holding the analysis lock keeps a job from sharing a model mid-warm-up;
+    # a job submitted meanwhile simply shows as waiting.
+    try:
+        with ANALYSIS_LOCK:
+            loaded = preload_game_models()
+        logging.getLogger("uvicorn.error").info("Preloaded models: %s", ", ".join(loaded) or "none")
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("Model preload failed; jobs will load models on demand")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if os.environ.get("BALLFORM_PRELOAD", "1") != "0":
+        threading.Thread(target=_preload, name="ballform-preload", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Ballform", version="0.1.0", lifespan=lifespan)
 JOBS_DIR = ROOT / "data" / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 STATE: dict[str, dict] = {}

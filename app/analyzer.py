@@ -155,14 +155,24 @@ def _track_rim_bidirectional(input_path: Path, initial: tuple[float, float, floa
     return {**backward, **forward}, lost
 
 
+_VERIFIED_MODELS: dict[Path, tuple[int, int]] = {}
+
+
 def _ensure_model(path: Path, url: str, sha256: str | None = None) -> Path:
     def valid(candidate):
         if not candidate.exists() or candidate.stat().st_size <= 1_000_000:
             return False
         if sha256 is None:
             return True
+        stat = candidate.stat()
+        # Re-hash only when the file changes, not on every job.
+        if _VERIFIED_MODELS.get(candidate) == (stat.st_size, stat.st_mtime_ns):
+            return True
         with candidate.open("rb") as stream:
-            return hashlib.file_digest(stream, "sha256").hexdigest() == sha256
+            if hashlib.file_digest(stream, "sha256").hexdigest() != sha256:
+                return False
+        _VERIFIED_MODELS[candidate] = (stat.st_size, stat.st_mtime_ns)
+        return True
     if valid(path):
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +198,70 @@ def _device() -> str:
         return "mps" if torch.backends.mps.is_available() else "cpu"
     except Exception:
         return "cpu"
+
+
+_MODELS: dict[tuple, object] = {}
+_MODELS_LOCK = threading.Lock()
+
+
+def _shared_model(key: tuple, factory: Callable[[], object], loaded: list[str] | None = None):
+    """Load each model once per process.
+
+    Analyses run one at a time, so a cached session is never used by two jobs
+    at once. Core ML re-specializes the detector on every session load (~12 s),
+    which otherwise dominates short clips.
+    """
+    with _MODELS_LOCK:
+        if key not in _MODELS:
+            _MODELS[key] = factory()
+            if loaded is not None:
+                loaded.append(key[0])
+        return _MODELS[key]
+
+
+def _game_pose_model(name: str, loaded: list[str] | None = None) -> tuple[str, YOLO]:
+    if name not in {"yolo26m-pose", "yolo26s-pose"}:
+        raise ValueError("Unknown game pose model")
+    selected_path = ROOT / "models" / f"{name}.pt"
+    path = str(_ensure_model(selected_path, MODEL_RELEASE + selected_path.name))
+    return path, _shared_model(("pose", path), lambda: YOLO(path), loaded)
+
+
+def _basketball_detector(role: str, loaded: list[str] | None = None,
+                         backend: str | None = None) -> tuple[str, BasketballDetector]:
+    path = str(_ensure_model(ROOT / "models" / MODEL_FILENAME, MODEL_URL, MODEL_SHA256))
+    backend = backend or os.environ.get("BALLFORM_BALL_BACKEND", "auto")
+    units = os.environ.get("BALLFORM_COREML_UNITS", "CPUAndGPU")
+    # "ball" and "prefetch" are separate sessions because they run concurrently.
+    return path, _shared_model((role, path, backend, units),
+                               lambda: BasketballDetector(path, backend=backend, compute_units=units), loaded)
+
+
+def _pipeline_request() -> str:
+    request = os.environ.get("BALLFORM_FRAME_PIPELINE", "auto")
+    if request not in {"auto", "1", "2"}:
+        raise ValueError("BALLFORM_FRAME_PIPELINE must be 'auto', '1', or '2'.")
+    return request
+
+
+def preload_game_models(pose_model: str = "yolo26s-pose") -> list[str]:
+    """Load and warm the default game-mode models before the first job arrives."""
+    loaded: list[str] = []
+    device = _device()
+    _, pose = _game_pose_model(pose_model, loaded)
+    blank = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    # The first MPS predict at each input size builds kernels; do it now.
+    for size in (1280, 960):
+        pose.predict(blank, imgsz=size, device=device, verbose=False)
+    if os.environ.get("BALLFORM_YOLO_MODEL"):
+        return loaded
+    _, ball = _basketball_detector("ball", loaded)
+    ball.detect(blank)
+    request = _pipeline_request()
+    if request == "2" or (request == "auto" and ball.backend == "coreml" and device == "mps"):
+        _, prefetch = _basketball_detector("prefetch", loaded, backend=ball.backend)
+        prefetch.detect(blank)
+    return loaded
 
 
 def _track_ball(model: YOLO, bgr: np.ndarray, previous: Detection | None,
@@ -489,24 +563,17 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     pose_path = None if game_mode else ensure_pose_model()
     device = _device()
     game_pose_path = None
+    loaded_models: list[str] = []
     if game_mode:
-        if pose_model not in {"yolo26m-pose", "yolo26s-pose"}:
-            raise ValueError("Unknown game pose model")
-        selected_path = ROOT / "models" / f"{pose_model}.pt"
-        game_pose_path = str(_ensure_model(selected_path, MODEL_RELEASE + selected_path.name))
-        game_pose_model = YOLO(game_pose_path)
+        game_pose_path, game_pose_model = _game_pose_model(pose_model, loaded_models)
         report(.04, f"Pose model loaded: {Path(game_pose_path).name}")
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     if game_mode and not configured_ball_model:
-        ball_model_path = str(_ensure_model(ROOT / "models" / MODEL_FILENAME, MODEL_URL, MODEL_SHA256))
-        ball_model = BasketballDetector(ball_model_path, backend=os.environ.get("BALLFORM_BALL_BACKEND", "auto"),
-                                        compute_units=os.environ.get("BALLFORM_COREML_UNITS", "CPUAndGPU"))
+        ball_model_path, ball_model = _basketball_detector("ball", loaded_models)
     else:
         ball_model_path = configured_ball_model or str(_ensure_model(BALL_MODEL, BALL_MODEL_URL))
-        ball_model = YOLO(ball_model_path)
-    pipeline_request = os.environ.get("BALLFORM_FRAME_PIPELINE", "auto")
-    if pipeline_request not in {"auto", "1", "2"}:
-        raise ValueError("BALLFORM_FRAME_PIPELINE must be 'auto', '1', or '2'.")
+        ball_model = _shared_model(("yolo", ball_model_path), lambda: YOLO(ball_model_path), loaded_models)
+    pipeline_request = _pipeline_request()
     pipeline_depth = (2 if game_mode and isinstance(ball_model, BasketballDetector)
                       and ball_model.backend == "coreml" and device == "mps" else 1) if pipeline_request == "auto" else int(pipeline_request)
     prefetch_detector = None
@@ -517,8 +584,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         try:
             # A second session is owned by the prefetch worker; the first session
             # remains available for side crops on the current frame.
-            prefetch_detector = BasketballDetector(ball_model_path, backend=ball_model.backend,
-                                                   compute_units=ball_model.compute_units)
+            _, prefetch_detector = _basketball_detector("prefetch", loaded_models, backend=ball_model.backend)
         except Exception as exc:
             if pipeline_request == "2":
                 raise
@@ -754,6 +820,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "ball_backend_requested": ball_model.requested_backend if isinstance(ball_model, BasketballDetector) else None,
                    "ball_backend_fallback": ball_model.fallback_reason if isinstance(ball_model, BasketballDetector) else None,
                    "ball_execution_providers": ball_model.providers if isinstance(ball_model, BasketballDetector) else None,
+                   "models_loaded_this_job": loaded_models,
                    "frame_pipeline_depth": pipeline_depth,
                    "frame_pipeline_requested": pipeline_request,
                    "frame_pipeline_fallback": pipeline_fallback,

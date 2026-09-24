@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "clip": "diagnostic/5on5clip3.mp4",
+    "decoded_frames_processed": 286,
+    "source_fps": 29.77,
+    "resolution": "1920x1080",
+    "mode": "moving broadcast with tracked rim",
+    "pose_model": "YOLO26s-pose",
+    "ball_model": "basketball RF-DETR Medium ONNX",
+    "hardware": "Apple M3 Pro, 36 GB unified memory",
+    "runs_per_configuration": 1,
+    "frame_count_note": "The MP4 header reports 298 frames, but FFmpeg and OpenCV both decode 286. Throughput uses the 286 frames the analysis processed.",
+    "result_check": "All three runs produced the same shot result: release at 6.79 s, made at frame 243, shot-space score 97.9."
+  },
+  "charts": [
+    {
+      "id": "end_to_end_time",
+      "title": "End-to-end video analysis time",
+      "y_label": "Seconds (lower is better)",
+      "metric": "performance.elapsed_seconds",
+      "points": [
+        {"run": "cpu_serial", "label": "CPU, serial", "value": 172.68},
+        {"run": "coreml_serial", "label": "Core ML, serial", "value": 102.48},
+        {"run": "coreml_overlap", "label": "Core ML, overlapped", "value": 83.50}
+      ]
+    },
+    {
+      "id": "frame_processing_throughput",
+      "title": "Frame-processing throughput",
+      "y_label": "Decoded frames per processing second (higher is better)",
+      "formula": "286 / performance.stages_seconds.frame_processing",
+      "points": [
+        {"run": "cpu_serial", "label": "CPU, serial", "value": 1.759},
+        {"run": "coreml_serial", "label": "Core ML, serial", "value": 3.357},
+        {"run": "coreml_overlap", "label": "Core ML, overlapped", "value": 4.811}
+      ]
+    },
+    {
+      "id": "ball_detection_work",
+      "title": "Cumulative ball detection work",
+      "y_label": "Seconds across detector calls (lower is better)",
+      "metric": "performance.stages_seconds.ball_inference_and_readback",
+      "call_count_per_run": 420,
+      "timing_scope": "Includes detector preprocessing, ONNX execution, decoding, and readback. The same 286 full-frame and 134 side-crop calls were made in each serial run.",
+      "points": [
+        {"run": "cpu_serial", "label": "CPU, serial", "value": 134.57},
+        {"run": "coreml_serial", "label": "Core ML, serial", "value": 57.75}
+      ]
+    }
+  ],
+  "comparisons": {
+    "cpu_serial_to_coreml_overlap": {
+      "end_to_end_time_reduction_percent": 51.64,
+      "end_to_end_speedup": 2.068,
+      "frame_processing_throughput_speedup": 2.735
+    },
+    "cpu_serial_to_coreml_serial": {
+      "ball_detection_work_speedup": 2.330
+    },
+    "coreml_serial_to_coreml_overlap": {
+      "end_to_end_time_reduction_percent": 18.52,
+      "frame_processing_time_reduction_percent": 30.21
+    }
+  },
+  "source_reports": {
+    "cpu_serial": "diagnostic/ballform-yolo26s-cpu-rerun.json",
+    "coreml_serial": "diagnostic/ballform-yolo26s-pipeline1.json",
+    "coreml_overlap": "diagnostic/ballform-yolo26s-pipeline2.json"
+  },
+  "display_notes": [
+    "These are single-run measurements on one clip, not averages or a general benchmark across videos.",
+    "The throughput chart measures offline processing speed, not the source video's 29.77 FPS playback rate.",
+    "Ball and pose work can overlap in the two-frame pipeline. Do not stack their summed times or compare the overlapped ball-work total with serial call latency.",
+    "The Core ML configuration requests CPU and Neural Engine execution; it does not establish the exact hardware used for every model operation."
+  ]
+}

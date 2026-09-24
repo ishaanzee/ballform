@@ -85,3 +85,40 @@ def test_serial_frame_reader_does_not_run_detector():
             return (frame is not None, frame)
 
     assert list(_sampled_frames(Capture(), 2)) == [(0, 0, None, 0.0), (2, 2, None, 0.0)]
+
+
+def test_shared_model_loads_once_and_does_not_cache_failures(monkeypatch):
+    import pytest
+    import app.analyzer as analyzer
+    monkeypatch.setattr(analyzer, "_MODELS", {})
+    calls = []
+    loaded = []
+    assert analyzer._shared_model(("pose", "a"), lambda: calls.append(1) or "model", loaded) == "model"
+    assert analyzer._shared_model(("pose", "a"), lambda: calls.append(1) or "other", loaded) == "model"
+    assert calls == [1] and loaded == ["pose"]
+
+    def broken():
+        raise RuntimeError("load failed")
+    with pytest.raises(RuntimeError):
+        analyzer._shared_model(("ball", "b"), broken)
+    assert analyzer._shared_model(("ball", "b"), lambda: "retry") == "retry"
+
+
+def test_model_checksum_is_skipped_until_file_changes(monkeypatch, tmp_path):
+    import hashlib
+    import os
+    import app.analyzer as analyzer
+    monkeypatch.setattr(analyzer, "_VERIFIED_MODELS", {})
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"a" * 1_000_001)
+    digest = hashlib.sha256(model.read_bytes()).hexdigest()
+    hashes = []
+    real = hashlib.file_digest
+    monkeypatch.setattr(analyzer.hashlib, "file_digest", lambda *a: hashes.append(1) or real(*a))
+    analyzer._ensure_model(model, "unused", digest)
+    analyzer._ensure_model(model, "unused", digest)
+    assert len(hashes) == 1
+    stat = model.stat()
+    os.utime(model, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    analyzer._ensure_model(model, "unused", digest)
+    assert len(hashes) == 2
