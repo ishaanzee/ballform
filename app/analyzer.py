@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import shutil
 import subprocess
@@ -24,8 +25,9 @@ from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.tracking import BallHandlerTracker, PoseTracker, jersey_descriptor
-from app.vision import CourtVision, CutDetector, camera_profile, validate_court
+from app.vision import CourtVision, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
+from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 
 ROOT = Path(__file__).resolve().parents[1]
 POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
@@ -219,12 +221,34 @@ def _shared_model(key: tuple, factory: Callable[[], object], loaded: list[str] |
         return _MODELS[key]
 
 
-def _game_pose_model(name: str, loaded: list[str] | None = None) -> tuple[str, YOLO]:
+def _game_pose_model(name: str, loaded: list[str] | None = None
+                     ) -> tuple[str, TorchPose | CoreMLPose, str | None]:
+    """Return the pose weights path, the runner to use, and why Core ML is not used."""
     if name not in {"yolo26m-pose", "yolo26s-pose"}:
         raise ValueError("Unknown game pose model")
+    request = os.environ.get("BALLFORM_POSE_BACKEND", "auto")
+    if request not in {"auto", "coreml", "torch"}:
+        raise ValueError("BALLFORM_POSE_BACKEND must be 'auto', 'coreml', or 'torch'.")
     selected_path = ROOT / "models" / f"{name}.pt"
     path = str(_ensure_model(selected_path, MODEL_RELEASE + selected_path.name))
-    return path, _shared_model(("pose", path), lambda: YOLO(path), loaded)
+    torch_pose = _shared_model(("pose", path), lambda: TorchPose(YOLO(path), _device()), loaded)
+    if request == "torch":
+        return path, torch_pose, None
+    exports = {size: export_path(ROOT / "models", name, size) for size in EXPORT_SHAPES}
+    missing = [p.name for p in exports.values() if not p.exists()]
+    if missing:
+        reason = f"Core ML pose exports not found ({', '.join(missing)}); run scripts/export_pose_coreml.py."
+        if request == "coreml":
+            raise RuntimeError(reason)
+        return path, torch_pose, reason
+    try:
+        return path, _shared_model(("pose-coreml", name), lambda: CoreMLPose(exports, torch_pose), loaded), None
+    except Exception as exc:
+        if request == "coreml":
+            raise
+        reason = f"Core ML pose initialization failed: {type(exc).__name__}: {exc}"
+        logging.warning("%s; using PyTorch pose", reason)
+        return path, torch_pose, reason
 
 
 def _basketball_detector(role: str, loaded: list[str] | None = None,
@@ -248,11 +272,11 @@ def preload_game_models(pose_model: str = "yolo26s-pose") -> list[str]:
     """Load and warm the default game-mode models before the first job arrives."""
     loaded: list[str] = []
     device = _device()
-    _, pose = _game_pose_model(pose_model, loaded)
+    _, pose, _ = _game_pose_model(pose_model, loaded)
     blank = np.zeros((1080, 1920, 3), dtype=np.uint8)
-    # The first MPS predict at each input size builds kernels; do it now.
-    for size in (1280, 960):
-        pose.predict(blank, imgsz=size, device=device, verbose=False)
+    # The first call at each input shape builds kernels or Core ML plans; do it now.
+    for index, (x1, y1, x2, y2) in enumerate(regions(1920, 1080, True)):
+        pose.infer(blank[y1:y2, x1:x2], 1280 if index == 0 else 960)
     if os.environ.get("BALLFORM_YOLO_MODEL"):
         return loaded
     _, ball = _basketball_detector("ball", loaded)
@@ -563,9 +587,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     pose_path = None if game_mode else ensure_pose_model()
     device = _device()
     game_pose_path = None
+    pose_fallback = None
     loaded_models: list[str] = []
     if game_mode:
-        game_pose_path, game_pose_model = _game_pose_model(pose_model, loaded_models)
+        game_pose_path, game_pose_model, pose_fallback = _game_pose_model(pose_model, loaded_models)
+        pose_fallback_calls_before = getattr(game_pose_model, "fallback_calls", 0)
         report(.04, f"Pose model loaded: {Path(game_pose_path).name}")
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     if game_mode and not configured_ball_model:
@@ -821,6 +847,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "ball_backend_fallback": ball_model.fallback_reason if isinstance(ball_model, BasketballDetector) else None,
                    "ball_execution_providers": ball_model.providers if isinstance(ball_model, BasketballDetector) else None,
                    "models_loaded_this_job": loaded_models,
+                   "pose_backend": court_vision.pose_model.backend if court_vision else "mediapipe",
+                   "pose_backend_requested": os.environ.get("BALLFORM_POSE_BACKEND", "auto") if game_mode else None,
+                   "pose_backend_fallback": pose_fallback,
+                   "pose_calls_on_torch_fallback": (getattr(court_vision.pose_model, "fallback_calls", 0)
+                                                    - pose_fallback_calls_before) if court_vision else None,
                    "frame_pipeline_depth": pipeline_depth,
                    "frame_pipeline_requested": pipeline_request,
                    "frame_pipeline_fallback": pipeline_fallback,

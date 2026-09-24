@@ -5,6 +5,7 @@ from threading import Event
 
 import app.vision as vision_module
 
+from app.pose import TorchPose
 from app.vision import CourtVision, CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
 from app.basketball import decode, preprocess
 from app.game import _body, _appearance_groups
@@ -63,7 +64,7 @@ def test_side_crops_keep_original_image_size_and_coordinates():
             return [empty]
 
     pose_model = PoseModel()
-    vision = CourtVision(pose_model, BallModel(), "mps", "moving")
+    vision = CourtVision(TorchPose(pose_model, "mps"), BallModel(), "mps", "moving")
     poses, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0)
 
     assert len(pose_model.calls) == 3
@@ -99,7 +100,7 @@ def test_cpu_ball_crop_detection_overlaps_pose_without_skipping_crops(monkeypatc
 
     monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
     detector = BallDetector()
-    vision = CourtVision(PoseModel(), detector, "mps", "moving")
+    vision = CourtVision(TorchPose(PoseModel(), "mps"), detector, "mps", "moving")
     try:
         _, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0)
     finally:
@@ -123,7 +124,7 @@ def test_prefetched_full_frame_ball_objects_are_used_without_redetection(monkeyp
             return [SimpleNamespace(boxes=None, keypoints=None)]
 
     monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
-    vision = CourtVision(PoseModel(), BallDetector(), "mps", "moving")
+    vision = CourtVision(TorchPose(PoseModel(), "mps"), BallDetector(), "mps", "moving")
     objects = [(4, .9, (.2, .2, .3, .6)), (1, .9, (.45, .45, .55, .55))]
     _, _, ball = vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0,
                                prefetched_objects=objects)

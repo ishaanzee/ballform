@@ -113,19 +113,9 @@ class CourtVision:
         finally:
             self.timing_seconds["ball"] += time.perf_counter() - started
 
-    def _predict_pose(self, crops, size):
+    def _predict_pose(self, crop, size):
         started = time.perf_counter()
-        results = self.pose_model.predict(crops, imgsz=size, conf=.3, iou=.65,
-                                          max_det=60, device=self.device, verbose=False)
-        prepared = []
-        for result in results:
-            if result.keypoints is None or result.boxes is None:
-                prepared.append(None)
-            else:
-                # Reading tensors back also synchronizes MPS, so this measures the
-                # completed GPU work rather than only asynchronous submission.
-                prepared.append((result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy(),
-                                 result.keypoints.data.cpu().numpy()))
+        prepared = self.pose_model.infer(crop, size)
         self.timing_seconds["pose"] += time.perf_counter() - started
         self.pose_predict_calls += 1
         self.pose_images += 1
@@ -160,7 +150,7 @@ class CourtVision:
             x1, y1, x2, y2 = region
             crop = frame[y1:y2, x1:x2]
             size = self.imgsz if index == 0 else 960
-            pose_data = self._predict_pose(crop, size)[0]
+            pose_data = self._predict_pose(crop, size)
             if pose_data is not None:
                 for box, confidence, keypoints in zip(*pose_data):
                     if keypoints.shape != (17, 3):
