@@ -155,50 +155,116 @@ def _appearance_groups(players: list[PoseFrame], shooter: int) -> tuple[dict[int
     return assignments, confidence
 
 
-def _prior_pair(player_frames: list[dict], near: dict, shooter_pose: PoseFrame,
-                defender_pose: PoseFrame, aspect: float, torso: float):
-    target_time = near["time_s"] - .5
-    prior = min((frame for frame in player_frames if frame["time_s"] < near["time_s"]),
-                key=lambda frame: abs(frame["time_s"] - target_time), default=None)
-    if prior is None or abs(prior["time_s"] - target_time) > .12:
-        return None
-    prior_players: list[PoseFrame] = prior["players"]
-    old_shooter = old_defender = None
+def _match_prior(frame: dict, near: dict, shooter_pose: PoseFrame, defender_pose: PoseFrame,
+                 aspect: float, torso: float) -> tuple[PoseFrame, PoseFrame] | None:
+    """Find the shooter and defender poses in an earlier frame."""
+    prior_players: list[PoseFrame] = frame["players"]
     if shooter_pose.track_id is not None and defender_pose.track_id is not None:
-        old_shooter = next((pose for pose in prior_players
-                            if pose.track_id == shooter_pose.track_id), None)
-        old_defender = next((pose for pose in prior_players
-                             if pose.track_id == defender_pose.track_id), None)
-    elif len(near["players"]) == 2 and len(prior_players) == 2:
-        current = [_body(pose, aspect) for pose in near["players"]]
-        old = [_body(pose, aspect) for pose in prior_players]
-        if all(item is not None for item in current + old):
-            costs = [sum(math.dist(current[i][0], old[(i + swap) % 2][0]) for i in range(2))
-                     for swap in range(2)]
-            if abs(costs[0] - costs[1]) / torso >= .5:
-                swap = min(range(2), key=lambda index: costs[index])
-                shooter_index = near["players"].index(shooter_pose)
-                defender_index = near["players"].index(defender_pose)
-                old_shooter = prior_players[(shooter_index + swap) % 2]
-                old_defender = prior_players[(defender_index + swap) % 2]
-    if old_shooter is None or old_defender is None:
+        old_shooter = next((pose for pose in prior_players if pose.track_id == shooter_pose.track_id), None)
+        old_defender = next((pose for pose in prior_players if pose.track_id == defender_pose.track_id), None)
+        return (old_shooter, old_defender) if old_shooter and old_defender else None
+    if len(near["players"]) != 2 or len(prior_players) != 2:
         return None
-    old_shooter_body, old_defender_body = _body(old_shooter, aspect), _body(old_defender, aspect)
-    current_shooter_body, current_defender_body = _body(shooter_pose, aspect), _body(defender_pose, aspect)
-    if not all((old_shooter_body, old_defender_body, current_shooter_body, current_defender_body)):
+    current = [_body(pose, aspect) for pose in near["players"]]
+    old = [_body(pose, aspect) for pose in prior_players]
+    if any(item is None for item in current + old):
         return None
-    movements = [
-        math.dist(old_shooter_body[0], current_shooter_body[0]) / torso,
-        math.dist(old_defender_body[0], current_defender_body[0]) / torso,
-    ]
-    scale_changes = [
-        abs(old_shooter_body[1] / current_shooter_body[1] - 1),
-        abs(old_defender_body[1] / current_defender_body[1] - 1),
-    ]
-    if max(movements) > 1.5 or max(scale_changes) > .2:
+    costs = [sum(math.dist(current[i][0], old[(i + swap) % 2][0]) for i in range(2)) for swap in range(2)]
+    if abs(costs[0] - costs[1]) / torso < .5:
         return None
-    before = math.dist(old_shooter_body[0], old_defender_body[0]) / torso
-    return before, near["time_s"] - prior["time_s"]
+    swap = min(range(2), key=lambda index: costs[index])
+    shooter_index = near["players"].index(shooter_pose)
+    defender_index = near["players"].index(defender_pose)
+    return prior_players[(shooter_index + swap) % 2], prior_players[(defender_index + swap) % 2]
+
+
+def _zoom_ratio(frame: dict, near: dict, pairs: list[tuple[PoseFrame, PoseFrame]], aspect: float) -> float | None:
+    """Median earlier/current torso ratio over players seen in both frames.
+
+    A camera zoom rescales everyone, while crouching or turning changes one
+    player's projected torso, so the median separates zoom from posture.
+    """
+    by_id = {pose.track_id: pose for pose in frame["players"] if pose.track_id is not None}
+    pairs = list(pairs) + [(by_id[pose.track_id], pose) for pose in near["players"]
+                           if pose.track_id in by_id and all(pose is not current for _, current in pairs)]
+    ratios = []
+    for old, current in pairs:
+        old_body, current_body = _body(old, aspect), _body(current, aspect)
+        if old_body and current_body:
+            ratios.append(old_body[1] / current_body[1])
+    return float(np.median(ratios)) if ratios else None
+
+
+def _separation_before(player_frames: list[dict], near: dict, shooter_pose: PoseFrame,
+                       defender_pose: PoseFrame, aspect: float, torso: float):
+    """Median shooter-defender separation 0.3-0.7 s before release, in release-frame torso units.
+
+    Identity comes from persistent track IDs (or the two-player swap test), so
+    individual posture changes no longer void the trend; frames are rescaled
+    by the whole view's zoom and skipped when that zoom exceeds 20%.
+    """
+    tracked = shooter_pose.track_id is not None and defender_pose.track_id is not None
+    if tracked:
+        # Identity continuity: both tracks present on most frames through release.
+        span = [frame for frame in player_frames if 0 < near["time_s"] - frame["time_s"] <= .7]
+        present = [frame for frame in span
+                   if {shooter_pose.track_id, defender_pose.track_id}
+                   <= {pose.track_id for pose in frame["players"]}]
+        if not span or len(present) < .5 * len(span):
+            return None
+    samples = []
+    for frame in player_frames:
+        elapsed = near["time_s"] - frame["time_s"]
+        if not .3 <= elapsed <= .7:
+            continue
+        matched = _match_prior(frame, near, shooter_pose, defender_pose, aspect, torso)
+        if matched is None:
+            continue
+        old_shooter, old_defender = matched
+        old_shooter_body, old_defender_body = _body(old_shooter, aspect), _body(old_defender, aspect)
+        if not old_shooter_body or not old_defender_body:
+            continue
+        zoom = _zoom_ratio(frame, near, [(old_shooter, shooter_pose), (old_defender, defender_pose)], aspect)
+        if zoom is None or not .8 <= zoom <= 1.25:
+            continue
+        samples.append((math.dist(old_shooter_body[0], old_defender_body[0]) / zoom / torso, elapsed))
+    if not samples:
+        return None
+    return float(np.median([value for value, _ in samples])), float(np.median([t for _, t in samples]))
+
+
+def _contest_hands(player_frames: list[dict], near: dict, defender_pose: PoseFrame,
+                   balls: list[Detection], release_ball: Detection, aspect: float, window: float = .1):
+    """Each defender wrist's clearance to the ball at the frame nearest release where both are seen.
+
+    A hand briefly lost to occlusion or low keypoint confidence on the release
+    frame is usually visible a frame or two either side. Returns
+    [(clearance_px_units, offset_s, keypoint_confidence) | None] for left, right.
+    """
+    frames = sorted((frame for frame in player_frames if abs(frame["time_s"] - near["time_s"]) <= window),
+                    key=lambda frame: abs(frame["time_s"] - near["time_s"]))
+    hands = []
+    for side in ("left", "right"):
+        found = None
+        for frame in frames:
+            if frame is near:
+                pose = defender_pose
+            elif defender_pose.track_id is not None:
+                pose = next((p for p in frame["players"] if p.track_id == defender_pose.track_id), None)
+            else:
+                pose = None
+            wrist = _point(pose, side + "_wrist", aspect) if pose is not None else None
+            # The release frame keeps the ball the caller already validated.
+            ball = release_ball if frame is near else min(
+                balls, key=lambda item: abs(item.time_s - frame["time_s"]), default=None)
+            if (wrist is None or ball is None or (frame is not near and (
+                    abs(ball.time_s - frame["time_s"]) > .025 or ball.confidence < .5))):
+                continue
+            found = (math.dist((ball.x * aspect, ball.y), wrist), abs(frame["time_s"] - near["time_s"]),
+                     pose.landmarks[side + "_wrist"][2])
+            break
+        hands.append(found)
+    return hands
 
 
 def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
@@ -356,18 +422,24 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
             f"{f' P{shooter_pose.track_id}' if shooter_pose.track_id else ''} associated by raised-hand ball contact; "
             f"defender{f' P{defender_pose.track_id}' if defender_pose.track_id else ''} selected as {selection_method}."
         )
-        prior_pair = _prior_pair(player_frames, near, shooter_pose, defender_pose,
-                                 aspect_ratio, torso)
+        prior_pair = _separation_before(player_frames, near, shooter_pose, defender_pose,
+                                        aspect_ratio, torso)
         if prior_pair is not None:
             before, elapsed = prior_pair
             game["metrics"]["separation_change_torso"] = round(separation - before, 3)
-            evidence.append(f"Separation change over {elapsed:.2f} s uses persistent player track IDs.")
-        if any(wrist is None for wrist in wrists[defender]):
-            evidence.append("Both selected-defender wrists must be visible to measure the contest; score withheld.")
+            evidence.append(f"Separation change is measured against the median over 0.3–0.7 s before release "
+                            f"(median {elapsed:.2f} s), using persistent player identities and correcting for zoom.")
+        hands = _contest_hands(player_frames, near, defender_pose, balls, ball, aspect_ratio)
+        offset = max((hand[1] for hand in hands if hand is not None), default=0.)
+        if offset > 0:
+            evidence.append(f"A defender hand hidden on the release frame was measured on the nearest frame where it "
+                            f"was visible, at most {offset:.2f} s from release.")
+        if any(hand is None for hand in hands):
+            evidence.append("Both selected-defender wrists must be visible within 0.1 s of release to measure the contest; score withheld.")
             game["confidence"] = round(.4 * team_confidence, 2)
-            visible = [wrist for wrist in wrists[defender] if wrist is not None]
+            visible = [hand[0] for hand in hands if hand is not None]
             if visible:
-                clearance = min(math.dist(ball_point, wrist) for wrist in visible) / torso
+                clearance = min(visible) / torso
                 game["metrics"]["visible_hand_clearance_torso"] = round(clearance, 3)
                 base = .65 * game["components"]["separation"]
                 game["score_range"] = {
@@ -377,7 +449,7 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
                 }
                 game["status"] = "partial"
             continue
-        clearance = min(math.dist(ball_point, wrist) for wrist in wrists[defender]) / torso
+        clearance = min(hand[0] for hand in hands) / torso
         game["metrics"]["contest_clearance_torso"] = round(clearance, 3)
         game["components"]["contest_clearance"] = _component(clearance, .15, 1.35)
         game["score"] = round(
@@ -389,7 +461,7 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
             for pose in (shooter_pose, defender_pose)
             for name in ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
         ]
-        required.extend(defender_pose.landmarks[side + "_wrist"][2] for side in ("left", "right"))
+        required.extend(hand[2] for hand in hands)
         closest_wrist = min(
             (index for index, wrist in enumerate(wrists[shooter]) if wrist is not None),
             key=lambda index: math.dist(ball_point, wrists[shooter][index]),
@@ -400,7 +472,7 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         ownership_factor = .7 + .3 * min(1., max(0., (ownership_margin - .3) / .7))
         defender_factor = .72 + .28 * min(1., max(0., selection_margin / .6))
         timing_factor = ((1 - abs(near["time_s"] - shot.release_s))
-                         * (1 - abs(ball.time_s - near["time_s"])))
+                         * (1 - abs(ball.time_s - near["time_s"])) * (1 - offset))
         game["confidence"] = round(
             min(.85, ball.confidence, *required)
             * ownership_factor * defender_factor * team_confidence * timing_factor, 2

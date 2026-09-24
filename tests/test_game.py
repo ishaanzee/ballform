@@ -178,3 +178,69 @@ def test_occluded_hand_yields_bounds_not_a_fabricated_point_score():
     assert game['score_range']['lower'] <= complete['score'] <= game['score_range']['upper']
     assert game['metrics']['contest_clearance_torso'] is None
     assert game['metrics']['visible_hand_clearance_torso'] is not None
+
+
+def _crouch(pose, factor):
+    """Shorten the projected torso by lowering the shoulders (posture, not zoom)."""
+    for name in ("left_shoulder", "right_shoulder"):
+        x, y, confidence = pose.landmarks[name]
+        pose.landmarks[name] = (x, .6 - (.6 - y) * factor, confidence)
+    return pose
+
+
+def _tracked_frames(defender_x_before, times=(.4, .5, .6), crouch=None, shift=0.):
+    """Four tracked players; release at 1.0 s, earlier frames at `times`."""
+    offense, defense = (.2, .3, .4), (.8, .6, .2)
+    def roster(time, defender_x, dx=0.):
+        return [player(.30 + dx, wrist=(.33 + dx, .30), time=time, appearance=offense, track_id=1),
+                player(.80 + dx, time=time, appearance=offense, track_id=2),
+                player(defender_x + dx, time=time, appearance=defense, track_id=3),
+                player(.95 + dx, time=time, appearance=defense, track_id=4)]
+    frames = []
+    for t in times:
+        players = roster(t, defender_x_before, shift)
+        if crouch:
+            _crouch(players[2], crouch)
+        frames.append({"frame": round(t * 30), "time_s": t, "players": players})
+    frames.append({"frame": 30, "time_s": 1., "players": roster(1., .50)})
+    return frames
+
+
+def _run_frames(frames, balls=None):
+    shot = ShotResult(1, .5, 1., 2., "unknown", 0., [], {})
+    analyze_game_shots([shot], frames, balls or [Detection(30, 1., .33, .3, .9)], 30, 1.)
+    return shot.game
+
+
+def test_defender_crouching_does_not_void_the_trend():
+    game = _run_frames(_tracked_frames(.45, crouch=.6))
+    assert game["metrics"]["separation_change_torso"] == pytest.approx(.25)
+
+
+def test_trend_uses_the_whole_window_not_one_exact_frame():
+    game = _run_frames(_tracked_frames(.45, times=(.35, .65)))
+    assert game["metrics"]["separation_change_torso"] == pytest.approx(.25)
+
+
+def test_camera_pan_does_not_void_the_trend():
+    game = _run_frames(_tracked_frames(.45, shift=.4))
+    assert game["metrics"]["separation_change_torso"] == pytest.approx(.25)
+
+
+def test_trend_needs_identity_continuity_through_release():
+    frames = _tracked_frames(.45, times=(.4, .5, .6))
+    gap = [{"frame": round(t * 30), "time_s": t, "players": []} for t in (.7, .75, .8, .85, .9, .95)]
+    game = _run_frames(frames[:-1] + gap + frames[-1:])
+    assert game["metrics"]["separation_change_torso"] is None
+
+
+def test_defender_hand_hidden_on_release_frame_is_measured_from_an_adjacent_frame():
+    release = [player(.3, track_id=1), player(.7, hidden="right_wrist", track_id=2)]
+    later = [player(.3, time=1.033, track_id=1), player(.7, time=1.033, track_id=2)]
+    frames = [{"frame": 30, "time_s": 1., "players": release}, {"frame": 31, "time_s": 1.033, "players": later}]
+    balls = [Detection(30, 1., .33, .3, .9), Detection(31, 1.033, .33, .3, .9)]
+    game = _run_frames(frames, balls)
+    complete, _ = run([player(.3), player(.7)])
+    assert game["status"] == "measured" and game["score"] == complete["score"]
+    assert game["confidence"] < complete["confidence"]
+    assert any("nearest frame where it was visible" in item for item in game["evidence"])
