@@ -39,7 +39,7 @@ For form work, keep the shooting arm, ball, feet, rim, and net visible. A side v
 
 For game footage, short continuous half-court possessions are the sweet spot. NBA skycam and elevated pickup clips are supported, but replays, cuts, graphics, extreme zooms, and a rim that disappears behind the broadcast edit are still hard problems. A five-on-five clip is fine even when the UI says 1-on-1; the analyzer still tries to identify the ball carrier and the primary contesting defender.
 
-The court polygon is optional. If you draw one, keep it convex and cover the playable area, not the benches. It stays fixed in image coordinates, so split a clip when the camera changes to another angle.
+Game footage needs no court marking. The basketball detector labels players, referees and everyone else, and each detected player or referee box can vouch for only one pose. A spectator or duplicate pose overlapping a real player therefore cannot pass as a player. A playing-area polygon is optional and only offered for fixed cameras (elevated or courtside). If you draw one, keep it convex and cover the playable area, not the benches. A foot within about a body width of the edge still counts, so a player standing on the line is kept. Broadcast and moving-camera analyses ignore a polygon: it is fixed in image coordinates, so it cannot follow a pan, and on test clips it cut a player standing on the sideline in roughly 10% of player detections. People standing just off the court can still pass as players when the detector calls them players, for example a bench player in warmups on the baseline.
 
 ## camera choices
 

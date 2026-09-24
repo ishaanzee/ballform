@@ -122,3 +122,14 @@ def test_model_checksum_is_skipped_until_file_changes(monkeypatch, tmp_path):
     os.utime(model, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
     analyzer._ensure_model(model, "unused", digest)
     assert len(hashes) == 2
+
+
+def test_court_polygon_only_applies_to_fixed_game_cameras():
+    from app.analyzer import _applied_court
+    court = [[0, 0], [1, 0], [1, 1]]
+    for profile in ("elevated", "courtside"):
+        assert _applied_court(court, "one_on_one", profile) == (court, None)
+    for profile in ("broadcast", "moving"):
+        applied, reason = _applied_court(court, "one_on_one", profile)
+        assert applied is None and profile in reason
+    assert _applied_court(None, "one_on_one", "moving") == (None, None)

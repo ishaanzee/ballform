@@ -6,7 +6,7 @@ from threading import Event
 import app.vision as vision_module
 
 from app.pose import TorchPose
-from app.vision import CourtVision, CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, is_player
+from app.vision import CourtVision, CutDetector, Person, camera_profile, map_keypoints, merge_people, on_court, scene_cut, validate_court, players_only
 from app.basketball import decode, preprocess
 from app.game import _body, _appearance_groups
 from app.models import PoseFrame
@@ -139,6 +139,16 @@ def test_court_filters_feet_not_head():
     assert not on_court(person, [[0, 0], [1, 0], [1, .5], [0, .5]])
 
 
+def test_court_keeps_a_player_standing_on_the_line():
+    # Feet 10 px outside the drawn edge of a 1920x1080 frame; the player is ~430 px tall.
+    person = Person((.45, .4, .5, .8), .9, {27: (.47, .8, .9), 28: (.48, .8, .9)})
+    edge = .8 - 10 / 1080
+    court = [[.1, .3], [.9, .3], [.9, edge], [.1, edge]]
+    assert on_court(person, court, 1920, 1080)
+    far = [[.1, .1], [.9, .1], [.9, .6], [.1, .6]]  # feet ~215 px outside
+    assert not on_court(person, far, 1920, 1080)
+
+
 @pytest.mark.parametrize('polygon', [[[0,0],[1,1]], [[0,0],[1,0],[float('nan'),1]],
                                    [[0,0],[1,1],[0,1],[1,0]], [[0,0],[2,0],[1,1]]])
 def test_invalid_court(polygon):
@@ -222,9 +232,16 @@ def test_broadcast_role_matching_excludes_referee_and_crowd():
     referee = Person((.5, .2, .6, .6), .9, {})
     spectator = Person((.8, .2, .9, .4), .9, {})
     objects = [(4, .9, player.box), (9, .9, referee.box)]
-    assert is_player(player, objects)
-    assert not is_player(referee, objects)
-    assert not is_player(spectator, objects)
+    assert players_only([player, referee, spectator], objects) == [player]
+
+
+def test_each_detector_player_box_vouches_for_one_pose():
+    # A spectator standing behind a player overlaps the player's detector box.
+    player = Person((.40, .30, .46, .70), .9, {})
+    spectator = Person((.39, .20, .47, .55), .9, {})
+    other = Person((.70, .30, .76, .70), .9, {})
+    objects = [(4, .9, (.40, .30, .46, .70)), (5, .8, (.70, .30, .76, .70))]
+    assert players_only([spectator, player, other], objects) == [player, other]
 
 
 def test_game_release_rejects_dribble_and_checks_left_hand():

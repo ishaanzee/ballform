@@ -18,6 +18,13 @@ NAMES = {0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",
          14: "right_elbow", 15: "left_wrist", 16: "right_wrist", 23: "left_hip",
          24: "right_hip", 25: "left_knee", 26: "right_knee", 27: "left_ankle", 28: "right_ankle"}
 CAMERAS = {"auto", "broadcast", "elevated", "courtside", "moving"}
+# A playing-area polygon is fixed in image coordinates, so it only describes the
+# court for cameras that do not pan. Broadcast views rely on the detector's
+# player/referee classes instead.
+COURT_PROFILES = {"elevated", "courtside"}
+# Feet may be this fraction of the person's height outside the polygon (about a
+# body width), so a player standing on the line is not dropped.
+COURT_MARGIN = .25
 
 
 def camera_profile(camera: str, mode: str) -> str:
@@ -75,14 +82,17 @@ def map_keypoints(keypoints, region, width, height):
             for index, mp_index in COCO_TO_MP.items()}
 
 
-def on_court(person: Person, court) -> bool:
+def on_court(person: Person, court, width: int = 1, height: int = 1) -> bool:
     if court is None:
         return True
     ankles = [person.landmarks[i] for i in (27, 28) if person.landmarks[i][2] >= .4]
     # Either foot can be on court when the other is over the sideline or airborne.
     feet = [(p[0], p[1]) for p in ankles] or [((person.box[0] + person.box[2]) / 2, person.box[3])]
-    polygon = np.asarray(court, dtype=np.float32)
-    return any(cv2.pointPolygonTest(polygon, p, False) >= 0 for p in feet)
+    scale = np.asarray((width, height), dtype=np.float32)
+    polygon = np.asarray(court, dtype=np.float32) * scale
+    margin = COURT_MARGIN * (person.box[3] - person.box[1]) * height
+    return any(cv2.pointPolygonTest(polygon, (float(x * width), float(y * height)), True) >= -margin
+               for x, y in feet)
 
 
 class CourtVision:
@@ -203,11 +213,11 @@ class CourtVision:
             self.side_crop_ball_candidates[frame_no] = len(side_ball_ids)
         people = merge_people(candidates)
         self.raw_people = len(people)
-        people = [p for p in people if on_court(p, self.court)]
+        people = [p for p in people if on_court(p, self.court, width, height)]
         if basketball_objects is not None and self.profile in {"broadcast", "moving"}:
             # The basketball-trained detector distinguishes on-court players from
             # officials/crowd. Pose alone cannot make that distinction.
-            people = [p for p in people if is_player(p, basketball_objects)]
+            people = players_only(people, basketball_objects)
         poses, maps, kept = [], [], []
         for person in people:
             # Require a measurable torso, not a minimum percentage of the entire frame.
@@ -261,12 +271,28 @@ def unposed_players(objects, people: list[Person]):
     return [box for b, box in enumerate(boxes) if b not in matched_boxes]
 
 
-def is_player(person, objects):
-    player_match = max((iou(person.box, box)*conf for cls, conf, box in objects
-                        if cls in PLAYER_CLASSES and conf >= .4), default=0.)
-    referee_match = max((iou(person.box, box)*conf for cls, conf, box in objects
-                         if cls == REFEREE_CLASS and conf >= .4), default=0.)
-    return player_match >= .25 and player_match > referee_match
+def players_only(people: list[Person], objects) -> list[Person]:
+    """People matched one-to-one to a detector player box.
+
+    Each detector player/referee box vouches for at most one pose (highest
+    IoU x confidence first), so a spectator or a duplicate pose overlapping a
+    real player's box cannot borrow that player's box to pass the filter.
+    """
+    roles = [(cls, conf, box) for cls, conf, box in objects
+             if (cls in PLAYER_CLASSES or cls == REFEREE_CLASS) and conf >= .4]
+    pairs = sorted(((iou(person.box, box) * conf, p, r) for p, person in enumerate(people)
+                    for r, (_, conf, box) in enumerate(roles)), reverse=True)
+    used_people, used_roles, kept = set(), set(), set()
+    for score, p, r in pairs:
+        if score < .25:
+            break
+        if p in used_people or r in used_roles:
+            continue
+        used_people.add(p)
+        used_roles.add(r)
+        if roles[r][0] in PLAYER_CLASSES:
+            kept.add(p)
+    return [person for p, person in enumerate(people) if p in kept]
 
 
 def scene_cut(previous, current) -> bool:

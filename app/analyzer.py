@@ -25,7 +25,7 @@ from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
-from app.vision import CourtVision, CutDetector, camera_profile, regions, validate_court
+from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 from app.possession import decode_handlers
@@ -584,6 +584,21 @@ def _wait_summary(samples: list[float]) -> dict:
             "max_ms": round(max(samples) * 1000, 2)}
 
 
+def _applied_court(court, mode: str, profile: str) -> tuple[list | None, str | None]:
+    """Return the playing-area polygon to apply and, if one was dropped, why.
+
+    A drawn polygon is fixed in image coordinates, so it cannot follow a panning
+    game camera; applied anyway it cut real players standing on the sideline in
+    most frames of test clips. Game footage from panning profiles relies on the
+    detector's player/referee classes instead.
+    """
+    if court is None or mode != "one_on_one" or profile in COURT_PROFILES:
+        return court, None
+    return None, (f"Playing-area polygon ignored for the {profile} camera profile: it is fixed in "
+                  "image coordinates and cannot follow camera pans. Players are separated from "
+                  "referees and spectators by the basketball detector.")
+
+
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "auto",
@@ -593,7 +608,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
     profile = camera_profile(camera, mode)
-    court = validate_court(court)
+    court, court_ignored = _applied_court(validate_court(court), mode, profile)
     game_mode = mode == "one_on_one"
     stage_times = {}
     stage_started = time.perf_counter()
@@ -879,7 +894,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                   "analyzed_fps": round(analyzed_fps, 2)},
         "camera_view": view, "camera_view_confidence": round(view_confidence, 2),
         "mode": mode, "handedness": handedness, "game_summary": game_summary,
-        "camera_profile": profile, "court_polygon": court,
+        "camera_profile": profile, "court_polygon": court, "court_polygon_ignored": court_ignored,
         "vision": {"pose_model": Path(game_pose_path).name if game_pose_path else pose_path.name,
                    "pose_model_requested": pose_model if game_mode else None,
                    "pose_model_choice": pose_model if game_mode else None,
@@ -948,8 +963,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     }
     if mode == "one_on_one":
         result["limitations"].extend(game_summary.get("limitations", []))
-        if court is None:
-            result["limitations"].append("No playing-area polygon supplied. Automatic player/referee filtering is used only with the default broadcast detector and can make mistakes; mark the court to further exclude the sidelines.")
+        if court_ignored:
+            result["limitations"].append(court_ignored)
+        elif court is None:
+            result["limitations"].append("No playing-area polygon applied. The basketball detector separates players from referees and spectators and can make mistakes; with a fixed camera (elevated or courtside), marking the playing area can additionally exclude benches.")
         if profile in {"broadcast", "elevated"}:
             result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip.")
         if profile == "moving":

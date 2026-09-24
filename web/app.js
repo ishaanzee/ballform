@@ -12,10 +12,18 @@ function updateSettings() {
   const game = $('#analysisMode').value === 'one_on_one';
   $('#handedness').disabled = game;
   $('#poseModel').disabled = !game;
-  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose the elevated broadcast camera. Mark the playing area to exclude spectators and benches. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
+  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose the elevated broadcast camera. Players are told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
-  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking. You may also mark the playing area.' : 'Playing area: click corners around the visible court in order. Leave benches and spectators outside. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.') : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+  const court = courtAllowed();
+  $('#markCourt').classList.toggle('hidden', !court);
+  if (!court) { courtPoints = []; if (marking === 'court') marking = 'rim'; drawBox(); }
+  const courtHelp = court ? ' Optional: with this fixed camera you can also mark the playing area to leave benches out.' : '';
+  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking.' : 'No marking needed: players are told apart from referees and spectators automatically. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.' + courtHelp) : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+}
+// A drawn playing area is fixed on screen, so it only fits cameras that do not pan.
+function courtAllowed() {
+  return $('#analysisMode').value === 'one_on_one' && ['elevated', 'courtside'].includes($('#cameraProfile').value);
 }
 $('#analysisMode').onchange = updateSettings;
 $('#cameraProfile').onchange = () => {
@@ -105,7 +113,7 @@ $('#analyze').onclick = async () => {
   form.append('mode', $('#analysisMode').value); form.append('handedness', $('#handedness').value);
   form.append('camera', $('#cameraProfile').value);
   form.append('pose_model', $('#poseModel').value);
-  if(courtPoints.length)form.append('court',JSON.stringify(courtPoints));
+  if(courtPoints.length && courtAllowed())form.append('court',JSON.stringify(courtPoints));
   const selectedModel = $('#poseModel').value;
   selectedPoseModelForJob = $('#analysisMode').value==='one_on_one' ? selectedModel : null;
   $('#modelStatus').textContent = selectedPoseModelForJob
