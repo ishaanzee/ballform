@@ -263,3 +263,87 @@ class BallHandlerTracker:
             return HandlerDecision(self.track_id, "held") if self.track_id in visible_ids else HandlerDecision(None, "none")
         self.reset()
         return HandlerDecision(None, "none")
+
+
+def _median_appearance(observations) -> np.ndarray | None:
+    values = [o[3] for o in observations if o[3] is not None]
+    return np.median(np.asarray(values, dtype=float), axis=0) if values else None
+
+
+def stitch_tracks(frames: list[dict], aspect_ratio: float, fps: float, max_gap_s: float = .5) -> dict[int, int]:
+    """Merge fragments of one camera segment that are the same player; returns {old: kept id}.
+
+    The online tracker splits a player when jersey colour (hidden by the ball or
+    arms) or a crouch pushes the association cost over its limit, even though
+    the player barely moved. Offline, a later fragment joins an earlier track
+    when the two never share a frame, it starts where the earlier track left
+    off and, if that track resumes, ends where it resumes. Jersey colour only
+    vetoes longer gaps, and a fragment with two similar candidates is left alone.
+    Limits are conservative: a missed merge leaves a duplicate label, while a
+    wrong one swaps identities (an occluder's jersey can mask the occluded
+    player's, so appearance alone cannot justify a long gap).
+    """
+    tracks: dict[int, list] = {}
+    for index, frame in enumerate(frames):
+        for pose in frame["players"]:
+            geometry = body_geometry(pose, aspect_ratio) if pose.track_id is not None else None
+            if geometry is not None:
+                tracks.setdefault(pose.track_id, []).append((index, geometry[0], geometry[1], pose.appearance))
+    max_gap = max(1, round(max_gap_s * fps))
+
+    def transition(src, dst) -> float | None:
+        """Normalized cost of one track ending at src and continuing at dst; None if implausible."""
+        gap = dst[0] - src[0]
+        scale = dst[2] / src[2]
+        if not 0 < gap <= max_gap or not .75 <= scale <= 1 / .75:
+            return None
+        jump = math.dist(src[1], dst[1]) / ((src[2] + dst[2]) / 2)
+        cost = jump / (.6 + .03 * gap)
+        return cost if cost <= 1 else None
+
+    def appearance_differs(before: list, after: list) -> bool:
+        a_look, b_look = _median_appearance(before[-5:]), _median_appearance(after[:5])
+        return a_look is not None and b_look is not None and float(np.linalg.norm(a_look - b_look)) > .3
+
+    mapping: dict[int, int] = {}
+    while True:
+        options: dict[int, list[tuple[float, int]]] = {}
+        for a, A in tracks.items():
+            a_frames = {o[0] for o in A}
+            for b, B in tracks.items():
+                if a == b or B[0][0] <= A[0][0] or a_frames & {o[0] for o in B}:
+                    continue
+                # Fragments may interleave while both online tracks stay alive;
+                # every point where the identity switches must be plausible.
+                merged = sorted([(o, a) for o in A] + [(o, b) for o in B], key=lambda item: item[0][0])
+                costs = []
+                for k, ((src, src_id), (dst, dst_id)) in enumerate(zip(merged, merged[1:])):
+                    if src_id == dst_id:
+                        continue
+                    cost = transition(src, dst)
+                    if cost is None or (dst[0] - src[0] > 3 and appearance_differs(
+                            [o for o, t in merged[:k + 1] if t == src_id],
+                            [o for o, t in merged[k + 1:] if t == dst_id])):
+                        costs = None
+                        break
+                    costs.append(cost)
+                if costs:
+                    options.setdefault(b, []).append((max(costs), a))
+        best = None
+        for b, candidates in options.items():
+            candidates.sort()
+            if len(candidates) > 1 and candidates[1][0] < 1.5 * candidates[0][0] + .1:
+                continue  # two earlier tracks fit: do not guess
+            if best is None or candidates[0][0] < best[0]:
+                best = (candidates[0][0], candidates[0][1], b)
+        if best is None:
+            break
+        _, a, b = best
+        tracks[a] = sorted(tracks[a] + tracks.pop(b), key=lambda o: o[0])
+        mapping = {old: (a if kept == b else kept) for old, kept in mapping.items()}
+        mapping[b] = a
+    for frame in frames:
+        for pose in frame["players"]:
+            if pose.track_id in mapping:
+                pose.track_id = mapping[pose.track_id]
+    return mapping

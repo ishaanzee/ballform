@@ -92,3 +92,49 @@ def test_handler_is_not_drawn_when_player_pose_is_missing():
     tracker.update([player], handler_ball(.34, 0), 0)
     assert tracker.update([], None, 1 / 30) == HandlerDecision(None, "none")
     assert tracker.update([handler_pose(1, .3, 2)], None, 2 / 30) == HandlerDecision(1, "held")
+
+
+def _stitch_pose(track_id, x, frame, appearance=(.5, .5, .5)):
+    """Upright player with hips at (x, .6) and a .1 torso."""
+    landmarks = {"left_shoulder": (x - .02, .5, .9), "right_shoulder": (x + .02, .5, .9),
+                 "left_hip": (x - .02, .6, .9), "right_hip": (x + .02, .6, .9)}
+    return PoseFrame(frame, frame / 30, landmarks, track_id, appearance)
+
+
+def _stitch_frames(spec, n):
+    """spec: {track_id: (x or callable(frame), frames)}."""
+    frames = [{"players": []} for _ in range(n)]
+    for track_id, (x, present) in spec.items():
+        for t in present:
+            frames[t]["players"].append(_stitch_pose(track_id, x(t) if callable(x) else x, t))
+    return frames
+
+
+def _ids(frames):
+    return [sorted(p.track_id for p in f["players"]) for f in frames]
+
+
+def test_stitch_rejoins_interleaved_fragments_of_one_player():
+    from app.tracking import stitch_tracks
+    frames = _stitch_frames({1: (lambda t: .3 + .002 * t, [*range(0, 10), *range(15, 20)]),
+                             7: (lambda t: .3 + .002 * t, range(10, 15)),
+                             2: (.8, range(20))}, 20)
+    assert stitch_tracks(frames, 1.0, 30) == {7: 1}
+    assert _ids(frames) == [[1, 2]] * 20
+
+
+def test_stitch_never_merges_players_seen_on_the_same_frame():
+    from app.tracking import stitch_tracks
+    frames = _stitch_frames({1: (.3, range(0, 10)), 7: (.31, range(9, 20))}, 20)
+    assert stitch_tracks(frames, 1.0, 30) == {}
+
+
+def test_stitch_rejects_far_jumps_long_gaps_and_ambiguous_fragments():
+    from app.tracking import stitch_tracks
+    far = _stitch_frames({1: (.3, range(0, 10)), 7: (.5, range(10, 20))}, 20)
+    assert stitch_tracks(far, 1.0, 30) == {}
+    late = _stitch_frames({1: (.3, range(0, 10)), 7: (.3, range(30, 40))}, 40)
+    assert stitch_tracks(late, 1.0, 30) == {}
+    # Two players leave the same spot as a new fragment appears there.
+    ambiguous = _stitch_frames({1: (.30, range(0, 10)), 2: (.305, range(0, 10)), 7: (.302, range(11, 20))}, 20)
+    assert stitch_tracks(ambiguous, 1.0, 30) == {}

@@ -100,6 +100,8 @@ The ball-handler highlight is decoded after all frames are analyzed rather than 
 
 Wrist contact counts in full only when the ball is within about 0.4 torso lengths of a wrist, and fades to nothing at 0.9. A loose ball bouncing past a player's hand in the image, such as after a make, therefore no longer reads as possession. When two hands are near the ball, the clearly closer one takes the credit. Players the detector sees but pose estimation misses, usually because a teammate or defender hides them, also compete for the ball. When one of them is holding it, the highlight shows nobody rather than moving to the visible neighbour.
 
+After all frames are analyzed, player tracks are stitched within each camera segment. The frame-by-frame tracker can split one player into several IDs when the ball or arms hide the jersey colour it matches on, or when the player crouches. Two fragments join when they never appear on the same frame and every switch between them is a short, plausible continuation: at most 0.5s, a small jump and a similar body scale. Stitching is deliberately conservative. A missed join leaves a duplicate label, but a wrong one would swap two players. Player labels in the review video are drawn after stitching, and reports record the count under `diagnostics.tracks_stitched`. A camera cut is confirmed one sampled frame late, so the cut's first frame is now re-tracked with fresh IDs instead of carrying the previous shot's.
+
 You can experiment with other local Ultralytics checkpoints:
 
 ```bash
