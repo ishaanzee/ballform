@@ -15,6 +15,8 @@ MODEL_SHA256 = "708789b50c42b5265cced64276a8beb1b7f294d324f954d359fd8a2d01f5a939
 # Export retains Roboflow COCO category IDs, with unused supercategory zero.
 BALL_CLASSES = {1, 2}
 PLAYER_CLASSES = {4, 5, 6, 7, 8}
+# Dataset order: player, player-in-possession, jump-shot, layup-dunk, shot-block.
+POSSESSION_CLASS = 5
 REFEREE_CLASS = 9
 # The transformer runs ~3x faster on the GPU than on the Neural Engine
 # (M3 Pro: 46 ms CPUAndGPU vs 119 ms CPUAndNeuralEngine). ALL is similar per

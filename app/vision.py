@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from app.models import Detection, PoseFrame
-from app.basketball import BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, REFEREE_CLASS
+from app.basketball import BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS
 
 # COCO-17 -> the MediaPipe indices used by the existing drawing/scoring code.
 COCO_TO_MP = {0: 0, 5: 11, 6: 12, 7: 13, 8: 14, 9: 15, 10: 16,
@@ -100,6 +100,8 @@ class CourtVision:
         self.side_crop_ball_candidates: dict[int, int] = {}
         self.side_crop_ball_selected: dict[int, bool] = {}
         self._ball_executor = None
+        # Full-frame player-in-possession boxes for the last detect() call.
+        self.possession: list[tuple[float, tuple[float, float, float, float]]] = []
 
     def close(self):
         if self._ball_executor is not None:
@@ -128,6 +130,8 @@ class CourtVision:
         candidates, balls = [], []
         basketball_objects = (prefetched_objects if prefetched_objects is not None
                               else self._detect_basketball_objects(frame)) if isinstance(self.ball_model, BasketballDetector) else None
+        self.possession = [(conf, box) for cls, conf, box in basketball_objects or []
+                           if cls == POSSESSION_CLASS and conf >= .3]
         if (basketball_objects is not None and self.profile in {"broadcast", "moving"}
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0

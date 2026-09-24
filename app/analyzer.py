@@ -28,6 +28,7 @@ from app.tracking import BallHandlerTracker, PoseTracker, jersey_descriptor
 from app.vision import CourtVision, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
+from app.possession import decode_handlers
 
 ROOT = Path(__file__).resolve().parents[1]
 POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
@@ -718,7 +719,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             poses.extend(players)
             handler = handler_tracker.update(players, ball, time_s) if handler_tracker else None
             player_frames.append({"frame": frame_no, "time_s": time_s, "players": players,
-                                  "handler": handler})
+                                  "handler": handler, "ball": ball,
+                                  "possession": court_vision.possession if court_vision else []})
             if ball:
                 balls.append(ball)
                 prior_ball = previous_ball
@@ -739,7 +741,19 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_times["frame_processing"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
     observed_balls = list(balls)
+    handler_method = os.environ.get("BALLFORM_HANDLER", "smoothed")
+    if handler_method not in {"smoothed", "online"}:
+        raise ValueError("BALLFORM_HANDLER must be 'smoothed' or 'online'.")
     if game_mode:
+        for frame_data in player_frames:
+            frame_data["handler_online"] = frame_data["handler"]
+        if handler_method == "smoothed":
+            # Decode each camera segment over the whole clip; identities reset at cuts.
+            edges = [0, *cut_frames, frame_no + 1]
+            for start, end in zip(edges, edges[1:]):
+                segment = [f for f in player_frames if start <= f["frame"] < end]
+                for frame_data, decision in zip(segment, decode_handlers(segment, width / height)):
+                    frame_data["handler"] = decision
         # Keep measured inputs for scoring review; handler is a separate, inferred
         # visual-annotation decision and is never fed back into shot scoring.
         (output_dir / "observations.json").write_text(json.dumps({
@@ -747,7 +761,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             "balls": [asdict(b) for b in observed_balls],
             "players": [{"frame": f["frame"], "time_s": f["time_s"],
                          "players": [asdict(p) for p in f["players"]],
-                         "handler": asdict(f["handler"]) if f["handler"] else None}
+                         "handler": asdict(f["handler"]) if f["handler"] else None,
+                         "handler_online": asdict(f["handler_online"]) if f["handler_online"] else None,
+                         "possession": f["possession"]}
                         for f in player_frames],
         }, default=lambda value: float(value)))
     normalized_flow = _normalize_net_flow(flows)
@@ -873,6 +889,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "ball_detections": len(observed_balls),
                         "handler_observed_frames": sum(f["handler"] is not None and f["handler"].source == "observed"
                                                        for f in player_frames),
+                        "handler_method": handler_method if game_mode else None,
+                        "handler_differs_from_online_frames": sum(
+                            (f["handler"].track_id if f["handler"] else None)
+                            != (f["handler_online"].track_id if f["handler_online"] else None)
+                            for f in player_frames) if game_mode else None,
                         "handler_held_frames": sum(f["handler"] is not None and f["handler"].source == "held"
                                                    for f in player_frames),
                         "rim_marked": rim is not None,
@@ -905,7 +926,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         if profile == "moving":
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on any clear frame and review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
-        result["limitations"].append("Red BALL? highlights carry the last observed handler across short visibility gaps; they are uncertain visual annotations, not measured possession or scoring evidence.")
+        result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession or scoring evidence.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
     return result
