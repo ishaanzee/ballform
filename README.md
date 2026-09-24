@@ -98,6 +98,8 @@ This writes fixed-shape fp16 ONNX files to `models/`, which the app then uses au
 
 The ball-handler highlight is decoded after all frames are analyzed rather than frame by frame. Each tracked player, plus "nobody", is scored on every frame from wrist contact with the ball, a low ball beside the body (mid-dribble), and the basketball detector's player-in-possession class. The most consistent sequence over the whole clip wins (`app/possession.py`). Keeping a handler is free. Picking up a loose ball is cheap, so a catch-and-shoot still registers. Taking the ball from another player costs more, so a few frames of a defender's hand near the ball do not relabel the dribbler. Future frames also let passes switch on the catch, and the handler ends while a shot or pass is in flight. `observations.json` keeps the previous frame-by-frame result as `handler_online`, and `BALLFORM_HANDLER=online` restores it for the review video.
 
+Wrist contact counts in full only when the ball is within about 0.4 torso lengths of a wrist, and fades to nothing at 0.9. A loose ball bouncing past a player's hand in the image, such as after a make, therefore no longer reads as possession. When two hands are near the ball, the clearly closer one takes the credit. Players the detector sees but pose estimation misses, usually because a teammate or defender hides them, also compete for the ball. When one of them is holding it, the highlight shows nobody rather than moving to the visible neighbour.
+
 You can experiment with other local Ultralytics checkpoints:
 
 ```bash

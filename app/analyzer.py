@@ -720,7 +720,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             handler = handler_tracker.update(players, ball, time_s) if handler_tracker else None
             player_frames.append({"frame": frame_no, "time_s": time_s, "players": players,
                                   "handler": handler, "ball": ball,
-                                  "possession": court_vision.possession if court_vision else []})
+                                  "possession": court_vision.possession if court_vision else [],
+                                  "unposed": court_vision.unposed if court_vision else []})
             if ball:
                 balls.append(ball)
                 prior_ball = previous_ball
@@ -763,7 +764,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                          "players": [asdict(p) for p in f["players"]],
                          "handler": asdict(f["handler"]) if f["handler"] else None,
                          "handler_online": asdict(f["handler_online"]) if f["handler_online"] else None,
-                         "possession": f["possession"]}
+                         "possession": f["possession"], "unposed": f["unposed"]}
                         for f in player_frames],
         }, default=lambda value: float(value)))
     normalized_flow = _normalize_net_flow(flows)

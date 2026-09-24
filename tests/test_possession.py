@@ -52,3 +52,27 @@ def test_possession_box_alone_identifies_the_handler():
     decoded = decode_handlers(frames([None] * 12, possession=boxes), 1.0)
     assert ids(decoded) == [2] * 12
     assert {d.source for d in decoded} == {"observed"}
+
+
+def test_loose_ball_bouncing_past_a_standing_players_hand_is_not_possession():
+    # Reach .75 torso lengths for three frames: close in the image, never in the hand.
+    balls = ([ball(.6, .2, t) for t in range(5)] + [ball(.415, .6, t) for t in range(5, 8)]
+             + [ball(.6, .2, t) for t in range(8, 13)])
+    assert ids(decode_handlers(frames(balls, players=(1,)), 1.0)) == [None] * 13
+
+
+def test_a_clearly_closer_rival_hand_takes_all_contact_credit():
+    from app.possession import _evidence
+    far, near = player(1, .3), player(2, .45)
+    loose = ball(.40, .6)
+    assert _evidence(far, loose, [], 1.0, rival_reach=.1)[0] == 0
+    assert _evidence(near, loose, [], 1.0, rival_reach=.6)[0] > 1
+
+
+def test_ball_with_an_unposed_player_is_not_given_to_the_posed_neighbour():
+    balls = [ball(.40, .6, t) for t in range(12)]
+    alone = frames(balls, players=(1,))
+    assert set(ids(decode_handlers(alone, 1.0))) == {1}
+    for frame in alone:
+        frame["unposed"] = [(.8, (.36, .45, .46, .95))]
+    assert ids(decode_handlers(alone, 1.0)) == [None] * 12

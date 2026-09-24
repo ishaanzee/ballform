@@ -100,8 +100,10 @@ class CourtVision:
         self.side_crop_ball_candidates: dict[int, int] = {}
         self.side_crop_ball_selected: dict[int, bool] = {}
         self._ball_executor = None
-        # Full-frame player-in-possession boxes for the last detect() call.
+        # Full-frame player-in-possession boxes for the last detect() call, and
+        # detector players left without a kept pose (occluded, off-court or unposed).
         self.possession: list[tuple[float, tuple[float, float, float, float]]] = []
+        self.unposed: list[tuple[float, tuple[float, float, float, float]]] = []
 
     def close(self):
         if self._ball_executor is not None:
@@ -132,6 +134,7 @@ class CourtVision:
                               else self._detect_basketball_objects(frame)) if isinstance(self.ball_model, BasketballDetector) else None
         self.possession = [(conf, box) for cls, conf, box in basketball_objects or []
                            if cls == POSSESSION_CLASS and conf >= .3]
+        self.unposed = []
         if (basketball_objects is not None and self.profile in {"broadcast", "moving"}
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0
@@ -205,7 +208,7 @@ class CourtVision:
             # The basketball-trained detector distinguishes on-court players from
             # officials/crowd. Pose alone cannot make that distinction.
             people = [p for p in people if is_player(p, basketball_objects)]
-        poses, maps = [], []
+        poses, maps, kept = [], [], []
         for person in people:
             # Require a measurable torso, not a minimum percentage of the entire frame.
             body = [person.landmarks[i] for i in (11, 12, 23, 24)]
@@ -217,6 +220,9 @@ class CourtVision:
                 continue
             poses.append(PoseFrame(frame_no, time_s, {NAMES[i]: p for i, p in person.landmarks.items()}))
             maps.append(person.landmarks)
+            kept.append(person)
+        if basketball_objects is not None:
+            self.unposed = unposed_players(basketball_objects, kept)
         if previous_ball and time_s - previous_ball.time_s < .3:
             predicted = (previous_ball.x, previous_ball.y)
             if prior_ball and previous_ball.frame - prior_ball.frame == frame_no - previous_ball.frame:
@@ -238,6 +244,21 @@ class CourtVision:
             self.side_crop_ball_selected[frame_no] = ball is not None and id(ball) in side_ball_ids
         self.timing_seconds["total"] += time.perf_counter() - started
         return poses, maps, ball
+
+
+def unposed_players(objects, people: list[Person]):
+    """Detector player boxes left after one-to-one IoU matching with kept poses."""
+    boxes = [(conf, box) for cls, conf, box in objects if cls in PLAYER_CLASSES and conf >= .4]
+    pairs = sorted(((iou(box, person.box), b, p) for b, (_, box) in enumerate(boxes)
+                    for p, person in enumerate(people)), reverse=True)
+    matched_boxes, matched_people = set(), set()
+    for overlap, b, p in pairs:
+        if overlap < .3:
+            break
+        if b not in matched_boxes and p not in matched_people:
+            matched_boxes.add(b)
+            matched_people.add(p)
+    return [box for b, box in enumerate(boxes) if b not in matched_boxes]
 
 
 def is_player(person, objects):
