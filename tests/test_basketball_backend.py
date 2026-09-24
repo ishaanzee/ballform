@@ -9,7 +9,7 @@ from app.basketball import BasketballDetector
 from scripts.benchmark_ball_backends import compare
 
 
-def test_coreml_backend_requests_neural_engine_and_content_specific_cache(monkeypatch, tmp_path):
+def test_coreml_backend_requests_compute_units_and_content_specific_cache(monkeypatch, tmp_path):
     model = tmp_path / "ball.onnx"
     model.write_bytes(b"model-a")
     created = []
@@ -31,7 +31,7 @@ def test_coreml_backend_requests_neural_engine_and_content_specific_cache(monkey
     assert detector.backend == "coreml"
     assert created[0][1][0][0] == "CoreMLExecutionProvider"
     settings = created[0][1][0][1]
-    assert settings["MLComputeUnits"] == "CPUAndNeuralEngine"
+    assert settings["MLComputeUnits"] == "CPUAndGPU"
     assert settings["ModelFormat"] == "MLProgram"
     assert settings["RequireStaticInputShapes"] == "1"
     assert settings["ModelCacheDirectory"].startswith(str(tmp_path / "coreml-cache"))
@@ -40,6 +40,11 @@ def test_coreml_backend_requests_neural_engine_and_content_specific_cache(monkey
     model.write_bytes(b"model-b")
     BasketballDetector(model, backend="coreml")
     assert created[1][1][0][1]["ModelCacheDirectory"] != first_cache
+    BasketballDetector(model, backend="coreml", compute_units="CPUAndNeuralEngine")
+    assert created[2][1][0][1]["MLComputeUnits"] == "CPUAndNeuralEngine"
+    assert created[2][1][0][1]["ModelCacheDirectory"] != created[1][1][0][1]["ModelCacheDirectory"]
+    with pytest.raises(ValueError, match="compute units"):
+        BasketballDetector(model, backend="coreml", compute_units="GPU")
 
 
 def test_coreml_backend_fails_loudly_when_provider_is_missing(monkeypatch, tmp_path):

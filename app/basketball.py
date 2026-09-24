@@ -16,6 +16,10 @@ MODEL_SHA256 = "708789b50c42b5265cced64276a8beb1b7f294d324f954d359fd8a2d01f5a939
 BALL_CLASSES = {1, 2}
 PLAYER_CLASSES = {4, 5, 6, 7, 8}
 REFEREE_CLASS = 9
+# The transformer runs ~3x faster on the GPU than on the Neural Engine
+# (M3 Pro: 46 ms CPUAndGPU vs 119 ms CPUAndNeuralEngine). ALL is similar per
+# call but Core ML re-specializes it for longer on every session load.
+COREML_COMPUTE_UNITS = {"ALL", "CPUAndGPU", "CPUAndNeuralEngine", "CPUOnly"}
 
 
 def preprocess(frame):
@@ -48,12 +52,15 @@ def decode(boxes, logits, threshold=.25):
 
 
 class BasketballDetector:
-    def __init__(self, path, backend="auto"):
+    def __init__(self, path, backend="auto", compute_units="CPUAndGPU"):
         import onnxruntime as ort
         ort.disable_telemetry_events()
         if backend not in {"auto", "cpu", "coreml"}:
             raise ValueError("Basketball detector backend must be 'auto', 'cpu', or 'coreml'.")
+        if compute_units not in COREML_COMPUTE_UNITS:
+            raise ValueError(f"Core ML compute units must be one of {sorted(COREML_COMPUTE_UNITS)}.")
         self.requested_backend = backend
+        self.compute_units = compute_units
         self.fallback_reason = None
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
@@ -72,11 +79,11 @@ class BasketballDetector:
                 model_path = Path(path)
                 with model_path.open("rb") as source:
                     digest = hashlib.file_digest(source, "sha256").hexdigest()[:20]
-                cache_dir = model_path.parent / "coreml-cache" / digest
+                cache_dir = model_path.parent / "coreml-cache" / digest / compute_units
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 providers.insert(0, ("CoreMLExecutionProvider", {
                     "ModelFormat": "MLProgram",
-                    "MLComputeUnits": "CPUAndNeuralEngine",
+                    "MLComputeUnits": compute_units,
                     "RequireStaticInputShapes": "1",
                     "ModelCacheDirectory": str(cache_dir),
                 }))

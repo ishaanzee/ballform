@@ -499,7 +499,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     configured_ball_model = os.environ.get("BALLFORM_YOLO_MODEL")
     if game_mode and not configured_ball_model:
         ball_model_path = str(_ensure_model(ROOT / "models" / MODEL_FILENAME, MODEL_URL, MODEL_SHA256))
-        ball_model = BasketballDetector(ball_model_path, backend=os.environ.get("BALLFORM_BALL_BACKEND", "auto"))
+        ball_model = BasketballDetector(ball_model_path, backend=os.environ.get("BALLFORM_BALL_BACKEND", "auto"),
+                                        compute_units=os.environ.get("BALLFORM_COREML_UNITS", "CPUAndGPU"))
     else:
         ball_model_path = configured_ball_model or str(_ensure_model(BALL_MODEL, BALL_MODEL_URL))
         ball_model = YOLO(ball_model_path)
@@ -516,7 +517,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         try:
             # A second session is owned by the prefetch worker; the first session
             # remains available for side crops on the current frame.
-            prefetch_detector = BasketballDetector(ball_model_path, backend=ball_model.backend)
+            prefetch_detector = BasketballDetector(ball_model_path, backend=ball_model.backend,
+                                                   compute_units=ball_model.compute_units)
         except Exception as exc:
             if pipeline_request == "2":
                 raise
@@ -746,7 +748,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "pose_model_requested": pose_model if game_mode else None,
                    "pose_model_choice": pose_model if game_mode else None,
                    "ball_model": Path(ball_model_path).name, "device": device,
-                   "ball_device": ("cpu+neural_engine_requested" if ball_model.backend == "coreml" else "cpu")
+                   "ball_device": (f"coreml_{ball_model.compute_units}_requested" if ball_model.backend == "coreml" else "cpu")
                    if isinstance(ball_model, BasketballDetector) else device,
                    "ball_backend": ball_model.backend if isinstance(ball_model, BasketballDetector) else "ultralytics",
                    "ball_backend_requested": ball_model.requested_backend if isinstance(ball_model, BasketballDetector) else None,
