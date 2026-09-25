@@ -127,8 +127,6 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
             rim_box = values
         except (ValueError, TypeError, json.JSONDecodeError):
             raise HTTPException(422, "Rim must be a normalized [x, y, width, height] box.") from None
-    if camera == "moving" and rim_box is None:
-        raise HTTPException(422, "Moving camera analysis requires a marked rim box.")
     anchor_frame = None
     if rim_frame is not None:
         try:

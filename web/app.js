@@ -19,7 +19,10 @@ function updateSettings() {
   $('#markCourt').classList.toggle('hidden', !court);
   if (!court) { courtPoints = []; if (marking === 'court') marking = 'rim'; drawBox(); }
   const courtHelp = court ? ' Optional: with this fixed camera you can also mark the playing area to leave spectators and benches out.' : '';
-  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking.' : 'For outcomes, mark the rim with Stationary courtside, or choose Moving broadcast + tracked rim.' + courtHelp) : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+  const rimHelp = moving
+    ? 'The rim is found automatically on every frame, including after camera cuts. To override it, scrub to a frame where the hoop is clear and drag a snug box around the ring; it is then tracked from that frame.'
+    : 'The rim is found automatically for make/miss. Drag a snug box around the ring only if it is missed or the wrong hoop is chosen.';
+  $('#markHelp').textContent = game ? rimHelp + courtHelp : 'The rim is found automatically for make/miss. Drag a snug box around it only if it is missed.';
 }
 // A drawn playing area is fixed on screen, so it only fits cameras that do not pan.
 function courtAllowed() {
@@ -180,9 +183,10 @@ function render(id,result){
   $('#gameHelp').classList.toggle('hidden',!game);
   if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.'+(method?.formula?` Score: ${method.formula}.`:'');}
   const made=result.shots.filter(s=>s.outcome==='made'||s.outcome==='likely made').length;
-  // Elevated game views withhold make/miss (a fixed rim box cannot follow the camera);
-  // 'broadcast' keeps reports saved before that profile was removed rendering the same way.
-  const movingView=game&&['broadcast','elevated'].includes(result.camera_profile);
+  // Make/miss is unavailable when no rim was detected or marked. Reports saved before
+  // rims were detected automatically have no rim_source; they keep the old rule.
+  const rimSource=result.diagnostics&&('rim_source' in result.diagnostics)?result.diagnostics.rim_source:undefined;
+  const movingView=game&&(rimSource!==undefined?rimSource==null:['broadcast','elevated'].includes(result.camera_profile));
   const scored=result.shots.filter(s=>s.game?.score!=null);
   const diagnostics=result.diagnostics||{};
   const performance=result.performance||{};

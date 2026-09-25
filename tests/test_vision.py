@@ -251,3 +251,20 @@ def test_game_release_rejects_dribble_and_checks_left_hand():
     assert _release_proximity(pose, Detection(0, 0, .50, .43, .9), 'left', 1., True) is None
     pose.landmarks['left_wrist'] = (.50, .38, .95)
     assert _release_proximity(pose, Detection(0, 0, .50, .38, .9), 'left', 1., True) == 0
+
+
+def test_court_vision_records_confident_rims_each_frame(monkeypatch):
+    class BallDetector:
+        def detect(self, frame):
+            raise AssertionError("prefetched")
+
+    class PoseModel:
+        def predict(self, source, **kwargs):
+            return [SimpleNamespace(boxes=None, keypoints=None)]
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    vision = CourtVision(TorchPose(PoseModel(), "mps"), BallDetector(), "mps", "moving")
+    objects = [(4, .9, (.2, .2, .3, .6)), (1, .9, (.45, .45, .55, .55)),
+               (10, .88, (.40, .20, .45, .22)), (10, .35, (.7, .3, .72, .31))]
+    vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0, prefetched_objects=objects)
+    assert vision.rims == [(.88, (.40, .20, .45, .22))]

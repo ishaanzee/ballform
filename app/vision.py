@@ -10,6 +10,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame
 from app.basketball import BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS
+from app.rim import rim_candidates
 
 # COCO-17 -> the MediaPipe indices used by the existing drawing/scoring code.
 COCO_TO_MP = {0: 0, 5: 11, 6: 12, 7: 13, 8: 14, 9: 15, 10: 16,
@@ -118,6 +119,7 @@ class CourtVision:
         # detector players left without a kept pose (occluded, off-court or unposed).
         self.possession: list[tuple[float, tuple[float, float, float, float]]] = []
         self.unposed: list[tuple[float, tuple[float, float, float, float]]] = []
+        self.rims: list[tuple[float, tuple[float, float, float, float]]] = []
 
     def close(self):
         if self._ball_executor is not None:
@@ -157,6 +159,7 @@ class CourtVision:
         self.possession = [(conf, box) for cls, conf, box in basketball_objects or []
                            if cls == POSSESSION_CLASS and conf >= .3]
         self.unposed = []
+        self.rims = rim_candidates(basketball_objects)
         if (basketball_objects is not None and self.profile == "moving"
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0

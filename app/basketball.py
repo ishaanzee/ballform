@@ -17,6 +17,7 @@ BALL_CLASSES = {1, 2}
 PLAYER_CLASSES = {4, 5, 6, 7, 8}
 # Dataset order: player, player-in-possession, jump-shot, layup-dunk, shot-block.
 POSSESSION_CLASS = 5
+RIM_CLASS = 10
 REFEREE_CLASS = 9
 # The transformer runs ~3x faster on the GPU than on the Neural Engine
 # (M3 Pro: 46 ms CPUAndGPU vs 119 ms CPUAndNeuralEngine). ALL is similar per

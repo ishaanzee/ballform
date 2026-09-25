@@ -25,6 +25,7 @@ from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
+from app.rim import box_iou, detect_fixed_rim, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
@@ -46,116 +47,6 @@ POSE_NAMES = {
 }
 SKELETON = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23),
             (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
-
-
-class RimTracker:
-    """Follow a user-marked hoop through a continuous pan/zoom shot."""
-
-    def __init__(self, initial: tuple[float, float, float, float], width: int, height: int):
-        self.initial, self.width, self.height = initial, width, height
-        self.tracker = None
-        self.started = False
-        self.lost = False
-        self.last = initial
-        self.failures = 0
-
-    def _soft_failure(self):
-        self.failures += 1
-        if self.failures <= 5 and self.last:
-            # Short ball/net occlusions should not erase the hoop annotation.
-            self.started = False
-            self.initial = self.last
-            return self.last
-        self.lost = True
-        return None
-
-    def update(self, frame: np.ndarray) -> tuple[float, float, float, float] | None:
-        if self.lost:
-            return None
-        if not self.started:
-            create = getattr(cv2, "TrackerCSRT_create", None)
-            if create is None and hasattr(cv2, "legacy"):
-                create = getattr(cv2.legacy, "TrackerCSRT_create", None)
-            if create is None:
-                raise RuntimeError("This OpenCV build does not include the CSRT tracker.")
-            self.tracker = create()
-            x, y, w, h = self.initial
-            self.tracker.init(frame, (round(x * self.width), round(y * self.height),
-                                      round(w * self.width), round(h * self.height)))
-            self.started = True
-            return self.initial
-        ok, box = self.tracker.update(frame)
-        if not ok:
-            return self._soft_failure()
-        x, y, w, h = (float(value) for value in box)
-        if w < 5 or h < 3 or x < 0 or y < 0 or x + w > self.width or y + h > self.height:
-            return self._soft_failure()
-        current = x / self.width, y / self.height, w / self.width, h / self.height
-        old_x, old_y, old_w, old_h = self.last
-        center_jump = np.hypot((current[0] + current[2] / 2) - (old_x + old_w / 2),
-                               (current[1] + current[3] / 2) - (old_y + old_h / 2))
-        scale = current[2] / max(old_w, 1e-6)
-        if center_jump > .12 or not .62 <= scale <= 1.6:
-            return self._soft_failure()
-        self.failures = 0
-        self.last = current
-        return current
-
-    def stop_at_cut(self) -> None:
-        # A box from the old camera angle is not a valid initialization in the new shot.
-        self.lost = True
-
-
-def _track_rim_bidirectional(input_path: Path, initial: tuple[float, float, float, float],
-                             anchor_frame: int, width: int, height: int, total: int
-                             ) -> tuple[dict[int, tuple[float, float, float, float]], bool]:
-    """Track the marked rim forward and backward from its annotation frame."""
-    if anchor_frame < 0 or anchor_frame >= total:
-        return {}, True
-    forward, backward = {}, {}
-    capture = cv2.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        return {}, True
-    capture.set(cv2.CAP_PROP_POS_FRAMES, anchor_frame)
-    ok, frame = capture.read()
-    if not ok:
-        capture.release()
-        return {}, True
-    tracker = RimTracker(initial, width, height)
-    forward[anchor_frame] = tracker.update(frame)  # type: ignore[assignment]
-    for frame_no in range(anchor_frame + 1, total):
-        ok, frame = capture.read()
-        if not ok:
-            break
-        box = tracker.update(frame)
-        if box is None:
-            break
-        forward[frame_no] = box
-    lost = tracker.lost
-    capture.release()
-    capture = cv2.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        return forward, True
-    tracker = RimTracker(initial, width, height)
-    capture.set(cv2.CAP_PROP_POS_FRAMES, anchor_frame)
-    ok, anchor = capture.read()
-    if not ok:
-        capture.release()
-        return forward, True
-    tracker.update(anchor)
-    for frame_no in range(anchor_frame - 1, -1, -1):
-        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-        ok, frame = capture.read()
-        if not ok:
-            lost = True
-            break
-        box = tracker.update(frame)
-        if box is None:
-            lost = True
-            break
-        backward[frame_no] = box
-    capture.release()
-    return {**backward, **forward}, lost
 
 
 _VERIFIED_MODELS: dict[Path, tuple[int, int]] = {}
@@ -450,7 +341,7 @@ def _add_review_overlays(source: Path, destination: Path, shots: list, player_fr
     has_handlers = any(f.get("handler") is not None and f["handler"].track_id is not None
                        for f in player_frames)
     label_players = label_players and any(p.track_id for f in player_frames for p in f["players"])
-    if not shooter_intervals and not has_makes and not has_handlers and not label_players:
+    if not shooter_intervals and not has_makes and not has_handlers and not label_players and rim is None:
         source.replace(destination)
         return
     capture = cv2.VideoCapture(str(source))
@@ -482,8 +373,9 @@ def _add_review_overlays(source: Path, destination: Path, shots: list, player_fr
                     _draw(frame, landmarks, None, None, label=label, handler=True)
                 else:
                     _draw_label(frame, landmarks, f"P{pose.track_id}")
-        frame_rim = _rim_at(rim, round(time_s * source_fps))
+        frame_rim = _rim_at(rim, source_frame)
         if frame_rim is not None:
+            _draw(frame, {}, None, frame_rim)
             for shot in shots:
                 if shot.outcome in {"made", "likely made"} and shot.outcome_frame is not None:
                     _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
@@ -599,6 +491,22 @@ def _applied_court(court, mode: str, profile: str) -> tuple[list | None, str | N
                   "referees and spectators by the basketball detector.")
 
 
+def _scoring_rim(profile: str, rim_marked: bool, rim, tracked_rims: dict, detected_rims: dict
+                 ) -> tuple[RimInput, str | None]:
+    """Choose the rim make/miss is scored against, and where it came from.
+
+    A marked rim wins: on a moving camera it is followed by the CSRT tracker
+    (which stops at a cut or tracking loss), on a fixed camera it is a fixed box.
+    Otherwise game rims come from per-frame detection, which restarts after cuts,
+    and form mode uses the fixed box sampled from the clip (passed in as `rim`).
+    """
+    if rim_marked:
+        return (tracked_rims or rim) if profile == "moving" else rim, "marked"
+    if rim is not None:
+        return rim, "detected"
+    return (detected_rims, "detected") if detected_rims else (None, None)
+
+
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
@@ -680,6 +588,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     poses: list[PoseFrame] = []
     player_frames: list[dict] = []
     flows: dict[int, dict[str, float]] = {}
+    flow_rims: dict[int, tuple[float, float, float, float] | None] = {}
     previous_ball: Detection | None = None
     prior_ball: Detection | None = None
     previous_gray: np.ndarray | None = None
@@ -689,12 +598,23 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     raw_people_counts = []
     tracked_rims: dict[int, tuple[float, float, float, float]] = {}
     rim_tracking_lost = False
+    rim_marked = rim is not None
+    # Game mode reads the detector's rim class on every frame during the loop;
+    # form mode, whose loop does not run that detector, samples a fixed box.
+    auto_rim = game_mode and not rim_marked
+    rim_detection_error = None
     stage_started = time.perf_counter()
     if profile == "moving" and rim:
         report(.06, "Tracking the marked rim forward and backward")
-        tracked_rims, rim_tracking_lost = _track_rim_bidirectional(
+        tracked_rims, rim_tracking_lost = track_marked_rim(
             input_path, rim, (rim_frame if rim_frame is not None else
                               round((rim_time_s or 0.0) * fps)), width, height, total)
+    elif not game_mode and rim is None:
+        report(.06, "Looking for the rim")
+        try:
+            rim = detect_fixed_rim(input_path, _basketball_detector("ball", loaded_models)[1])
+        except Exception as exc:  # The rim is optional; analysis continues without outcomes.
+            rim_detection_error = f"{type(exc).__name__}: {exc}"
     stage_times["rim_tracking"] = time.perf_counter() - stage_started
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
     handler_tracker = BallHandlerTracker(width / height) if game_mode else None
@@ -733,6 +653,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                 previous_ball = None
                 prior_ball = None
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
+            if auto_rim and court_vision and court_vision.rims:
+                frame_rim = xywh(max(court_vision.rims)[1])
+            flow_rims[frame_no] = frame_rim
             players = []
             landmark_maps = []
             if court_vision:
@@ -755,7 +678,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             player_frames.append({"frame": frame_no, "time_s": time_s, "players": players,
                                   "handler": handler, "ball": ball,
                                   "possession": court_vision.possession if court_vision else [],
-                                  "unposed": court_vision.unposed if court_vision else []})
+                                  "unposed": court_vision.unposed if court_vision else [],
+                                  "rims": court_vision.rims if court_vision else []})
             if ball:
                 balls.append(ball)
                 prior_ball = previous_ball
@@ -765,7 +689,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             # Game-mode player labels are drawn in the review pass, after track stitching.
             for visible_pose in landmark_maps:
                 _draw(frame, visible_pose, None, None, handedness)
-            _draw(frame, {}, ball, frame_rim)
+            _draw(frame, {}, ball, None)  # the rim is drawn in the review pass
             if court:
                 polygon = np.rint(np.asarray(court) * (width, height)).astype(np.int32)
                 cv2.polylines(frame, [polygon], True, (255, 210, 80), 2)
@@ -808,11 +732,20 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                          "possession": f["possession"], "unposed": f["unposed"]}
                         for f in player_frames],
         }, default=lambda value: float(value)))
+    detected_rims: dict[int, tuple[float, float, float, float]] = {}
+    rim_stats: dict = {}
+    if auto_rim:
+        detected_rims, rim_stats = track_detected_rims(
+            {f["frame"]: f["rims"] for f in player_frames}, cut_frames, step=stride,
+            max_gap_frames=max(stride, round(fps * .5)))
+        # Net flow was measured around each frame's most confident rim; keep it
+        # only where that was the hoop finally chosen.
+        for frame_no_, box in flow_rims.items():
+            chosen = detected_rims.get(frame_no_)
+            if box is not None and (chosen is None or box_iou(box, chosen) < .3):
+                flows[frame_no_] = {"net": 0.0, "reference": 0.0}
     normalized_flow = _normalize_net_flow(flows)
-    # A fixed rim box is unsafe on an elevated game view. Moving mode instead uses a CSRT box
-    # at each source frame and stops supplying it after a cut or tracking loss.
-    scoring_rim: RimInput = (tracked_rims if profile == "moving" and tracked_rims else
-                             None if game_mode and profile == "elevated" else rim)
+    scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
@@ -821,8 +754,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
                                      aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
         for shot in segment_shots:
-            if game_mode and profile == "elevated":
-                shot.evidence = ["Outcome unavailable: the elevated profile does not track a rim; use moving (with a marked rim) or courtside."
+            if scoring_rim is None:
+                shot.evidence = ["Outcome unavailable: no rim was detected or marked."
                                  if item == "Outcome unavailable because the rim was not marked" else item
                                  for item in shot.evidence]
             shot.number = len(shots) + 1
@@ -940,7 +873,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                             for f in player_frames) if game_mode else None,
                         "handler_held_frames": sum(f["handler"] is not None and f["handler"].source == "held"
                                                    for f in player_frames),
-                        "rim_marked": rim is not None,
+                        "rim_marked": rim_marked,
+                        "rim_source": rim_source,
+                        "rim_detected_frames": len(detected_rims) if auto_rim else (1 if rim_source == "detected" else 0),
+                        "rim_other_hoop_tracks": rim_stats.get("other_hoop_tracks"),
+                        "rim_detection_error": rim_detection_error,
                         "rim_tracking_frames": len(tracked_rims),
                         "rim_tracking_lost": rim_tracking_lost,
                         "pose_predict_calls": court_vision.pose_predict_calls if court_vision else None,
@@ -970,9 +907,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         elif court is None:
             result["limitations"].append("No playing-area polygon applied. With this fixed camera, spectators and bench players in view can be counted as players; mark the playing area to exclude them.")
         if profile == "elevated":
-            result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip, or moving with a marked rim for a panning one.")
-        if profile == "moving":
-            result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on any clear frame and review every result.")
+            result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing.")
+        if rim_source == "detected":
+            result["limitations"].append("The rim was found automatically by the basketball detector on each frame. Outcomes pause where no hoop is detected and restart after camera cuts; if the wrong hoop is chosen, mark the rim to override.")
+        elif profile == "moving" and rim_marked:
+            result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
         result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession or scoring evidence.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))

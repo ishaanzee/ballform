@@ -60,10 +60,13 @@ def test_upload_accepts_moving_camera_profile(client, monkeypatch):
     assert calls[0][0][5] == "moving"
 
 
-def test_moving_camera_requires_first_frame_rim(client):
+def test_moving_camera_no_longer_requires_a_marked_rim(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
                            data={"mode": "one_on_one", "camera": "moving"})
-    assert response.status_code == 422
+    assert response.status_code == 202
+    assert calls[0][0][2] is None  # the rim is detected during analysis
 
 
 def test_upload_accepts_rim_frame(client, monkeypatch):
