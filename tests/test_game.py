@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from app.game import analyze_game_shots
@@ -244,3 +246,89 @@ def test_defender_hand_hidden_on_release_frame_is_measured_from_an_adjacent_fram
     assert game["status"] == "measured" and game["score"] == complete["score"]
     assert game["confidence"] < complete["confidence"]
     assert any("nearest frame where it was visible" in item for item in game["evidence"])
+
+
+def _court_map():
+    from app.camera_motion import CourtMap, follow_court
+    from app.court import apply, fit, template
+    from tests_support_court import synthetic_camera
+    court_to_image = synthetic_camera()[2]
+    ids = ["lane_base_left", "lane_base_right", "ft_left", "ft_right", "three_top", "half_right", "half_left"]
+    image = apply(court_to_image, [template("nba").landmarks[key] for key in ids])
+    calibration = fit([(key, (x / 1920, y / 1080)) for key, (x, y) in zip(ids, image)], 1920, 1080)
+    frames = follow_court(None, list(range(30)), 0, calibration.image_to_court, template("nba"), {}, [],
+                          1920, 1080, 30, fixed=True)
+    return CourtMap(calibration, frames, 0, 1920, 1080), court_to_image
+
+
+def _standing(frame, track_id, spot, court_to_image, lift_px=0., wrist=None):
+    from app.court import apply
+    x, y = apply(court_to_image, [spot])[0] / (1920, 1080)
+    lift = lift_px / 1080
+    landmarks = {"left_ankle": (x - .004, y - lift, .9), "right_ankle": (x + .004, y - lift, .9),
+                 "left_hip": (x - .006, y - .08 - lift, .9), "right_hip": (x + .006, y - .08 - lift, .9),
+                 "left_shoulder": (x - .008, y - .16 - lift, .9), "right_shoulder": (x + .008, y - .16 - lift, .9),
+                 "left_wrist": (x - .012, y - .2 - lift, .9), "right_wrist": (x + .012, y - .2 - lift, .9)}
+    if wrist:
+        landmarks["right_wrist"] = (*wrist, .9)
+    return PoseFrame(frame, frame / 30, landmarks, track_id=track_id)
+
+
+def _court_shot(jump=True, defender_spot=(0., 22.)):
+    from app.game import add_court_metrics
+    court_map, court_to_image = _court_map()
+    frames = []
+    for frame in range(25):
+        # The shooter plants at (-5, 29) and leaves the floor after frame 18.
+        lift = 12. * max(0, frame - 18) if jump else 0.
+        frames.append({"frame": frame, "time_s": frame / 30, "players": [
+            _standing(frame, 1, (-5., 29.), court_to_image, lift),
+            _standing(frame, 2, defender_spot, court_to_image, wrist=(.5, .3))]})
+    game = {"release_frame": 24, "players": {"shooter_track_id": 1, "defender_track_id": 2},
+            "metrics": {"separation_torso": 2.5, "contest_clearance_torso": 1.2, "visible_hand_clearance_torso": None},
+            "evidence": [], "limitations": ["No court calibration: shot distance, defender depth, possession outcome "
+                                            "and true 3D spacing are not measured."]}
+    shot = ShotResult(1, 0., .8, 1.5, "unknown", 0., [], {}, game=game)
+    summary = {"limitations": list(game["limitations"])}
+    add_court_metrics([shot], frames, [Detection(24, .8, .52, .3, .9)], court_map, summary)
+    return shot.game, summary
+
+
+def test_court_metrics_measure_the_jump_shot_from_the_take_off_spot():
+    game, summary = _court_shot()
+    metrics = game["metrics"]
+    assert metrics["shot_distance_ft"] == pytest.approx(24.3, abs=.15)
+    assert metrics["shot_zone"] == "above_break_three"
+    assert (metrics["shooter_court_x_ft"], metrics["shooter_court_y_ft"]) == pytest.approx((-5., 29.), abs=.15)
+    assert metrics["separation_ft"] == pytest.approx(math.dist((-5., 29.), (0., 22.)), abs=.15)
+    assert metrics["contest_clearance_ft"] is not None
+    # Torso-length metrics stay as they were.
+    assert metrics["separation_torso"] == 2.5 and metrics["contest_clearance_torso"] == 1.2
+    assert "before take-off" in " ".join(game["evidence"])
+    assert all(not item.startswith("No court calibration") for item in game["limitations"] + summary["limitations"])
+
+
+def test_airborne_feet_are_not_mapped_as_the_shot_spot():
+    # Mapping the release-frame feet (lifted ~70 px) would put the shooter feet farther out.
+    game, _ = _court_shot()
+    from app.court import apply
+    court_map, court_to_image = _court_map()
+    airborne = apply(court_to_image, [(-5., 29.)])[0] - (0, 72)
+    assert math.dist(court_map.to_court(24, airborne), (-5., 29.)) > 2
+    assert game["metrics"]["shooter_court_y_ft"] == pytest.approx(29., abs=.15)
+
+
+def test_set_shot_uses_the_release_frame_feet():
+    game, _ = _court_shot(jump=False)
+    assert game["metrics"]["shot_distance_ft"] == pytest.approx(24.3, abs=.15)
+    assert "no take-off was detected" in " ".join(game["evidence"])
+
+
+def test_court_metrics_withhold_when_the_shooter_is_unknown():
+    from app.game import add_court_metrics
+    court_map, _ = _court_map()
+    game = {"release_frame": None, "players": {"shooter_track_id": None, "defender_track_id": None},
+            "metrics": {}, "evidence": [], "limitations": []}
+    shot = ShotResult(1, 0., .8, 1.5, "unknown", 0., [], {}, game=game)
+    add_court_metrics([shot], [], [], court_map)
+    assert game["metrics"]["shot_distance_ft"] is None and "not identified" in game["evidence"][0]

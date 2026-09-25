@@ -244,7 +244,8 @@ class CourtVision:
             hip = np.mean([(p[0]*width, p[1]*height) for p in body[2:]], axis=0)
             if np.linalg.norm(shoulder-hip) < 10:
                 continue
-            poses.append(PoseFrame(frame_no, time_s, {NAMES[i]: p for i, p in person.landmarks.items()}))
+            poses.append(PoseFrame(frame_no, time_s, {NAMES[i]: p for i, p in person.landmarks.items()},
+                                   box=tuple(float(v) for v in person.box)))
             maps.append(person.landmarks)
             kept.append(person)
         if basketball_objects is not None:

@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyzer import ROOT, analyze_video, preload_game_models
+from app.court import parse_landmarks
 from app.vision import CAMERA_ERROR, CAMERAS, validate_court
 
 
@@ -55,7 +56,7 @@ def _update(job_id: str, **values) -> None:
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
          mode: str = "form", handedness: str = "right", camera: str = "courtside", court=None,
          rim_frame: int | None = None, rim_time_s: float | None = None,
-         pose_model: str = "yolo26s-pose") -> None:
+         pose_model: str = "yolo26s-pose", court_landmarks: dict | None = None) -> None:
     try:
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
@@ -71,7 +72,8 @@ def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] |
             result = analyze_video(input_path, input_path.parent, rim,
                                    progress,
                                    mode=mode, handedness=handedness, camera=camera, court=court,
-                                   rim_frame=rim_frame, rim_time_s=rim_time_s, pose_model=pose_model)
+                                   rim_frame=rim_frame, rim_time_s=rim_time_s, pose_model=pose_model,
+                                   court_landmarks=court_landmarks)
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -100,7 +102,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                      mode: str = Form("form"), handedness: str = Form("right"),
                      camera: str = Form("courtside"), court: str | None = Form(None),
                      rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
-                     pose_model: str = Form("yolo26s-pose")) -> dict:
+                     pose_model: str = Form("yolo26s-pose"), court_landmarks: str | None = Form(None)) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
@@ -113,6 +115,18 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
         court_polygon = validate_court(json.loads(court)) if court else None
     except (ValueError, TypeError):
         raise HTTPException(422, "Court must be 3–8 normalized [x,y] points around a convex playing area.") from None
+    landmarks = None
+    if court_landmarks:
+        if mode != "one_on_one":
+            raise HTTPException(422, "Court calibration is only used in game analysis.")
+        try:
+            landmarks = json.loads(court_landmarks)
+        except json.JSONDecodeError:
+            raise HTTPException(422, "Court landmarks must be JSON.") from None
+        try:
+            parse_landmarks(landmarks)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(415, f"Use one of: {', '.join(sorted(ALLOWED))}")
@@ -161,10 +175,11 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
             pose_model_requested=pose_model if mode == "one_on_one" else None)
     if anchor_frame is None and anchor_time is None:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
-                            pose_model=pose_model)
+                            pose_model=pose_model, court_landmarks=landmarks)
     else:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
-                            rim_frame=anchor_frame, rim_time_s=anchor_time, pose_model=pose_model)
+                            rim_frame=anchor_frame, rim_time_s=anchor_time, pose_model=pose_model,
+                            court_landmarks=landmarks)
     return {"job_id": job_id, "pose_model_requested": pose_model if mode == "one_on_one" else None}
 
 

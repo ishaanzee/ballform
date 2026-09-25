@@ -124,3 +124,30 @@ def test_invalid_options_rejected_before_job_creation(client, data):
     response = client.post("/api/jobs", files={"video": ("shot.mp4", b"video")}, data=data)
     assert response.status_code == 422
     assert not list(main.JOBS_DIR.iterdir())
+
+
+LANDMARKS = {"standard": "nba", "time_s": 1.5, "points": [
+    {"id": "lane_base_left", "image": [.1, .7]}, {"id": "lane_base_right", "image": [.2, .5]},
+    {"id": "ft_left", "image": [.45, .72]}, {"id": "ft_right", "image": [.5, .55]}]}
+
+
+def test_upload_forwards_court_landmarks(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": "moving", "court_landmarks": json.dumps(LANDMARKS)})
+    assert response.status_code == 202
+    assert calls[0][1]["court_landmarks"] == LANDMARKS
+
+
+@pytest.mark.parametrize("data, message", [
+    ({"court_landmarks": "{"}, "JSON"),
+    ({"court_landmarks": json.dumps({**LANDMARKS, "points": LANDMARKS["points"][:3]})}, "at least 4"),
+    ({"court_landmarks": json.dumps({**LANDMARKS, "standard": "wnba"})}, "standard"),
+    ({"court_landmarks": json.dumps(LANDMARKS), "mode": "form"}, "game analysis"),
+])
+def test_invalid_court_landmarks_are_rejected_with_a_reason(client, data, message):
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", **data})
+    assert response.status_code == 422 and message in response.json()["detail"]
+    assert not list(main.JOBS_DIR.iterdir())
