@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 
 from app.models import Detection, PoseFrame
-from app.basketball import BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS
+from app.basketball import (BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS,
+                            SHOT_EVENT_CLASSES)
 from app.rim import rim_candidates
 
 # COCO-17 -> the MediaPipe indices used by the existing drawing/scoring code.
@@ -120,6 +121,8 @@ class CourtVision:
         self.possession: list[tuple[float, tuple[float, float, float, float]]] = []
         self.unposed: list[tuple[float, tuple[float, float, float, float]]] = []
         self.rims: list[tuple[float, tuple[float, float, float, float]]] = []
+        # Full-frame shot-context boxes (ball-in-basket, jump-shot, layup-dunk, shot-block).
+        self.events: list[tuple[str, float, tuple[float, float, float, float]]] = []
 
     def close(self):
         if self._ball_executor is not None:
@@ -158,6 +161,8 @@ class CourtVision:
                               else self._detect_basketball_objects(frame)) if isinstance(self.ball_model, BasketballDetector) else None
         self.possession = [(conf, box) for cls, conf, box in basketball_objects or []
                            if cls == POSSESSION_CLASS and conf >= .3]
+        self.events = [(SHOT_EVENT_CLASSES[cls], conf, box) for cls, conf, box in basketball_objects or []
+                       if cls in SHOT_EVENT_CLASSES and conf >= .3]
         self.unposed = []
         self.rims = rim_candidates(basketball_objects)
         if (basketball_objects is not None and self.profile == "moving"

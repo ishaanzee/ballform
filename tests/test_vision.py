@@ -133,6 +133,29 @@ def test_prefetched_full_frame_ball_objects_are_used_without_redetection(monkeyp
     assert vision.side_crop_ball_selected == {}
 
 
+
+def test_shot_context_classes_are_recorded_alongside_possession(monkeypatch):
+    class BallDetector:
+        def detect(self, frame):
+            raise AssertionError("Full-frame basketball detection should be prefetched")
+
+    class PoseModel:
+        def predict(self, source, **kwargs):
+            return [SimpleNamespace(boxes=None, keypoints=None)]
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    vision = CourtVision(TorchPose(PoseModel(), "mps"), BallDetector(), "mps", "moving")
+    objects = [(4, .9, (.2, .2, .3, .6)), (5, .7, (.2, .2, .3, .6)), (1, .9, (.45, .45, .55, .55)),
+               (2, .6, (.5, .1, .52, .12)), (6, .5, (.2, .2, .3, .6)), (7, .8, (.6, .2, .7, .6)),
+               (8, .4, (.3, .2, .4, .6)), (7, .2, (.1, .1, .2, .2))]
+    vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0, prefetched_objects=objects)
+    assert vision.possession == [(.7, (.2, .2, .3, .6))]
+    assert vision.events == [("ball_in_basket", .6, (.5, .1, .52, .12)), ("jump_shot", .5, (.2, .2, .3, .6)),
+                             ("layup_dunk", .8, (.6, .2, .7, .6)), ("shot_block", .4, (.3, .2, .4, .6))]
+    # Frames without any detector player return early but still report their events.
+    vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 1, 0.03, prefetched_objects=[(2, .9, (.5, .1, .52, .12))])
+    assert vision.events == [("ball_in_basket", .9, (.5, .1, .52, .12))]
+
 def test_court_filters_feet_not_head():
     person = Person((.4, .1, .6, .8), .9, {27: (.45, .8, .9), 28: (.55, .8, .9)})
     assert on_court(person, [[.1, .5], [.9, .5], [.9, .9], [.1, .9]])
