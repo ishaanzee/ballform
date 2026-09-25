@@ -1,6 +1,12 @@
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 
-from app.analyzer import _review_highlight, _sampled_frames, _shooter_intervals, _wait_summary
+import cv2
+import numpy as np
+import pytest
+
+import app.analyzer as analyzer
+from app.analyzer import _render_review_video, _review_highlight, _sampled_frames, _shooter_intervals, _wait_summary
 from app.models import ShotResult
 from app.tracking import HandlerDecision
 
@@ -133,3 +139,44 @@ def test_court_polygon_only_applies_to_fixed_game_cameras():
         applied, reason = _applied_court(court, "one_on_one", profile)
         assert applied is None and profile in reason
     assert _applied_court(None, "one_on_one", "moving") == (None, None)
+
+
+def _review_clip(tmp_path, frames=6):
+    source = tmp_path / "clip.mp4"
+    writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 48))
+    for index in range(frames):
+        writer.write(np.full((48, 64, 3), 40 * index, dtype=np.uint8))
+    writer.release()
+    return source
+
+
+def _render(source, destination, stride=2, frames=3):
+    player_frames = [{"frame": stride * index, "players": [], "handler": None, "ball": None, "drawn_poses": []}
+                     for index in range(frames)]
+    return _render_review_video(source, destination, stride, [], player_frames, 30 / stride, 30, None)
+
+
+def _frame_count(path):
+    capture = cv2.VideoCapture(str(path))
+    count = 0
+    while capture.read()[0]:
+        count += 1
+    capture.release()
+    return count
+
+
+def test_review_video_falls_back_when_an_encoder_fails(tmp_path, monkeypatch):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    monkeypatch.setattr(analyzer, "FFMPEG_ENCODERS", {"broken": ["-c:v", "no_such_encoder"],
+                                                      "libx264": analyzer.FFMPEG_ENCODERS["libx264"]})
+    destination = tmp_path / "annotated.mp4"
+    assert _render(_review_clip(tmp_path), destination) == "libx264"
+    assert _frame_count(destination) == 3
+
+
+def test_review_video_uses_opencv_without_ffmpeg(tmp_path, monkeypatch):
+    monkeypatch.setattr(analyzer.shutil, "which", lambda name: None)
+    destination = tmp_path / "annotated.mp4"
+    assert _render(_review_clip(tmp_path), destination) == "mp4v"
+    assert _frame_count(destination) == 3

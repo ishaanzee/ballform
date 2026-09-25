@@ -11,13 +11,15 @@
     "hardware": "Apple M3 Pro, 36 GB unified memory",
     "runs_per_configuration": 1,
     "frame_count_note": "The MP4 header reports 298 frames, but FFmpeg and OpenCV both decode 286. Throughput uses the 286 frames the analysis processed.",
-    "result_check": "The three original runs produced the same shot result: release at 6.79 s, made at frame 243, shot-space score 97.9. The later runs used a rim marked on frame 0, so the make is detected at frame 245. They scored 97.9 with PyTorch pose and 97.4 with fp16 Neural Engine pose. The lower score comes from a 0.7% change in measured separation caused by fp16 keypoints. The MLX detector run matched the Core ML run exactly: same ball detections, players, handler and shot result.",
+    "result_check": "The three original runs produced the same shot result: release at 6.79 s, made at frame 243, shot-space score 97.9. The later runs used a rim marked on frame 0, so the make is detected at frame 245. They scored 97.9 with PyTorch pose and 97.4 with fp16 Neural Engine pose. The lower score comes from a 0.7% change in measured separation caused by fp16 keypoints. The MLX detector run matched the Core ML run exactly: same ball detections, players, handler and shot result. The single-pass video run matched the same-session run before it exactly (observations and shot). With GPU side-crop pose the release, make frame, shooter, defender and score (97.4) were unchanged on this clip.",
     "configurations": {
       "cpu_serial / coreml_serial / coreml_overlap": "Original runs (2026-09-22). The ball detector ran on the CPU or on Core ML with CPU + Neural Engine requested; pose ran in PyTorch on the GPU (MPS); models were loaded for each job.",
       "coreml_gpu": "BALLFORM_COREML_UNITS=CPUAndGPU, BALLFORM_POSE_BACKEND=torch, new process, models loaded during the job (Core ML caches already built).",
       "models_kept_loaded": "As coreml_gpu, but the models were preloaded and warmed before the job, as the server now does.",
       "neural_engine_pose": "Current defaults: detector on Core ML CPU + GPU, pose as fp16 Core ML on the Neural Engine, models preloaded.",
-      "mlx_detector": "As neural_engine_pose, but the detector is the fast_rfdetr MLX + Metal port (BALLFORM_BALL_BACKEND=auto with it installed); side crops run as one batched call."
+      "mlx_detector": "As neural_engine_pose, but the detector is the fast_rfdetr MLX + Metal port (BALLFORM_BALL_BACKEND=auto with it installed); side crops run as one batched call.",
+      "single_pass_video": "As mlx_detector, plus the review video decoded, drawn and encoded once with VideoToolbox H.264 instead of three encodes; side-crop pose kept on the Neural Engine (BALLFORM_SIDE_POSE_UNITS=CPUAndNeuralEngine).",
+      "gpu_side_pose": "Current defaults: as single_pass_video, plus the right side crop's pose on the GPU while the Neural Engine runs the full view and left crop, on frames without side-crop ball detection."
     }
   },
   "charts": [
@@ -61,6 +63,16 @@
           "run": "mlx_detector",
           "label": "+ MLX + Metal detector",
           "value": 33.56
+        },
+        {
+          "run": "single_pass_video",
+          "label": "+ single-pass hardware video",
+          "value": 28.22
+        },
+        {
+          "run": "gpu_side_pose",
+          "label": "+ side-crop pose on GPU",
+          "value": 24.82
         }
       ]
     },
@@ -104,6 +116,16 @@
           "run": "mlx_detector",
           "label": "+ MLX + Metal detector",
           "value": 11.717
+        },
+        {
+          "run": "single_pass_video",
+          "label": "+ single-pass hardware video",
+          "value": 12.785
+        },
+        {
+          "run": "gpu_side_pose",
+          "label": "+ side-crop pose on GPU",
+          "value": 15.092
         }
       ]
     },
@@ -218,6 +240,17 @@
     },
     "ball_detector_neural_engine_to_mlx": {
       "per_call_speedup": 4.621
+    },
+    "same_session_before_to_gpu_side_pose": {
+      "before_end_to_end_seconds": 32.69,
+      "single_pass_video_end_to_end_seconds": 28.22,
+      "gpu_side_pose_end_to_end_seconds": 24.82,
+      "end_to_end_time_reduction_percent": 24.07,
+      "review_video_seconds": {
+        "before": 4.4,
+        "after": 1.55
+      },
+      "note": "The before run is the previous commit in the same session; the earlier mlx_detector point (33.56 s) predates later changes. A repeat of each run was within 0.3 s."
     }
   },
   "source_reports": {
@@ -231,7 +264,10 @@
     "component_latency": "diagnostic/ballform-component-latency.json",
     "mlx_detector": "diagnostic/ballform-mlx-detector.json",
     "mlx_same_session_coreml": "diagnostic/ballform-mlx-same-session-coreml.json",
-    "mlx_detector_latency": "diagnostic/ballform-mlx-detector-latency.json"
+    "mlx_detector_latency": "diagnostic/ballform-mlx-detector-latency.json",
+    "same_session_before": "diagnostic/ballform-before-single-pass-video.json",
+    "single_pass_video": "diagnostic/ballform-single-pass-video.json",
+    "gpu_side_pose": "diagnostic/ballform-gpu-side-pose.json"
   },
   "display_notes": [
     "These are single-run measurements on one clip, not averages or a general benchmark across videos.",

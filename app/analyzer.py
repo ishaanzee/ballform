@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
@@ -136,8 +137,12 @@ def _game_pose_model(name: str, loaded: list[str] | None = None
         if request == "coreml":
             raise RuntimeError(reason)
         return path, torch_pose, reason
+    side_units = os.environ.get("BALLFORM_SIDE_POSE_UNITS", "CPUAndGPU")
+    if side_units not in {"CPUAndGPU", "CPUAndNeuralEngine"}:
+        raise ValueError("BALLFORM_SIDE_POSE_UNITS must be 'CPUAndGPU' or 'CPUAndNeuralEngine'.")
     try:
-        return path, _shared_model(("pose-coreml", name), lambda: CoreMLPose(exports, torch_pose), loaded), None
+        return path, _shared_model(("pose-coreml", name, side_units),
+                                   lambda: CoreMLPose(exports, torch_pose, side_units=side_units), loaded), None
     except Exception as exc:
         if request == "coreml":
             raise
@@ -171,7 +176,7 @@ def preload_game_models(pose_model: str = "yolo26s-pose") -> list[str]:
     blank = np.zeros((1080, 1920, 3), dtype=np.uint8)
     # The first call at each input shape builds kernels or Core ML plans; do it now.
     for index, (x1, y1, x2, y2) in enumerate(regions(1920, 1080, True)):
-        pose.infer(blank[y1:y2, x1:x2], 1280 if index == 0 else 960)
+        pose.infer(blank[y1:y2, x1:x2], 1280 if index == 0 else 960, side=index > 0)
     if os.environ.get("BALLFORM_YOLO_MODEL"):
         return loaded
     _, ball = _basketball_detector("ball", loaded)
@@ -335,39 +340,124 @@ def _review_highlight(source_frame: int, frame_data: dict,
     return decision.track_id, f"P{decision.track_id} {suffix}"
 
 
-def _add_review_overlays(source: Path, destination: Path, shots: list, player_frames: list[dict],
-                         output_fps: float, source_fps: float, rim: RimInput,
-                         label_players: bool = False, court_map=None) -> None:
-    shooter_intervals = _shooter_intervals(shots, source_fps)
-    has_makes = rim is not None and any(
-        s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots)
-    has_handlers = any(f.get("handler") is not None and f["handler"].track_id is not None
-                       for f in player_frames)
-    label_players = label_players and any(p.track_id for f in player_frames for p in f["players"])
-    if (not shooter_intervals and not has_makes and not has_handlers and not label_players and rim is None
-            and court_map is None):
-        source.replace(destination)
-        return
+# Hardware H.264 first; -q:v 65 is about libx264 CRF 22 by SSIM (0.985 vs 0.988)
+# at a larger file. libx264 covers Macs without VideoToolbox constant quality.
+FFMPEG_ENCODERS = {
+    "h264_videotoolbox": ["-c:v", "h264_videotoolbox", "-q:v", "65", "-profile:v", "high"],
+    "libx264": ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
+}
+
+
+class _FFmpegSink:
+    """Pipe BGR frames straight into one ffmpeg H.264 encode."""
+
+    def __init__(self, ffmpeg: str, encoder: str, destination: Path, fps: float, width: int, height: int):
+        self.stderr = tempfile.TemporaryFile()
+        self.process = subprocess.Popen(
+            [ffmpeg, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24",
+             "-s", f"{width}x{height}", "-r", f"{fps:.6f}", "-i", "-", *FFMPEG_ENCODERS[encoder],
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", str(destination)],
+            stdin=subprocess.PIPE, stderr=self.stderr)
+
+    def write(self, frame: np.ndarray) -> None:
+        self.process.stdin.write(np.ascontiguousarray(frame).data)
+
+    def close(self) -> None:
+        try:
+            self.process.stdin.close()
+        except BrokenPipeError:
+            pass
+        code = self.process.wait()
+        self.stderr.seek(0)
+        message = self.stderr.read().decode(errors="replace").strip()
+        self.stderr.close()
+        if code:
+            raise RuntimeError(message or f"ffmpeg exited with status {code}")
+
+    def abort(self) -> None:
+        self.process.kill()
+        self.process.wait()
+        try:
+            self.process.stdin.close()
+        except BrokenPipeError:
+            pass
+        self.stderr.close()
+
+
+class _OpenCVSink:
+    def __init__(self, destination: Path, fps: float, width: int, height: int):
+        self.writer = cv2.VideoWriter(str(destination), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+        if not self.writer.isOpened():
+            raise RuntimeError("Could not initialize the annotated video writer.")
+
+    def write(self, frame: np.ndarray) -> None:
+        self.writer.write(frame)
+
+    def close(self) -> None:
+        self.writer.release()
+
+    abort = close
+
+
+def _render_review_video(source: Path, destination: Path, stride: int, shots: list, player_frames: list[dict],
+                         output_fps: float, source_fps: float, rim: RimInput, handedness: str = "right",
+                         label_players: bool = False, court_polygon=None, court_map=None) -> str:
+    """Decode the source once, draw every overlay and encode the review video once.
+
+    Returns the encoder used. A failing encoder (for example no VideoToolbox)
+    is retried with the next one.
+    """
     capture = cv2.VideoCapture(str(source))
     width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    writer = cv2.VideoWriter(str(destination), cv2.VideoWriter_fourcc(*"mp4v"), output_fps, (width, height))
-    if not capture.isOpened() or not writer.isOpened():
-        capture.release()
-        writer.release()
-        source.replace(destination)
-        return
-    index = 0
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
-        time_s = index / output_fps
-        source_frame = (player_frames[index]["frame"] if index < len(player_frames)
-                        else round(time_s * source_fps))
-        if court_map is not None:
-            draw_court(frame, court_map, source_frame)
-        if index < len(player_frames):
+    capture.release()
+    ffmpeg = shutil.which("ffmpeg")
+    encoders = [*(FFMPEG_ENCODERS if ffmpeg else ()), "mp4v"]
+    for position, encoder in enumerate(encoders):
+        sink = (_OpenCVSink(destination, output_fps, width, height) if encoder == "mp4v"
+                else _FFmpegSink(ffmpeg, encoder, destination, output_fps, width, height))
+        last = position == len(encoders) - 1
+        try:
+            _draw_review_frames(source, sink, stride, shots, player_frames, output_fps, source_fps, rim,
+                                handedness, label_players, court_polygon, court_map)
+        except BaseException as exc:
+            sink.abort()
+            # A broken pipe means the encoder died; anything else is not its fault.
+            if last or not isinstance(exc, OSError):
+                raise
+            logging.warning("Review video encoder %s failed (%s); trying %s", encoder, exc, encoders[position + 1])
+            continue
+        try:
+            sink.close()
+            return encoder
+        except RuntimeError as exc:
+            if last:
+                raise
+            logging.warning("Review video encoder %s failed (%s); trying %s", encoder, exc, encoders[position + 1])
+    raise AssertionError("unreachable")
+
+
+def _draw_review_frames(source: Path, sink, stride: int, shots: list, player_frames: list[dict],
+                        output_fps: float, source_fps: float, rim: RimInput, handedness: str,
+                        label_players: bool, court_polygon, court_map) -> None:
+    shooter_intervals = _shooter_intervals(shots, source_fps)
+    label_players = label_players and any(p.track_id for f in player_frames for p in f["players"])
+    capture = cv2.VideoCapture(str(source))
+    if not capture.isOpened():
+        raise ValueError("OpenCV could not decode this video. Try exporting it as H.264 MP4.")
+    try:
+        for index, (source_frame, frame, _, _) in enumerate(_sampled_frames(capture, stride)):
+            if index >= len(player_frames):
+                break
             frame_data = player_frames[index]
+            time_s = index / output_fps
+            # Analysis-time annotations: every visible pose, the ball and the playing area.
+            for visible_pose in frame_data["drawn_poses"]:
+                _draw(frame, visible_pose, None, None, handedness)
+            _draw(frame, {}, frame_data["ball"], None)
+            if court_polygon is not None:
+                cv2.polylines(frame, [court_polygon], True, (255, 210, 80), 2)
+            if court_map is not None:
+                draw_court(frame, court_map, source_frame)
             highlighted_id, label = _review_highlight(source_frame, frame_data, shooter_intervals)
             for pose in frame_data["players"]:
                 highlighted = pose.track_id is not None and pose.track_id == highlighted_id
@@ -379,18 +469,16 @@ def _add_review_overlays(source: Path, destination: Path, shots: list, player_fr
                     _draw(frame, landmarks, None, None, label=label, handler=True)
                 else:
                     _draw_label(frame, landmarks, f"P{pose.track_id}")
-        frame_rim = _rim_at(rim, source_frame)
-        if frame_rim is not None:
-            _draw(frame, {}, None, frame_rim)
-            for shot in shots:
-                if shot.outcome in {"made", "likely made"} and shot.outcome_frame is not None:
-                    _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
-                                         shot.outcome == "likely made")
-        writer.write(frame)
-        index += 1
-    capture.release()
-    writer.release()
-    source.unlink(missing_ok=True)
+            frame_rim = _rim_at(rim, source_frame)
+            if frame_rim is not None:
+                _draw(frame, {}, None, frame_rim)
+                for shot in shots:
+                    if shot.outcome in {"made", "likely made"} and shot.outcome_frame is not None:
+                        _draw_make_animation(frame, frame_rim, time_s - shot.outcome_frame / source_fps,
+                                             shot.outcome == "likely made")
+            sink.write(frame)
+    finally:
+        capture.release()
 
 
 def _draw_label(frame: np.ndarray, landmarks: dict[int, tuple[float, float, float]], label: str,
@@ -578,11 +666,6 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     # Preserve more release/contest detail than the original 15 FPS pipeline.
     stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
-    raw_output = output_dir / "annotated_raw.mp4"
-    writer = cv2.VideoWriter(str(raw_output), cv2.VideoWriter_fourcc(*"mp4v"), analyzed_fps, (width, height))
-    if not writer.isOpened():
-        capture.release()
-        raise RuntimeError("Could not initialize the annotated video writer.")
     stage_times["model_loading_and_setup"] = time.perf_counter() - stage_started
 
     options = None if game_mode else mp.tasks.vision.PoseLandmarkerOptions(
@@ -636,7 +719,6 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_started = time.perf_counter()
     with ExitStack() as resources:
         resources.callback(capture.release)
-        resources.callback(writer.release)
         if court_vision:
             resources.callback(court_vision.close)
         landmarker = None if game_mode else resources.enter_context(mp.tasks.vision.PoseLandmarker.create_from_options(options))
@@ -692,21 +774,15 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                                   "possession": court_vision.possession if court_vision else [],
                                   "unposed": court_vision.unposed if court_vision else [],
                                   "rims": court_vision.rims if court_vision else [],
-                                  "events": court_vision.events if court_vision else []})
+                                  "events": court_vision.events if court_vision else [],
+                                  # Drawn in the review pass, which decodes the source again.
+                                  "drawn_poses": landmark_maps})
             if ball:
                 balls.append(ball)
                 prior_ball = previous_ball
                 previous_ball = ball
             flows[frame_no] = _net_flow(previous_gray, gray, frame_rim)
             previous_gray = gray
-            # Game-mode player labels are drawn in the review pass, after track stitching.
-            for visible_pose in landmark_maps:
-                _draw(frame, visible_pose, None, None, handedness)
-            _draw(frame, {}, ball, None)  # the rim is drawn in the review pass
-            if court:
-                polygon = np.rint(np.asarray(court) * (width, height)).astype(np.int32)
-                cv2.polylines(frame, [polygon], True, (255, 210, 80), 2)
-            writer.write(frame)
             processed += 1
             if processed % 5 == 0:
                 report(min(.88, .08 + .78 * frame_no / max(1, total)), f"Analyzing frame {frame_no:,} of {total:,}")
@@ -800,27 +876,13 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
     stage_times["scoring_and_observations"] = time.perf_counter() - stage_started
 
-    report(.92, "Marking verified makes in review video")
+    report(.92, "Rendering review video")
     stage_started = time.perf_counter()
-    marked_output = output_dir / "annotated_marked.mp4"
-    _add_review_overlays(raw_output, marked_output, shots, player_frames, analyzed_fps, fps, scoring_rim,
-                         label_players=game_mode, court_map=court_map)
-    stage_times["review_overlays"] = time.perf_counter() - stage_started
-    report(.95, "Encoding review video")
-    stage_started = time.perf_counter()
-    annotated = output_dir / "annotated.mp4"
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg:
-        command = [ffmpeg, "-y", "-loglevel", "error", "-i", str(marked_output), "-c:v", "libx264",
-                   "-preset", "fast", "-crf", "22", "-movflags", "+faststart", "-an", str(annotated)]
-        completed = subprocess.run(command, capture_output=True, text=True)
-        if completed.returncode == 0:
-            marked_output.unlink(missing_ok=True)
-        else:
-            marked_output.replace(annotated)
-    else:
-        marked_output.replace(annotated)
-    stage_times["video_encoding"] = time.perf_counter() - stage_started
+    review_encoder = _render_review_video(
+        input_path, output_dir / "annotated.mp4", stride, shots, player_frames, analyzed_fps, fps, scoring_rim,
+        handedness, label_players=game_mode, court_map=court_map,
+        court_polygon=np.rint(np.asarray(court) * (width, height)).astype(np.int32) if court else None)
+    stage_times["review_video"] = time.perf_counter() - stage_started
     if court_vision:
         stage_times["pose_inference_and_readback"] = court_vision.timing_seconds["pose"]
         stage_times["ball_inference_and_readback"] = court_vision.timing_seconds["ball"] + prefetch_ball_seconds
@@ -870,6 +932,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "pose_backend": court_vision.pose_model.backend if court_vision else "mediapipe",
                    "pose_backend_requested": os.environ.get("BALLFORM_POSE_BACKEND", "auto") if game_mode else None,
                    "pose_backend_fallback": pose_fallback,
+                   "side_crop_pose_units": getattr(court_vision.pose_model, "side_units", None) if court_vision else None,
                    "pose_calls_on_torch_fallback": (getattr(court_vision.pose_model, "fallback_calls", 0)
                                                     - pose_fallback_calls_before) if court_vision else None,
                    "frame_pipeline_depth": pipeline_depth,
@@ -911,10 +974,12 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "pose_predict_calls": court_vision.pose_predict_calls if court_vision else None,
                         "pose_images": court_vision.pose_images if court_vision else None,
                         "ball_crop_overlap_frames": court_vision.ball_crop_overlap_frames if court_vision else None,
+                        "parallel_pose_frames": court_vision.parallel_pose_frames if court_vision else None,
                         "prefetched_full_ball_frames": prefetched_frames},
         "performance": {
             "stages_seconds": {name: round(seconds, 2) for name, seconds in stage_times.items()},
             "pipeline_waits": pipeline_waits,
+            "review_video_encoder": review_encoder,
             "pipeline_timing_file": "pipeline_timing.json" if game_mode else None,
             "timing_note": "Pose and ball times are sums of inference work and can overlap each other and adjacent frames; do not add them to wall times. Vision wall time excludes prefetched full-frame detection. GPU timing includes tensor readback.",
         },

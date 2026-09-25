@@ -291,3 +291,36 @@ def test_court_vision_records_confident_rims_each_frame(monkeypatch):
                (10, .88, (.40, .20, .45, .22)), (10, .35, (.7, .3, .72, .31))]
     vision.detect(np.zeros((600, 1000, 3), dtype=np.uint8), 0, 0.0, prefetched_objects=objects)
     assert vision.rims == [(.88, (.40, .20, .45, .22))]
+
+
+def test_last_side_crop_runs_on_the_gpu_unless_side_ball_crops_are_using_it():
+    class Pose:
+        parallel_sides = True
+
+        def __init__(self):
+            self.calls = []
+
+        def exported(self, image, size):
+            return True
+
+        def infer(self, image, size, side=False):
+            self.calls.append((int(image[0, 0, 0]), size, side))
+            return None
+
+    pose = Pose()
+    vision = CourtVision(pose, None, "mps", "moving")
+    crops = [np.full((4, 4, 3), index, dtype=np.uint8) for index in range(3)]
+    try:
+        assert vision._pose_passes(crops) == [None] * 3
+        assert sorted(pose.calls) == [(0, 1280, False), (1, 960, False), (2, 960, True)]
+        pose.calls.clear()
+        vision._pose_passes(crops, gpu_busy=True)
+        assert pose.calls == [(0, 1280, False), (1, 960, False), (2, 960, False)]
+        pose.exported = lambda image, size: False  # PyTorch fallback frames stay on one thread
+        pose.calls.clear()
+        vision._pose_passes(crops)
+        assert pose.calls == [(0, 1280, False), (1, 960, False), (2, 960, False)]
+    finally:
+        vision.close()
+    assert vision.parallel_pose_frames == 1
+    assert vision.pose_predict_calls == 9

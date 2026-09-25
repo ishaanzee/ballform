@@ -195,7 +195,7 @@ function render(id,result){
   const diagnostics=result.diagnostics||{};
   const performance=result.performance||{};
   const stages=performance.stages_seconds||{};
-  const stageText=stages.pose_inference_and_readback!=null?` ${result.vision?.device==='mps'?'GPU pose':'Pose'}: ${stages.pose_inference_and_readback}s; ball detector: ${stages.ball_inference_and_readback}s; rim tracking: ${stages.rim_tracking}s; encoding: ${stages.video_encoding}s. Pose and ball can overlap.`:'';
+  const stageText=stages.pose_inference_and_readback!=null?` ${result.vision?.device==='mps'?'GPU pose':'Pose'}: ${stages.pose_inference_and_readback}s; ball detector: ${stages.ball_inference_and_readback}s; rim tracking: ${stages.rim_tracking}s; review video: ${stages.review_video ?? stages.video_encoding}s. Pose and ball can overlap.`:'';
   const performanceText=performance.elapsed_seconds!=null?`Analysis: ${performance.elapsed_seconds}s · Peak app memory: ${performance.peak_process_memory_mb} MB.${stageText}`:'';
   const requested=result.vision?.pose_model_requested??result.vision?.pose_model_choice;
   const actual=result.vision?.pose_model;

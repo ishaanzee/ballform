@@ -71,7 +71,7 @@ class TorchPose:
     def __init__(self, model, device: str):
         self.model, self.device = model, device
 
-    def infer(self, image: np.ndarray, size: int):
+    def infer(self, image: np.ndarray, size: int, side: bool = False):
         result = self.model.predict(image, imgsz=size, conf=POSE_CONF, iou=POSE_IOU,
                                     max_det=POSE_MAX_DET, device=self.device, verbose=False)[0]
         if result.keypoints is None or result.boxes is None:
@@ -80,6 +80,23 @@ class TorchPose:
         # completed GPU work rather than only asynchronous submission.
         return (result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy(),
                 result.keypoints.data.cpu().numpy())
+
+
+def _session(path: Path, size: int, compute_units: str):
+    import onnxruntime as ort
+
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 4
+    cache_dir = path.parent / "coreml-cache" / path.stem / compute_units
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    session = ort.InferenceSession(str(path), sess_options=options, providers=[
+        ("CoreMLExecutionProvider", {"ModelFormat": "MLProgram", "MLComputeUnits": compute_units,
+                                     "RequireStaticInputShapes": "1",
+                                     "ModelCacheDirectory": str(cache_dir)}),
+        "CPUExecutionProvider"])
+    if "CoreMLExecutionProvider" not in session.get_providers():
+        raise RuntimeError(f"Core ML provider did not initialize for {path.name}.")
+    return session, session.get_inputs()[0].name, EXPORT_SHAPES[size]
 
 
 class CoreMLPose:
@@ -92,30 +109,29 @@ class CoreMLPose:
 
     backend = "coreml"
 
-    def __init__(self, paths: dict[int, Path], fallback: TorchPose, compute_units: str = "CPUAndNeuralEngine"):
-        import onnxruntime as ort
-
+    def __init__(self, paths: dict[int, Path], fallback: TorchPose, compute_units: str = "CPUAndNeuralEngine",
+                 side_units: str | None = None):
         self.fallback = fallback
         self.compute_units = compute_units
         self.fallback_calls = 0
-        self.sessions = {}
-        for size, path in paths.items():
-            options = ort.SessionOptions()
-            options.intra_op_num_threads = 4
-            cache_dir = path.parent / "coreml-cache" / path.stem / compute_units
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            session = ort.InferenceSession(str(path), sess_options=options, providers=[
-                ("CoreMLExecutionProvider", {"ModelFormat": "MLProgram", "MLComputeUnits": compute_units,
-                                             "RequireStaticInputShapes": "1",
-                                             "ModelCacheDirectory": str(cache_dir)}),
-                "CPUExecutionProvider"])
-            if "CoreMLExecutionProvider" not in session.get_providers():
-                raise RuntimeError(f"Core ML provider did not initialize for {path.name}.")
-            self.sessions[size] = (session, session.get_inputs()[0].name, EXPORT_SHAPES[size])
+        self.sessions = {size: _session(path, size, compute_units) for size, path in paths.items()}
+        # Side crops can run on a second compute unit while the full frame is on
+        # this one; they only use the 960 export.
+        self.side_units = side_units if side_units and side_units != compute_units and 960 in paths else None
+        self.side_sessions = {960: _session(paths[960], 960, self.side_units)} if self.side_units else {}
 
-    def infer(self, image: np.ndarray, size: int):
-        height, width = image.shape[:2]
+    @property
+    def parallel_sides(self) -> bool:
+        return bool(self.side_sessions)
+
+    def exported(self, image: np.ndarray, size: int) -> bool:
+        """Whether this image runs on Core ML rather than the PyTorch fallback."""
         entry = self.sessions.get(size)
+        return entry is not None and letterbox_shape(*image.shape[:2], size) == entry[2]
+
+    def infer(self, image: np.ndarray, size: int, side: bool = False):
+        height, width = image.shape[:2]
+        entry = (self.side_sessions if side and self.side_sessions else self.sessions).get(size)
         if entry is None or letterbox_shape(height, width, size) != entry[2]:
             self.fallback_calls += 1
             return self.fallback.infer(image, size)

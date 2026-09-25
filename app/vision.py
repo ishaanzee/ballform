@@ -116,6 +116,8 @@ class CourtVision:
         self.side_crop_ball_candidates: dict[int, int] = {}
         self.side_crop_ball_selected: dict[int, bool] = {}
         self._ball_executor = None
+        self._pose_executor = None
+        self.parallel_pose_frames = 0
         # Full-frame player-in-possession boxes for the last detect() call, and
         # detector players left without a kept pose (occluded, off-court or unposed).
         self.possession: list[tuple[float, tuple[float, float, float, float]]] = []
@@ -125,9 +127,10 @@ class CourtVision:
         self.events: list[tuple[str, float, tuple[float, float, float, float]]] = []
 
     def close(self):
-        if self._ball_executor is not None:
-            self._ball_executor.shutdown(wait=True)
-            self._ball_executor = None
+        for executor in (self._ball_executor, self._pose_executor):
+            if executor is not None:
+                executor.shutdown(wait=True)
+        self._ball_executor = self._pose_executor = None
 
     def _detect_basketball_objects(self, frame):
         started = time.perf_counter()
@@ -144,13 +147,35 @@ class CourtVision:
         finally:
             self.timing_seconds["ball"] += time.perf_counter() - started
 
-    def _predict_pose(self, crop, size):
+    def _timed_pose(self, crop, size, side=False):
         started = time.perf_counter()
-        prepared = self.pose_model.infer(crop, size)
-        self.timing_seconds["pose"] += time.perf_counter() - started
-        self.pose_predict_calls += 1
-        self.pose_images += 1
-        return prepared
+        return self.pose_model.infer(crop, size, side=side), time.perf_counter() - started
+
+    def _pose_passes(self, crops, gpu_busy=False):
+        """Pose for the full view and any side crops, in region order.
+
+        When the pose model has a second compute unit for side crops and that
+        GPU is not already running this frame's side ball crops, the last side
+        crop runs there while the Neural Engine takes the full view and the
+        other crop. Both side crops on the GPU, or any on frames with side ball
+        crops, made the GPU the bottleneck because the ball detector uses it too.
+        """
+        sizes = [self.imgsz] + [960] * (len(crops) - 1)
+        if (len(crops) > 1 and not gpu_busy and getattr(self.pose_model, "parallel_sides", False)
+                and self.pose_model.exported(crops[0], sizes[0])):
+            if self._pose_executor is None:
+                self._pose_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ballform-ane-pose")
+            main = self._pose_executor.submit(
+                lambda: [self._timed_pose(crop, size) for crop, size in zip(crops[:-1], sizes[:-1])])
+            last = self._timed_pose(crops[-1], sizes[-1], side=True)
+            results = [*main.result(), last]
+            self.parallel_pose_frames += 1
+        else:
+            results = [self._timed_pose(crop, size) for crop, size in zip(crops, sizes)]
+        self.timing_seconds["pose"] += sum(seconds for _, seconds in results)
+        self.pose_predict_calls += len(results)
+        self.pose_images += len(results)
+        return [data for data, _ in results]
 
     def detect(self, frame, frame_no, time_s, previous_ball=None, prior_ball=None,
                prefetched_objects=None):
@@ -184,11 +209,11 @@ class CourtVision:
             side_ball_future = self._ball_executor.submit(detect_side_crops)
             self.ball_crop_overlap_frames += 1
         pose_regions = list(regions(width, height, self.tiled))
-        for index, region in enumerate(pose_regions):
+        crops = [frame[y1:y2, x1:x2] for x1, y1, x2, y2 in pose_regions]
+        pose_results = self._pose_passes(crops, gpu_busy=side_ball_future is not None)
+        for index, (region, crop, pose_data) in enumerate(zip(pose_regions, crops, pose_results)):
             x1, y1, x2, y2 = region
-            crop = frame[y1:y2, x1:x2]
             size = self.imgsz if index == 0 else 960
-            pose_data = self._predict_pose(crop, size)
             if pose_data is not None:
                 for box, confidence, keypoints in zip(*pose_data):
                     if keypoints.shape != (17, 3):
