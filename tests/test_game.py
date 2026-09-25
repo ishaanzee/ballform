@@ -115,7 +115,7 @@ def test_five_on_five_selects_ball_owner_and_nearest_opponent():
         "defender_track_id": 6,
     }
     assert game["metrics"]["separation_torso"] == .65
-    assert summary["method"]["version"] == "shot-space-v3-broadcast"
+    assert summary["method"]["version"] == "shot-space-v4-shot-types"
 
 
 def test_crowded_frame_with_indistinguishable_jerseys_withholds_matchup():
@@ -244,3 +244,50 @@ def test_defender_hand_hidden_on_release_frame_is_measured_from_an_adjacent_fram
     assert game["status"] == "measured" and game["score"] == complete["score"]
     assert game["confidence"] < complete["confidence"]
     assert any("nearest frame where it was visible" in item for item in game["evidence"])
+
+
+def attempt_run(shot_type, shooter_track_id=1, jumper=None):
+    shot = ShotResult(1, .5, 1., 2., "unknown", 0., [], {}, shot_type=shot_type,
+                      attempt={"path": "rim_attempt", "shooter_track_id": shooter_track_id})
+    frames = [{"frame": 30, "time_s": 1., "players": [player(.3, track_id=1), player(.45, wrist=(.4, .3), track_id=2)]}]
+    shots = [shot] + ([jumper] if jumper else [])
+    summary = analyze_game_shots(shots, frames, [Detection(30, 1., .33, .3, .9)], 30, 1.)
+    return shot.game, summary
+
+
+def test_rim_attempt_scores_contest_only_and_stays_out_of_the_mean():
+    jumper = ShotResult(2, .5, 1., 2., "unknown", 0., [], {})
+    game, summary = attempt_run("layup", jumper=jumper)
+    contested, _ = run([player(.3), player(.45, wrist=(.4, .3))])
+    assert game["players"]["shooter_track_id"] == 1 and game["players"]["defender_track_id"] == 2
+    assert game["metrics"]["separation_torso"] is None and "separation" not in game["components"]
+    assert game["score"] == game["components"]["contest_clearance"]
+    assert game["metrics"]["contest_clearance_torso"] == contested["metrics"]["contest_clearance_torso"]
+    assert game["score_basis"] == "contest clearance only (rim attempt)"
+    assert summary["contest_only_scored_shots"] == 1
+    assert summary["mean_score"] == jumper.game["score"]
+
+
+def test_attempt_shooter_is_the_named_track_not_the_raised_hand():
+    # P2's raised hand is nearer the ball, but the attempt names P1.
+    game, _ = attempt_run("jump shot")
+    assert game["players"]["shooter_track_id"] == 1
+    assert game["metrics"]["separation_torso"] is not None
+    assert "last hand contact before the attempt" in " ".join(game["evidence"])
+
+
+@pytest.mark.parametrize("track_id", [None, 9])
+def test_attempt_without_a_visible_shooter_is_withheld(track_id):
+    game, _ = attempt_run("layup", shooter_track_id=track_id)
+    assert game["score"] is None and game["players"]["shooter_track_id"] is None
+    assert "Shooter identity withheld" in game["evidence"][0]
+
+
+def test_rim_attempt_reports_separation_at_the_gather_not_the_change():
+    shot = ShotResult(1, .5, 1., 2., "unknown", 0., [], {}, shot_type="dunk",
+                      attempt={"path": "rim_attempt", "shooter_track_id": 1})
+    frames = [{"frame": 15, "time_s": .5, "players": [player(.3, time=.5, track_id=1), player(.8, time=.5, track_id=2)]},
+              {"frame": 30, "time_s": 1., "players": [player(.3, track_id=1), player(.45, wrist=(.4, .3), track_id=2)]}]
+    analyze_game_shots([shot], frames, [Detection(30, 1., .33, .3, .9)], 30, 1.)
+    assert shot.game["metrics"]["gather_separation_torso"] == 2.5
+    assert shot.game["metrics"]["separation_change_torso"] is None

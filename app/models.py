@@ -37,6 +37,11 @@ class ShotResult:
     # Source-video frame where the outcome was observed.  It is deliberately
     # separate from end_s: the visible flight may continue after a rim event.
     outcome_frame: int | None = None
+    # Game mode: "jump shot", "floater", "layup", "dunk", "layup or dunk" or "tip".
+    shot_type: str | None = None
+    # Game mode: how the attempt was found (path, contact frame, last-handler
+    # shooter track) for shots not established by raised-hand release contact.
+    attempt: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

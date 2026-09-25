@@ -11,6 +11,7 @@ from statistics import mean
 import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
+from app.shots import RIM_TYPES
 
 LIMITATIONS = [
     "Projected image-plane distances in shooter torso lengths; camera angle and depth can hide separation.",
@@ -19,12 +20,13 @@ LIMITATIONS = [
     "No court calibration: shot distance, defender depth, possession outcome and true 3D spacing are not measured.",
 ]
 METHOD = {
-    "version": "shot-space-v3-broadcast",
+    "version": "shot-space-v4-shot-types",
     "label": "Shot-space score",
     "formula": "0.65 × separation component + 0.35 × contest-clearance component",
     "separation_component": "100 × clamp((projected hip separation / shooter torso − 0.5) / 2.5, 0, 1)",
     "contest_component": "100 × clamp((nearest selected-defender wrist to ball / shooter torso − 0.15) / 1.35, 0, 1)",
-    "matchup_selection": "Shooter: raised-hand release contact supported by recent tracked possession when available. Defender: nearby opposing raised-hand contest first; otherwise nearest projected opposing hip centre.",
+    "matchup_selection": "Shooter: raised-hand release contact supported by recent tracked possession when available; for layups, dunks, tips and hidden-release jump shots, the last player in hand contact, withheld if the decoded ball handler disagrees. Defender: nearby opposing raised-hand contest first; otherwise nearest projected opposing hip centre.",
+    "rim_attempts": "Layups, dunks and tips score contest clearance only (100 × the contest component), measured at the last hand contact. Separation at the gather (median 0.3–0.7 s before that contact) is reported but not scored, and these scores are left out of the mean.",
     "weights": {"separation": 0.65, "contest_clearance": 0.35},
     "confidence_note": "Evidence confidence combines landmark visibility, ball confidence, timing, ball-owner margin, jersey-group separation and defender-selection margin. It is heuristic reliability, not a calibrated probability.",
     "note": "Thresholds are transparent heuristics, not calibrated against professional game outcomes. Separation change is descriptive and not scored.",
@@ -325,35 +327,50 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         # A background player's lowered hand can overlap an airborne ball in the
         # image. Shooter candidates need a raised release hand; prior possession
         # provides additional identity evidence when hands overlap at release.
-        release_distances = [min((math.dist(ball_point, wrist) for side in ('left', 'right')
-                                 if (wrist := _raised_wrist(pose, side, aspect_ratio)) is not None),
-                                default=math.inf) for pose in players]
-        ranked_owners = sorted((distance, index) for index, distance in enumerate(release_distances)
-                               if math.isfinite(distance) and bodies[index] is not None)
-        if not ranked_owners:
-            evidence.append("No visible player wrist could be associated with the ball.")
-            continue
-        shooter_distance, shooter = ranked_owners[0]
-        votes = _possession_votes(player_frames, balls, shot.release_s, aspect_ratio)
-        ordered_votes = sorted(votes.items(), key=lambda item: item[1], reverse=True)
-        temporal_owner = None
-        if ordered_votes and ordered_votes[0][1] >= 2 and (len(ordered_votes) == 1 or ordered_votes[0][1] >= 1.5*ordered_votes[1][1]):
-            temporal_owner = next((index for _, index in ranked_owners if players[index].track_id == ordered_votes[0][0]), None)
-        if temporal_owner is not None:
-            shooter = temporal_owner
-            shooter_distance = release_distances[shooter]
-        shooter_body = bodies[shooter]
-        torso = shooter_body[1]
-        second_distance = min((d for d, i in ranked_owners if i != shooter), default=math.inf)
-        ownership_margin = (second_distance - shooter_distance) / torso
-        hidden_threat = any(
-            bodies[index] is not None and not math.isfinite(distances[index])
-            and math.dist(bodies[index][0], ball_point) / torso < 1.25
-            for index in range(len(players)) if index != shooter
-        )
-        if shooter_distance / torso > .9 or (ownership_margin < .3 and temporal_owner is None) or hidden_threat:
-            evidence.append("Ball-to-wrist association is ambiguous; shooter identity withheld.")
-            continue
+        attempt = shot.attempt or {}
+        if attempt:
+            # Found without raised-hand release contact (app/shots.py): the
+            # attempt names the last player in hand contact, or withholds one.
+            shooter = next((index for index, pose in enumerate(players)
+                            if attempt.get("shooter_track_id") is not None
+                            and pose.track_id == attempt["shooter_track_id"] and bodies[index] is not None), None)
+            if shooter is None:
+                evidence.append("Shooter identity withheld: the last player in hand contact was not visible at the attempt, "
+                                "or the decoded ball handler disagreed.")
+                continue
+            shooter_body = bodies[shooter]
+            torso = shooter_body[1]
+            ownership_margin, temporal_owner = .3, None
+        else:
+            release_distances = [min((math.dist(ball_point, wrist) for side in ('left', 'right')
+                                     if (wrist := _raised_wrist(pose, side, aspect_ratio)) is not None),
+                                    default=math.inf) for pose in players]
+            ranked_owners = sorted((distance, index) for index, distance in enumerate(release_distances)
+                                   if math.isfinite(distance) and bodies[index] is not None)
+            if not ranked_owners:
+                evidence.append("No visible player wrist could be associated with the ball.")
+                continue
+            shooter_distance, shooter = ranked_owners[0]
+            votes = _possession_votes(player_frames, balls, shot.release_s, aspect_ratio)
+            ordered_votes = sorted(votes.items(), key=lambda item: item[1], reverse=True)
+            temporal_owner = None
+            if ordered_votes and ordered_votes[0][1] >= 2 and (len(ordered_votes) == 1 or ordered_votes[0][1] >= 1.5*ordered_votes[1][1]):
+                temporal_owner = next((index for _, index in ranked_owners if players[index].track_id == ordered_votes[0][0]), None)
+            if temporal_owner is not None:
+                shooter = temporal_owner
+                shooter_distance = release_distances[shooter]
+            shooter_body = bodies[shooter]
+            torso = shooter_body[1]
+            second_distance = min((d for d, i in ranked_owners if i != shooter), default=math.inf)
+            ownership_margin = (second_distance - shooter_distance) / torso
+            hidden_threat = any(
+                bodies[index] is not None and not math.isfinite(distances[index])
+                and math.dist(bodies[index][0], ball_point) / torso < 1.25
+                for index in range(len(players)) if index != shooter
+            )
+            if shooter_distance / torso > .9 or (ownership_margin < .3 and temporal_owner is None) or hidden_threat:
+                evidence.append("Ball-to-wrist association is ambiguous; shooter identity withheld.")
+                continue
         shooter_pose = players[shooter]
         if temporal_owner is not None:
             evidence.append(f"Shooter identity supported by {votes[shooter_pose.track_id]} preceding hand–ball observations.")
@@ -414,17 +431,31 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
                 continue
         defender_pose = players[defender]
         game["players"]["defender_track_id"] = defender_pose.track_id
-        game["metrics"]["separation_torso"] = round(separation, 3)
+        # At the rim, separation at the finish says little about the shot; the
+        # contest is scored and separation is reported at the gather instead.
+        rim_attempt = shot.shot_type in RIM_TYPES
+        if rim_attempt:
+            game["metrics"]["separation_torso"] = None
+            game["metrics"]["gather_separation_torso"] = None
+            game["score_basis"] = "contest clearance only (rim attempt)"
+        else:
+            game["metrics"]["separation_torso"] = round(separation, 3)
+            game["components"]["separation"] = _component(separation, .5, 2.5)
         game["metrics"]["defender_selection_margin_torso"] = round(selection_margin, 3)
-        game["components"]["separation"] = _component(separation, .5, 2.5)
         evidence.append(
             f"{len(players)} players visible. Ball carrier/shooter"
-            f"{f' P{shooter_pose.track_id}' if shooter_pose.track_id else ''} associated by raised-hand ball contact; "
+            f"{f' P{shooter_pose.track_id}' if shooter_pose.track_id else ''} associated by "
+            f"{'the last hand contact before the attempt' if attempt else 'raised-hand ball contact'}; "
             f"defender{f' P{defender_pose.track_id}' if defender_pose.track_id else ''} selected as {selection_method}."
         )
         prior_pair = _separation_before(player_frames, near, shooter_pose, defender_pose,
                                         aspect_ratio, torso)
-        if prior_pair is not None:
+        if prior_pair is not None and rim_attempt:
+            before, elapsed = prior_pair
+            game["metrics"]["gather_separation_torso"] = round(before, 3)
+            evidence.append(f"Separation at the gather is the median over 0.3–0.7 s before the last hand contact "
+                            f"(median {elapsed:.2f} s); it is reported but not scored.")
+        elif prior_pair is not None:
             before, elapsed = prior_pair
             game["metrics"]["separation_change_torso"] = round(separation - before, 3)
             evidence.append(f"Separation change is measured against the median over 0.3–0.7 s before release "
@@ -441,10 +472,10 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
             if visible:
                 clearance = min(visible) / torso
                 game["metrics"]["visible_hand_clearance_torso"] = round(clearance, 3)
-                base = .65 * game["components"]["separation"]
+                base, weight = (0., 1.) if rim_attempt else (.65 * game["components"]["separation"], .35)
                 game["score_range"] = {
                     "lower": round(base, 1),
-                    "upper": round(base + .35 * _component(clearance, .15, 1.35), 1),
+                    "upper": round(base + weight * _component(clearance, .15, 1.35), 1),
                     "reason": "One defender wrist is unobserved. Range covers all possible positions of that hand, conditional on the measured separation and visible hand; it is not a statistical confidence interval.",
                 }
                 game["status"] = "partial"
@@ -452,10 +483,10 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         clearance = min(hand[0] for hand in hands) / torso
         game["metrics"]["contest_clearance_torso"] = round(clearance, 3)
         game["components"]["contest_clearance"] = _component(clearance, .15, 1.35)
-        game["score"] = round(
+        game["score"] = (game["components"]["contest_clearance"] if rim_attempt else round(
             .65 * game["components"]["separation"]
             + .35 * game["components"]["contest_clearance"], 1
-        )
+        ))
         required = [
             pose.landmarks[name][2]
             for pose in (shooter_pose, defender_pose)
@@ -465,10 +496,12 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         closest_wrist = min(
             (index for index, wrist in enumerate(wrists[shooter]) if wrist is not None),
             key=lambda index: math.dist(ball_point, wrists[shooter][index]),
+            default=None,
         )
-        required.append(shooter_pose.landmarks[
-            ("left", "right")[closest_wrist] + "_wrist"
-        ][2])
+        if closest_wrist is not None:
+            required.append(shooter_pose.landmarks[
+                ("left", "right")[closest_wrist] + "_wrist"
+            ][2])
         ownership_factor = .7 + .3 * min(1., max(0., (ownership_margin - .3) / .7))
         defender_factor = .72 + .28 * min(1., max(0., selection_margin / .6))
         timing_factor = ((1 - abs(near["time_s"] - shot.release_s))
@@ -479,15 +512,24 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         )
         game["status"] = "measured"
         evidence.append(
+            "Selected-defender wrist-to-ball clearance measured in the image plane at the last hand contact."
+            if rim_attempt else
             "Hip-centre separation and selected-defender wrist-to-ball clearance measured in the image plane."
         )
-        if prior_pair is None:
+        if prior_pair is None and rim_attempt:
+            evidence.append("Separation at the gather unavailable: preceding observations or player identity "
+                            "continuity were insufficient.")
+        elif prior_pair is None:
             evidence.append(
                 "Separation change unavailable: preceding observations or player identity continuity were insufficient."
             )
-    scores = [shot.game["score"] for shot in shots if shot.game["score"] is not None]
+    # Contest-only rim scores are on a different basis; keep them out of the mean.
+    scores = [shot.game["score"] for shot in shots
+              if shot.game["score"] is not None and shot.shot_type not in RIM_TYPES]
+    rim_scores = sum(shot.game["score"] is not None and shot.shot_type in RIM_TYPES for shot in shots)
     return {
-        "total_shots": len(shots), "scored_shots": len(scores),
+        "total_shots": len(shots), "scored_shots": len(scores) + rim_scores,
+        "contest_only_scored_shots": rim_scores,
         "mean_score": round(mean(scores), 1) if scores else None,
         "method": METHOD, "limitations": list(LIMITATIONS),
     }

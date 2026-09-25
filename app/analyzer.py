@@ -24,6 +24,7 @@ from ultralytics import YOLO
 from app.models import Detection, PoseFrame
 from app.game import analyze_game_shots
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
+from app.shots import find_attempts
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
@@ -721,8 +722,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             for segment in segments:
                 for frame_data, decision in zip(segment, decode_handlers(segment, width / height)):
                     frame_data["handler"] = decision
-        # Keep measured inputs for scoring review; handler is a separate, inferred
-        # visual-annotation decision and is never fed back into shot scoring.
+        # Keep measured inputs for scoring review. The inferred handler only
+        # cross-checks the shooter of attempts found without raised-hand release
+        # contact (app/shots.py); it never creates or removes a shot.
         (output_dir / "observations.json").write_text(json.dumps({
             "fps": fps, "width": width, "height": height, "cuts": cut_frames,
             "balls": [asdict(b) for b in observed_balls],
@@ -754,6 +756,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         segment_poses = [p for p in poses if start <= p.frame < end]
         segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
                                      aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
+        if game_mode:
+            segment_shots = find_attempts(segment_shots, segment_balls,
+                                          [f for f in player_frames if start <= f["frame"] < end],
+                                          fps, scoring_rim, width / height, normalized_flow)
         for shot in segment_shots:
             if scoring_rim is None:
                 shot.evidence = ["Outcome unavailable: no rim was detected or marked."
@@ -913,8 +919,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             result["limitations"].append("The rim was found automatically by the basketball detector on each frame. Outcomes pause where no hoop is detected and restart after camera cuts; if the wrong hoop is chosen, mark the rim to override.")
         elif profile == "moving" and rim_marked:
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; review every result.")
-        result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
-        result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession or scoring evidence.")
+        result["limitations"].append("Jump shots need raised-hand ball contact and an arc rising above the release shoulders, or the detector's jump-shot class with an arc when the release is hidden. Layups, dunks, tips and putbacks need a hand contact followed by the ball reaching the basket (a ball-in-basket detection or the rim's area), or the detector's layup-dunk class with the ball rising above the player's head. Shot types come from the detector classes and image-plane geometry; the layup, dunk, tip and floater rules are checked only on synthetic tracks so far. Attempts whose ball is never seen near the basket, fully occluded releases and flat arcs may be omitted; a lob pass can be called a jump shot, and passes and slow-motion edits need manual review.")
+        result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession; they only cross-check the shooter of layups, dunks, tips and hidden-release jump shots.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
     return result

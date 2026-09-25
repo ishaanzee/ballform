@@ -83,6 +83,21 @@ The shot-space score is deliberately transparent:
 
 Separation is projected hip-to-hip distance in shooter torso lengths. Contest clearance is projected ball-to-defender-wrist distance in the same units. Separation change is reported as context, not secretly folded into the grade. It compares the release separation with the median over 0.3–0.7s before release. It relies on persistent player identities, so it needs both players tracked on at least half the frames through release. Each earlier frame is rescaled by the camera's zoom, estimated from every player seen in both frames. Frames zoomed by more than about 20% are skipped. One player crouching or turning no longer voids it, and neither does a camera pan. Each defender hand is measured on the frame nearest release, within 0.1s, where both that hand and the ball are visible. A hand briefly hidden on the release frame therefore no longer turns the contest into a range, and the confidence drops with the time offset. Only a hand unseen for that whole window leaves the score as a range with "other hand unknown". The score is a 0–100 review heuristic, not make probability, expected points, or a professional player grade. Missing evidence stays missing; it does not become a zero.
 
+### which shots game mode finds
+
+Each game shot is labelled jump shot, floater, layup, dunk, "layup or dunk" or tip, and its evidence says why (`app/shots.py`).
+
+- **Jump shots** still need a ball arc, raised-hand ball contact at release and a flight well above the release shoulders. When the release itself is hidden, the basketball detector's jump-shot class plus a supported arc also counts. The release time is then the last visible hand contact, and the evidence says so.
+- **Floaters** are arc shots where the detector's layup-dunk class is at least as confident as its jump-shot class around release.
+- **Layups, dunks, tips and putbacks** need a player's hand on the ball, then the ball reaching the basket within 1.2 s. "Reaching the basket" means a confident ball-in-basket detection, or the ball entering the rim's area when a rim exists. A dunk's last contact is at or above the basket. A tip is a raised-hand touch at the rim after the previous attempt got there. Without a rim or a basket detection, the detector's layup-dunk class plus the ball leaving the hands upward, above the head, gives "layup or dunk".
+- **One attempt is one hand contact followed by the ball reaching the basket.** A ball rattling on the rim, or a rebound, has no new contact, so it belongs to the previous shot. A dribble has to leave the hands upward without bouncing. A pass that never reaches the basket is not a shot, and neither is a defender's hand on the ball mid-flight away from the rim.
+- **The shooter** for these attempts is the last player in unambiguous hand contact. It is checked against the decoded ball handler, and withheld when the two disagree (except for tips).
+- **Ball-in-basket detections are never a make on their own.** The class also fired at 0.90 on a ball sitting on the rim during a miss. With a rim, the outcome uses the same rim-plane crossing and net-motion rules as jump shots. A ball-in-basket detection plus net motion can raise an otherwise-unknown rim attempt to "likely made".
+
+**Scoring rim attempts.** Separation at the finish says little about a dunk, so layups, dunks and tips get a contest-only score: 100 × the contest-clearance component, measured at the last hand contact. Separation at the gather (the median over 0.3–0.7 s before that contact) is reported but not scored. These scores are labelled in the report and kept out of the mean shot-space score. Hidden-release jump shots use the normal score.
+
+**Validation so far.** On the four one-jump-shot test clips, each still gives exactly its one jump shot, with the same release, shooter, defender, score and outcome. The new paths are covered by unit tests on synthetic tracks: layup, dunk, tip, putback, rim rattle, rebound, dribble, pass, mid-flight contest and hidden release. They have not yet been checked on real layup, dunk, floater or putback footage, so treat the thresholds as untuned.
+
 Form mode reports 2D image-plane estimates such as release timing, launch angle, elbow angle, and upper-arm elevation. These are good for comparing your own reps from the same setup. They are not calibrated 3D biomechanics.
 
 ## phone upload, still local
@@ -150,7 +165,7 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 
 ## code map
 
-`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/game.py` handles shooter/defender association and the shot-space score. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
+`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/shots.py` adds hidden-release jump shots and rim attempts and labels shot types. `app/game.py` handles shooter/defender association and the shot-space score. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
 
 Run the checks with:
 
