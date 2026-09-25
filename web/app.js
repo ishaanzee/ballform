@@ -184,7 +184,7 @@ function render(id,result){
   const game=result.mode==='one_on_one';
   $('#reportMode').textContent=game?`GAME REVIEW · ${(result.camera_profile||'AUTO').toUpperCase()}`:`SHOOTING FORM · ${(result.handedness||$('#handedness').value).toUpperCase()} HAND`;
   $('#gameHelp').classList.toggle('hidden',!game);
-  if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.'+(method?.formula?` Score: ${method.formula}.`:'');}
+  if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. '+(result.court_calibration?'Torso-length distances are projected in the image and normalized to the shooter’s torso length; metrics in feet are measured on the calibrated floor. Compare torso-length metrics only across clips with similar camera angles.':'Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.')+(method?.formula?` Score: ${method.formula}.`:'');}
   const made=result.shots.filter(s=>s.outcome==='made'||s.outcome==='likely made').length;
   // Make/miss is unavailable when no rim was detected or marked. Reports saved before
   // rims were detected automatically have no rim_source; they keep the old rule.
