@@ -190,3 +190,11 @@ def test_landmarks_parse_from_json():
 def test_general_position():
     assert general_position([(0, 0), (4, 0), (0, 4), (4, 4)])
     assert not general_position([(0, 0), (10, 0), (20, 0), (30, 0), (0, 5)])
+
+
+def test_web_diagram_template_matches_the_python_template():
+    import json
+    from pathlib import Path
+    published = json.loads((Path(__file__).parent.parent / "web" / "court-template.json").read_text())
+    assert published == json.loads(json.dumps(template_json())), (
+        "Regenerate web/court-template.json from app.court.template_json().")

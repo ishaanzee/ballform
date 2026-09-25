@@ -38,11 +38,20 @@
 
       <div id="markStep" class="hidden">
         <div class="step"><b>02</b><span>MARK THE VIEW</span><small id="markHelp">The rim is found automatically for make/miss. Drag a snug box around it only if it is missed.</small></div>
-        <div class="actions"><button id="markRim" class="ghost" type="button">Mark rim (optional)</button><button id="markCourt" class="ghost hidden" type="button">Mark playing area (optional, click 3–8 corners)</button></div>
+        <div class="actions"><button id="markRim" class="ghost" type="button">Mark rim (optional)</button><button id="markCourt" class="ghost hidden" type="button">Mark playing area (optional, click 3–8 corners)</button><button id="markLandmarks" class="ghost hidden" type="button">Calibrate court (optional, for feet)</button></div>
         <div class="preview-wrap">
           <video id="preview" muted playsinline></video>
           <canvas id="rimCanvas"></canvas>
           <div class="scrub"><input id="scrubber" aria-label="Preview frame" type="range" min="0" max="100" value="25"><span>Move to a clear rim frame</span></div>
+        </div>
+        <div id="courtPanel" class="court-panel hidden" aria-label="Court calibration">
+          <svg id="courtDiagram" class="court-diagram" role="group" aria-label="Half-court diagram: pick a landmark, then click it on the video"></svg>
+          <div class="court-side">
+            <label>Court lines<select id="courtStandard"><option value="nba">NBA</option><option value="fiba">FIBA</option><option value="ncaa">NCAA</option><option value="nfhs">High school (NFHS)</option></select></label>
+            <p>Scrub to a frame where the floor lines are clear. Pick a landmark on the diagram, then click the same spot on the video, where the painted lines meet. Mark 5 or more spread over the floor, including one far from the basket such as half court.</p>
+            <p id="courtStatus" role="status" aria-live="polite"></p>
+            <div class="court-buttons"><button id="courtReturn" class="ghost hidden" type="button">Return to marked frame</button><button id="courtClear" class="ghost" type="button">Clear court marks</button></div>
+          </div>
         </div>
         <div class="actions">
           <button id="clear" class="ghost" type="button">Clear current selection</button>
@@ -65,6 +74,7 @@
       <div class="summary" id="summary"></div>
       <p id="visionSummary" class="report-note"></p>
       <p id="speedNote" class="report-note hidden"></p>
+      <p id="courtNote" class="report-note hidden"></p>
       <p id="gameHelp" class="report-note hidden">Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.</p>
       <video id="annotated" controls playsinline></video>
       <div id="shots"></div>
@@ -73,5 +83,6 @@
   </main>
   <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
   <script src="/assets/app.js?v=game-models-shooter-overlay-2"></script>
+  <script src="/assets/court.js?v=court-calibration-1"></script>
 </body>
 </html>
