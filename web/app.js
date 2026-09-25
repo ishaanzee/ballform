@@ -12,14 +12,14 @@ function updateSettings() {
   const game = $('#analysisMode').value === 'one_on_one';
   $('#handedness').disabled = game;
   $('#poseModel').disabled = !game;
-  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose the elevated broadcast camera. Players are told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
+  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
   const court = courtAllowed();
   $('#markCourt').classList.toggle('hidden', !court);
   if (!court) { courtPoints = []; if (marking === 'court') marking = 'rim'; drawBox(); }
-  const courtHelp = court ? ' Optional: with this fixed camera you can also mark the playing area to leave benches out.' : '';
-  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking.' : 'No marking needed: players are told apart from referees and spectators automatically. For outcomes, choose Stationary courtside or Moving broadcast + tracked rim.' + courtHelp) : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
+  const courtHelp = court ? ' Optional: with this fixed camera you can also mark the playing area to leave spectators and benches out.' : '';
+  $('#markHelp').textContent = game ? (moving ? 'Tracked rim: scrub to any frame where the hoop is clear, then drag a snug box around it. The tracker works forward and backward from that timestamp; cuts stop outcome tracking.' : 'For outcomes, mark the rim with Stationary courtside, or choose Moving broadcast + tracked rim.' + courtHelp) : 'Drag a snug box around the rim for stationary-camera outcome estimates.';
 }
 // A drawn playing area is fixed on screen, so it only fits cameras that do not pan.
 function courtAllowed() {
@@ -27,7 +27,7 @@ function courtAllowed() {
 }
 $('#analysisMode').onchange = updateSettings;
 $('#cameraProfile').onchange = () => {
-  if (['broadcast','elevated','moving'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
+  if (['elevated','moving'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
   updateSettings();
 };
 $('#markRim').onclick = () => {marking='rim';};
@@ -180,6 +180,8 @@ function render(id,result){
   $('#gameHelp').classList.toggle('hidden',!game);
   if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.'+(method?.formula?` Score: ${method.formula}.`:'');}
   const made=result.shots.filter(s=>s.outcome==='made'||s.outcome==='likely made').length;
+  // Elevated game views withhold make/miss (a fixed rim box cannot follow the camera);
+  // 'broadcast' keeps reports saved before that profile was removed rendering the same way.
   const movingView=game&&['broadcast','elevated'].includes(result.camera_profile);
   const scored=result.shots.filter(s=>s.game?.score!=null);
   const diagnostics=result.diagnostics||{};

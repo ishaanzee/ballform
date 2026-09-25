@@ -601,13 +601,13 @@ def _applied_court(court, mode: str, profile: str) -> tuple[list | None, str | N
 
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
-                  mode: str = "form", handedness: str = "right", camera: str = "auto",
+                  mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
                   rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
-    profile = camera_profile(camera, mode)
+    profile = camera_profile(camera)
     court, court_ignored = _applied_court(validate_court(court), mode, profile)
     game_mode = mode == "one_on_one"
     stage_times = {}
@@ -809,10 +809,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         for f in player_frames],
         }, default=lambda value: float(value)))
     normalized_flow = _normalize_net_flow(flows)
-    # Fixed broadcast boxes remain unsafe. Moving mode instead uses a CSRT box
+    # A fixed rim box is unsafe on an elevated game view. Moving mode instead uses a CSRT box
     # at each source frame and stops supplying it after a cut or tracking loss.
     scoring_rim: RimInput = (tracked_rims if profile == "moving" and tracked_rims else
-                             None if game_mode and profile in {"broadcast", "elevated"} else rim)
+                             None if game_mode and profile == "elevated" else rim)
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
@@ -821,8 +821,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
                                      aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
         for shot in segment_shots:
-            if game_mode and profile in {"broadcast", "elevated"}:
-                shot.evidence = ["Outcome unavailable: elevated/moving footage has no tracked rim."
+            if game_mode and profile == "elevated":
+                shot.evidence = ["Outcome unavailable: the elevated profile does not track a rim; use moving (with a marked rim) or courtside."
                                  if item == "Outcome unavailable because the rim was not marked" else item
                                  for item in shot.evidence]
             shot.number = len(shots) + 1
@@ -918,7 +918,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "prefetch_ball_fallback": prefetch_detector.fallback_reason if prefetch_detector else None,
                    "input_size": court_vision.imgsz if court_vision else 640,
                    "ball_input_size": 640 if isinstance(ball_model, BasketballDetector) else (court_vision.imgsz if court_vision else 640),
-                   "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile in {"broadcast", "moving"}),
+                   "broadcast_role_filter": bool(isinstance(ball_model, BasketballDetector) and profile == "moving"),
                    "overlapping_crops": bool(court_vision and court_vision.tiled),
                    "ball_crops_overlapped_with_pose": bool(court_vision and court_vision.ball_crop_overlap_frames)},
         "right_handed": handedness == "right", "shots": [shot.to_dict() for shot in shots],
@@ -965,10 +965,12 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         result["limitations"].extend(game_summary.get("limitations", []))
         if court_ignored:
             result["limitations"].append(court_ignored)
+        elif court is None and profile == "moving":
+            result["limitations"].append("No playing-area polygon applied. The basketball detector separates players from referees and spectators and can make mistakes.")
         elif court is None:
-            result["limitations"].append("No playing-area polygon applied. The basketball detector separates players from referees and spectators and can make mistakes; with a fixed camera (elevated or courtside), marking the playing area can additionally exclude benches.")
-        if profile in {"broadcast", "elevated"}:
-            result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip.")
+            result["limitations"].append("No playing-area polygon applied. With this fixed camera, spectators and bench players in view can be counted as players; mark the playing area to exclude them.")
+        if profile == "elevated":
+            result["limitations"].append("Elevated camera profile is not court calibration. Pans and zooms affect projected trajectories and spacing. Make/miss is withheld because a fixed rim box cannot follow a moving camera; use courtside for a stationary clip, or moving with a marked rim for a panning one.")
         if profile == "moving":
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; mark the rim on any clear frame and review every result.")
         result["limitations"].append("Game shots require raised-hand ball contact and an arc rising above the release shoulders. Fully occluded releases, flat arcs and underhand shots may be omitted; passes and slow-motion edits need manual review.")
@@ -980,7 +982,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
 
 def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
-                  mode: str = "form", handedness: str = "right", camera: str = "auto",
+                  mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
                   rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
     """Run analysis and append elapsed time plus sampled peak process memory."""

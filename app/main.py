@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyzer import ROOT, analyze_video, preload_game_models
-from app.vision import CAMERAS, validate_court
+from app.vision import CAMERA_ERROR, CAMERAS, validate_court
 
 
 def _preload() -> None:
@@ -53,7 +53,7 @@ def _update(job_id: str, **values) -> None:
 
 
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
-         mode: str = "form", handedness: str = "right", camera: str = "auto", court=None,
+         mode: str = "form", handedness: str = "right", camera: str = "courtside", court=None,
          rim_frame: int | None = None, rim_time_s: float | None = None,
          pose_model: str = "yolo26s-pose") -> None:
     try:
@@ -98,7 +98,7 @@ def index() -> FileResponse:
 @app.post("/api/jobs", status_code=202)
 async def create_job(background: BackgroundTasks, video: UploadFile = File(...), rim: str | None = Form(None),
                      mode: str = Form("form"), handedness: str = Form("right"),
-                     camera: str = Form("auto"), court: str | None = Form(None),
+                     camera: str = Form("courtside"), court: str | None = Form(None),
                      rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
                      pose_model: str = Form("yolo26s-pose")) -> dict:
     if mode not in {"form", "one_on_one"}:
@@ -106,7 +106,7 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
     if camera not in CAMERAS:
-        raise HTTPException(422, "Camera must be auto, broadcast, elevated, moving or courtside.")
+        raise HTTPException(422, CAMERA_ERROR)
     if pose_model not in {"yolo26m-pose", "yolo26s-pose"}:
         raise HTTPException(422, "Pose model must be yolo26m-pose or yolo26s-pose.")
     try:

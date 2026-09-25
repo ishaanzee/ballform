@@ -17,7 +17,7 @@ COCO_TO_MP = {0: 0, 5: 11, 6: 12, 7: 13, 8: 14, 9: 15, 10: 16,
 NAMES = {0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow",
          14: "right_elbow", 15: "left_wrist", 16: "right_wrist", 23: "left_hip",
          24: "right_hip", 25: "left_knee", 26: "right_knee", 27: "left_ankle", 28: "right_ankle"}
-CAMERAS = {"auto", "broadcast", "elevated", "courtside", "moving"}
+CAMERAS = {"moving", "elevated", "courtside"}
 # A playing-area polygon is fixed in image coordinates, so it only describes the
 # court for cameras that do not pan. Broadcast views rely on the detector's
 # player/referee classes instead.
@@ -27,10 +27,14 @@ COURT_PROFILES = {"elevated", "courtside"}
 COURT_MARGIN = .25
 
 
-def camera_profile(camera: str, mode: str) -> str:
+CAMERA_ERROR = ("Camera must be moving, elevated or courtside. The auto and broadcast profiles were removed: "
+                "use moving (with a marked rim) for broadcast footage.")
+
+
+def camera_profile(camera: str) -> str:
     if camera not in CAMERAS:
-        raise ValueError("Unknown camera profile")
-    return ("broadcast" if mode == "one_on_one" else "courtside") if camera == "auto" else camera
+        raise ValueError(CAMERA_ERROR)
+    return camera
 
 
 def validate_court(points):
@@ -99,7 +103,7 @@ class CourtVision:
     def __init__(self, pose_model, ball_model, device: str, profile: str, court=None):
         self.pose_model, self.ball_model = pose_model, ball_model
         self.device, self.profile, self.court = device, profile, court
-        self.tiled = profile in {"broadcast", "elevated", "moving"}
+        self.tiled = profile in {"elevated", "moving"}
         self.imgsz = 1280 if self.tiled else 960
         self.raw_people = 0
         self.timing_seconds = {"total": 0.0, "pose": 0.0, "ball": 0.0}
@@ -153,7 +157,7 @@ class CourtVision:
         self.possession = [(conf, box) for cls, conf, box in basketball_objects or []
                            if cls == POSSESSION_CLASS and conf >= .3]
         self.unposed = []
-        if (basketball_objects is not None and self.profile in {"broadcast", "moving"}
+        if (basketball_objects is not None and self.profile == "moving"
                 and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in basketball_objects)):
             self.raw_people = 0
             self.timing_seconds["total"] += time.perf_counter() - started
@@ -223,7 +227,7 @@ class CourtVision:
         people = merge_people(candidates)
         self.raw_people = len(people)
         people = [p for p in people if on_court(p, self.court, width, height)]
-        if basketball_objects is not None and self.profile in {"broadcast", "moving"}:
+        if basketball_objects is not None and self.profile == "moving":
             # The basketball-trained detector distinguishes on-court players from
             # officials/crowd. Pose alone cannot make that distinction.
             people = players_only(people, basketball_objects)

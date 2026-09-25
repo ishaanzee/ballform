@@ -19,7 +19,7 @@ def test_upload_forwards_game_options(client, monkeypatch):
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video", "video/mp4")},
                            data={"mode": "one_on_one", "handedness": "left"})
     assert response.status_code == 202
-    assert calls[0][0][3:] == ("one_on_one", "left", "auto", None)
+    assert calls[0][0][3:] == ("one_on_one", "left", "courtside", None)
     assert calls[0][0][1].read_bytes() == b"video"
     assert calls[0][1]["pose_model"] == "yolo26s-pose"
 
@@ -29,17 +29,25 @@ def test_existing_upload_defaults_to_form(client, monkeypatch):
     monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post("/api/jobs", files={"video": ("shot.mp4", b"video")})
     assert response.status_code == 202
-    assert calls[0][0][3:] == ("form", "right", "auto", None)
+    assert calls[0][0][3:] == ("form", "right", "courtside", None)
 
 
-def test_upload_forwards_broadcast_court(client, monkeypatch):
+def test_upload_forwards_elevated_court(client, monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
     court = [[0, 0], [1, 0], [1, 1], [0, 1]]
     response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
-                           data={"mode": "one_on_one", "camera": "broadcast", "court": json.dumps(court)})
+                           data={"mode": "one_on_one", "camera": "elevated", "court": json.dumps(court)})
     assert response.status_code == 202
-    assert calls[0][0][5:] == ("broadcast", court)
+    assert calls[0][0][5:] == ("elevated", court)
+
+
+@pytest.mark.parametrize("camera", ["auto", "broadcast"])
+def test_removed_camera_profiles_are_rejected_with_the_replacement(client, camera):
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "camera": camera})
+    assert response.status_code == 422
+    assert "use moving" in response.json()["detail"]
 
 
 def test_upload_accepts_moving_camera_profile(client, monkeypatch):

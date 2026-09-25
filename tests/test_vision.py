@@ -196,9 +196,10 @@ def test_cut_detection_and_profiles():
     assert not scene_cut(None, old)
     assert not scene_cut(old, old+5)
     assert scene_cut(old, old+200)
-    assert camera_profile('auto', 'one_on_one') == 'broadcast'
-    assert camera_profile('auto', 'form') == 'courtside'
-    assert camera_profile('moving', 'one_on_one') == 'moving'
+    assert camera_profile('moving') == 'moving'
+    for removed in ('auto', 'broadcast'):
+        with pytest.raises(ValueError, match="moving, elevated or courtside"):
+            camera_profile(removed)
 
 
 def test_single_frame_flash_is_not_a_cut_but_a_persistent_edit_is():

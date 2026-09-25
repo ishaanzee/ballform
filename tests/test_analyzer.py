@@ -129,7 +129,7 @@ def test_court_polygon_only_applies_to_fixed_game_cameras():
     court = [[0, 0], [1, 0], [1, 1]]
     for profile in ("elevated", "courtside"):
         assert _applied_court(court, "one_on_one", profile) == (court, None)
-    for profile in ("broadcast", "moving"):
+    for profile in ("moving",):
         applied, reason = _applied_court(court, "one_on_one", profile)
         assert applied is None and profile in reason
     assert _applied_court(None, "one_on_one", "moving") == (None, None)
