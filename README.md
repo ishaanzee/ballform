@@ -33,6 +33,22 @@ Open <http://127.0.0.1:8000>. Thats it. `ffmpeg` is worth installing if you want
 
 The first run downloads the pose and detection weights into `models/`. They are cached after that. Uploads, reports, observations, and rendered videos live in `data/jobs/`. Stop the server with `Ctrl+C`.
 
+### optional speedups on Apple silicon
+
+Both are optional. Without them everything still runs, just slower, and the results page says which one is missing.
+
+1. **Faster ball detector** (an MLX + Metal port of the same model, about 1.7x faster per call, same results):
+   ```bash
+   uv pip install --python .venv/bin/python "fast-rfdetr @ git+https://github.com/ishaanzee/kernelopt"
+   ```
+2. **Pose on the Neural Engine** (a one-time export, about 1.5x faster per frame, with small fp16 differences):
+   ```bash
+   YOLO_AUTOINSTALL=False uv run --with onnx --with onnxslim --with onnxconverter-common \
+       python scripts/export_pose_coreml.py yolo26s-pose yolo26m-pose
+   ```
+
+A plain `uv sync` removes the detector package again. Use `uv sync --inexact`, or rerun the install.
+
 ## getting a clip that does not sabotage the model
 
 For form work, keep the shooting arm, ball, feet, rim, and net visible. A side view is best for release and arc; a rear-oblique view is better for alignment. 60 fps and 1080p are a good target. A phone three to six feet high is usually enough. Do not digitally zoom halfway through the possession.
@@ -82,6 +98,22 @@ Scan the QR code in the terminal with the iPhone camera. Safari opens a private 
 Game mode defaults to YOLO26s-pose and offers YOLO26m-pose in the model selector. YOLO26s was about 11% faster on the current 10-second sample, with similar shot detection; compare more clips before treating that as a general result. Only one analysis runs at a time. Game analysis also uses overlapping wide-view crops and a basketball-trained RF-DETR Medium detector. The full-frame pose view and both side crops retain their original input sizes; no frames or crop views are skipped. When side-crop ball detection is needed, it runs alongside pose inference. The app is intended for Apple silicon with 36 GB RAM (16 GB should work with smaller clips). The downloaded JSON report now breaks out pose, ball, rim tracking, frame processing, review-overlay, and encoding times. Pose and ball times are subsets of frame processing and can overlap, so do not add them to the total. Wide-view analysis is offline processing, not real-time playback.
 
 On Apple-silicon Macs, the basketball detector now uses ONNX Runtime's Core ML provider by default, running it on CPU + GPU (`MLComputeUnits=CPUAndGPU`) without INT8 quantization or changing the input size. This transformer ran about 2.6x faster per call on the GPU than on the Neural Engine (46 ms vs 119 ms on an M3 Pro). On the 10-second moving-broadcast sample, the whole analysis took 80.1s versus 98.5s with CPU + Neural Engine, with an identical shot result; frame processing fell from 56.9s to 45.8s. `ALL` processed frames about as fast but took 46s instead of 25s to load. Set `BALLFORM_COREML_UNITS` to `ALL`, `CPUAndNeuralEngine` or `CPUOnly` to compare; each setting keeps its own cache. Other systems use CPU, and an automatic Core ML initialization or inference failure falls back to CPU. To force the previous path, start the app with `BALLFORM_BALL_BACKEND=cpu uv run uvicorn app.main:app --reload`; `BALLFORM_BALL_BACKEND=coreml` explicitly requests Core ML and fails rather than falling back. The report records the requested and actual backend. The first run compiles a cache under `models/coreml-cache/` and can take longer to start; later runs reuse it. Core ML may still leave some operations on CPU. The detector can be compared on every frame and crop with `uv run python scripts/benchmark_ball_backends.py /path/to/clip.mp4`. On the current 10-second sample, the cached Core ML run took 101.82s versus 172.68s with CPU, with identical shot and diagnostic report fields; compare more clips before generalizing that result.
+
+The fastest basketball detector is an optional MLX + Metal port of the same RF-DETR model: `fast_rfdetr`, from the companion [kernelopt](https://github.com/ishaanzee/kernelopt) project. Install it into this environment with:
+
+```bash
+uv pip install --python .venv/bin/python "fast-rfdetr @ git+https://github.com/ishaanzee/kernelopt"
+```
+
+If you work on `kernelopt` yourself, install your checkout instead with `-e ../kernelopt`.
+
+When it is installed, `BALLFORM_BALL_BACKEND=auto` (the default) uses it on Apple silicon. The two side crops of a frame run as one batched GPU call. Set `BALLFORM_BALL_BACKEND=coreml` to use ONNX Runtime + Core ML instead, or `mlx` to require the port. If the package is missing or fails, `auto` falls back to Core ML and records why in `vision.ball_backend_fallback`.
+
+The port is a pure speedup. On four test clips, its ball detections, possession boxes, players, ball handler and shot results were identical to the Core ML path. It matched all 1082 confident objects on 120 other frames. Per call it takes 28.5 ms versus 48.4 ms, and the two side crops take 54.5 ms together versus 96.8 ms. End to end, analyses were 13–29% faster, and waits on side-crop detection fell from 5–9 s per clip to under 0.6 s.
+
+Two caveats:
+- A plain `uv sync` removes packages that are not in the lockfile. Use `uv sync --inexact`, or rerun the install command above. Otherwise analyses quietly fall back to Core ML.
+- The port reproduces this environment's `cv2.resize` bit for bit (OpenCV 4.14 with KleidiCV on arm64). Changing the OpenCV build changes the golden preprocessing.
 
 On a Mac using MPS pose and the Core ML basketball detector, game mode now keeps one additional frame in flight. A second detector session examines the next frame while the current frame's pose, tracking, and annotation finish; tracking and scoring still consume frames in source order. This preserves the full input resolution and analyzed frame rate. Set `BALLFORM_FRAME_PIPELINE=1` when starting the server to disable the overlap, or `BALLFORM_FRAME_PIPELINE=2` to request it explicitly. The report records the actual pipeline depth and any fallback. On the same 10-second moving-broadcast clip, the two-frame pipeline took 83.50s versus 102.48s with one frame; both runs produced identical observation files and shot results. More in-flight frames are not automatically faster because detector calls can contend for the same compute hardware.
 

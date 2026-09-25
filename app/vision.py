@@ -127,6 +127,14 @@ class CourtVision:
         finally:
             self.timing_seconds["ball"] += time.perf_counter() - started
 
+    def _detect_basketball_batch(self, frames):
+        started = time.perf_counter()
+        try:
+            batch = getattr(self.ball_model, "detect_batch", None)
+            return batch(frames) if batch else [self.ball_model.detect(frame) for frame in frames]
+        finally:
+            self.timing_seconds["ball"] += time.perf_counter() - started
+
     def _predict_pose(self, crop, size):
         started = time.perf_counter()
         prepared = self.pose_model.infer(crop, size)
@@ -158,8 +166,9 @@ class CourtVision:
                 self._ball_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ballform-ball-crops")
             side_regions = list(regions(width, height, True))[1:]
             def detect_side_crops():
-                return [(x1, y1, x2, y2, self._detect_basketball_objects(frame[y1:y2, x1:x2]))
-                        for x1, y1, x2, y2 in side_regions]
+                crops = [frame[y1:y2, x1:x2] for x1, y1, x2, y2 in side_regions]
+                return [(*region, objects) for region, objects
+                        in zip(side_regions, self._detect_basketball_batch(crops))]
             side_ball_future = self._ball_executor.submit(detect_side_crops)
             self.ball_crop_overlap_frames += 1
         pose_regions = list(regions(width, height, self.tiled))

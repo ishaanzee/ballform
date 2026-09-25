@@ -53,21 +53,54 @@ def decode(boxes, logits, threshold=.25):
     return objects
 
 
+def _load_fast_detector(path):
+    """The MLX + Metal RF-DETR port (optional package `fast_rfdetr`); raises ImportError if absent."""
+    from fast_rfdetr import FastBasketballDetector
+    # Batch 2 is the side-crop pair; tracing it now keeps the first real call warm.
+    return FastBasketballDetector(str(path), warmup_batch_sizes=(1, 2))
+
+
 class BasketballDetector:
+    """RF-DETR basketball detector.
+
+    Backends: "mlx" runs the fast_rfdetr MLX/Metal port on the GPU (~1.7x faster
+    per call than Core ML, same outputs to 1e-3); "coreml" and "cpu" run the
+    ONNX file through ONNX Runtime. "auto" prefers mlx on Apple silicon, then
+    Core ML, then CPU, recording why in fallback_reason.
+    """
+
     def __init__(self, path, backend="auto", compute_units="CPUAndGPU"):
-        import onnxruntime as ort
-        ort.disable_telemetry_events()
-        if backend not in {"auto", "cpu", "coreml"}:
-            raise ValueError("Basketball detector backend must be 'auto', 'cpu', or 'coreml'.")
+        if backend not in {"auto", "mlx", "cpu", "coreml"}:
+            raise ValueError("Basketball detector backend must be 'auto', 'mlx', 'cpu', or 'coreml'.")
         if compute_units not in COREML_COMPUTE_UNITS:
             raise ValueError(f"Core ML compute units must be one of {sorted(COREML_COMPUTE_UNITS)}.")
         self.requested_backend = backend
         self.compute_units = compute_units
         self.fallback_reason = None
+        self._model_path = str(path)
+        self._fast = None
+        self.session = None
+        apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
+        if backend == "mlx" or (backend == "auto" and apple_silicon):
+            try:
+                self._fast = _load_fast_detector(path)
+                self.backend = "mlx"
+                self.providers = ["MLX (Metal)"]
+                return
+            except Exception as exc:
+                if backend == "mlx":
+                    raise
+                self.fallback_reason = f"MLX detector unavailable: {type(exc).__name__}: {exc}"
+                logging.warning("%s; using ONNX Runtime", self.fallback_reason)
+        self._init_onnx(backend)
+
+    def _init_onnx(self, backend):
+        import onnxruntime as ort
+        ort.disable_telemetry_events()
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
-        self._model_path = str(path)
         self._session_options = options
+        path, compute_units = self._model_path, self.compute_units
         coreml_available = "CoreMLExecutionProvider" in ort.get_available_providers()
         chosen = ("coreml" if coreml_available and platform.system() == "Darwin"
                   and platform.machine() == "arm64" else "cpu") if backend == "auto" else backend
@@ -95,14 +128,29 @@ class BasketballDetector:
         except Exception as exc:
             if backend != "auto" or chosen != "coreml":
                 raise
-            self.fallback_reason = f"Core ML initialization failed: {type(exc).__name__}: {exc}"
-            logging.warning("%s; using CPU detector", self.fallback_reason)
+            reason = f"Core ML initialization failed: {type(exc).__name__}: {exc}"
+            self.fallback_reason = f"{self.fallback_reason}; {reason}" if self.fallback_reason else reason
+            logging.warning("%s; using CPU detector", reason)
             self.session = ort.InferenceSession(str(path), sess_options=options, providers=["CPUExecutionProvider"])
             chosen = "cpu"
         self.backend = chosen
         self.providers = self.session.get_providers()
 
+    def _fast_failed(self, exc):
+        """Leave the MLX path for ONNX Runtime after a runtime failure, in auto mode only."""
+        if self.requested_backend != "auto":
+            raise exc
+        self.fallback_reason = f"MLX inference failed: {type(exc).__name__}: {exc}"
+        logging.warning("%s; using ONNX Runtime", self.fallback_reason)
+        self._fast = None
+        self._init_onnx("auto")
+
     def detect(self, frame):
+        if self._fast is not None:
+            try:
+                return decode(*self._fast.raw(frame))
+            except Exception as exc:
+                self._fast_failed(exc)
         feed = {self.session.get_inputs()[0].name: preprocess(frame)}
         try:
             outputs = self.session.run(None, feed)
@@ -120,3 +168,13 @@ class BasketballDetector:
         boxes = next(value for value in outputs if value.shape[-1] == 4)
         logits = next(value for value in outputs if value.shape[-1] == 11)
         return decode(boxes, logits)
+
+    def detect_batch(self, frames):
+        """Detect several images (e.g. the two side crops) in one GPU call when the backend allows it."""
+        if self._fast is not None and 1 <= len(frames) <= 3:
+            try:
+                boxes, logits = self._fast.raw_batch(list(frames))
+                return [decode(boxes[i:i + 1], logits[i:i + 1]) for i in range(len(frames))]
+            except Exception as exc:
+                self._fast_failed(exc)
+        return [self.detect(frame) for frame in frames]
