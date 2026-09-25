@@ -11,7 +11,14 @@
     "hardware": "Apple M3 Pro, 36 GB unified memory",
     "runs_per_configuration": 1,
     "frame_count_note": "The MP4 header reports 298 frames, but FFmpeg and OpenCV both decode 286. Throughput uses the 286 frames the analysis processed.",
-    "result_check": "All three runs produced the same shot result: release at 6.79 s, made at frame 243, shot-space score 97.9."
+    "result_check": "The three original runs produced the same shot result: release at 6.79 s, made at frame 243, shot-space score 97.9. The later runs used a rim marked on frame 0, so the make is detected at frame 245. They scored 97.9 with PyTorch pose and 97.4 with fp16 Neural Engine pose. The lower score comes from a 0.7% change in measured separation caused by fp16 keypoints. The MLX detector run matched the Core ML run exactly: same ball detections, players, handler and shot result.",
+    "configurations": {
+      "cpu_serial / coreml_serial / coreml_overlap": "Original runs (2026-09-22). The ball detector ran on the CPU or on Core ML with CPU + Neural Engine requested; pose ran in PyTorch on the GPU (MPS); models were loaded for each job.",
+      "coreml_gpu": "BALLFORM_COREML_UNITS=CPUAndGPU, BALLFORM_POSE_BACKEND=torch, new process, models loaded during the job (Core ML caches already built).",
+      "models_kept_loaded": "As coreml_gpu, but the models were preloaded and warmed before the job, as the server now does.",
+      "neural_engine_pose": "Current defaults: detector on Core ML CPU + GPU, pose as fp16 Core ML on the Neural Engine, models preloaded.",
+      "mlx_detector": "As neural_engine_pose, but the detector is the fast_rfdetr MLX + Metal port (BALLFORM_BALL_BACKEND=auto with it installed); side crops run as one batched call."
+    }
   },
   "charts": [
     {
@@ -20,9 +27,41 @@
       "y_label": "Seconds (lower is better)",
       "metric": "performance.elapsed_seconds",
       "points": [
-        {"run": "cpu_serial", "label": "CPU, serial", "value": 172.68},
-        {"run": "coreml_serial", "label": "Core ML, serial", "value": 102.48},
-        {"run": "coreml_overlap", "label": "Core ML, overlapped", "value": 83.50}
+        {
+          "run": "cpu_serial",
+          "label": "CPU, serial",
+          "value": 172.68
+        },
+        {
+          "run": "coreml_serial",
+          "label": "Core ML, serial",
+          "value": 102.48
+        },
+        {
+          "run": "coreml_overlap",
+          "label": "Core ML, overlapped",
+          "value": 83.5
+        },
+        {
+          "run": "coreml_gpu",
+          "label": "Core ML detector on GPU",
+          "value": 58.83
+        },
+        {
+          "run": "models_kept_loaded",
+          "label": "+ models kept loaded",
+          "value": 53.07
+        },
+        {
+          "run": "neural_engine_pose",
+          "label": "+ pose on Neural Engine",
+          "value": 40.22
+        },
+        {
+          "run": "mlx_detector",
+          "label": "+ MLX + Metal detector",
+          "value": 33.56
+        }
       ]
     },
     {
@@ -31,9 +70,41 @@
       "y_label": "Decoded frames per processing second (higher is better)",
       "formula": "286 / performance.stages_seconds.frame_processing",
       "points": [
-        {"run": "cpu_serial", "label": "CPU, serial", "value": 1.759},
-        {"run": "coreml_serial", "label": "Core ML, serial", "value": 3.357},
-        {"run": "coreml_overlap", "label": "Core ML, overlapped", "value": 4.811}
+        {
+          "run": "cpu_serial",
+          "label": "CPU, serial",
+          "value": 1.759
+        },
+        {
+          "run": "coreml_serial",
+          "label": "Core ML, serial",
+          "value": 3.357
+        },
+        {
+          "run": "coreml_overlap",
+          "label": "Core ML, overlapped",
+          "value": 4.811
+        },
+        {
+          "run": "coreml_gpu",
+          "label": "Core ML detector on GPU",
+          "value": 5.815
+        },
+        {
+          "run": "models_kept_loaded",
+          "label": "+ models kept loaded",
+          "value": 6.501
+        },
+        {
+          "run": "neural_engine_pose",
+          "label": "+ pose on Neural Engine",
+          "value": 9.517
+        },
+        {
+          "run": "mlx_detector",
+          "label": "+ MLX + Metal detector",
+          "value": 11.717
+        }
       ]
     },
     {
@@ -44,8 +115,57 @@
       "call_count_per_run": 420,
       "timing_scope": "Includes detector preprocessing, ONNX execution, decoding, and readback. The same 286 full-frame and 134 side-crop calls were made in each serial run.",
       "points": [
-        {"run": "cpu_serial", "label": "CPU, serial", "value": 134.57},
-        {"run": "coreml_serial", "label": "Core ML, serial", "value": 57.75}
+        {
+          "run": "cpu_serial",
+          "label": "CPU, serial",
+          "value": 134.57
+        },
+        {
+          "run": "coreml_serial",
+          "label": "Core ML, serial",
+          "value": 57.75
+        }
+      ]
+    },
+    {
+      "id": "ball_detector_latency",
+      "title": "Ball detector latency per call",
+      "y_label": "Milliseconds, median (lower is better)",
+      "timing_scope": "Isolated, warm, one model at a time; includes preprocessing, inference and output readback. Pose is per analyzed frame (full frame at 1280 plus two side crops at 960).",
+      "points": [
+        {
+          "run": "detector_neural_engine_requested",
+          "label": "Core ML, CPU + Neural Engine requested",
+          "value": 131.7
+        },
+        {
+          "run": "detector_gpu",
+          "label": "Core ML, CPU + GPU",
+          "value": 49.2
+        },
+        {
+          "run": "detector_mlx_metal",
+          "label": "MLX + custom Metal kernels (fast_rfdetr)",
+          "value": 28.5
+        }
+      ]
+    },
+    {
+      "id": "pose_latency",
+      "title": "Pose latency per analyzed frame (three passes)",
+      "y_label": "Milliseconds, median (lower is better)",
+      "timing_scope": "Isolated, warm, one model at a time; includes preprocessing, inference and output readback. Pose is per analyzed frame (full frame at 1280 plus two side crops at 960).",
+      "points": [
+        {
+          "run": "pose_pytorch_mps",
+          "label": "PyTorch on GPU (MPS)",
+          "value": 93.8
+        },
+        {
+          "run": "pose_neural_engine",
+          "label": "Core ML fp16 on Neural Engine",
+          "value": 60.4
+        }
       ]
     }
   ],
@@ -56,22 +176,69 @@
       "frame_processing_throughput_speedup": 2.735
     },
     "cpu_serial_to_coreml_serial": {
-      "ball_detection_work_speedup": 2.330
+      "ball_detection_work_speedup": 2.33
     },
     "coreml_serial_to_coreml_overlap": {
       "end_to_end_time_reduction_percent": 18.52,
       "frame_processing_time_reduction_percent": 30.21
+    },
+    "cpu_serial_to_neural_engine_pose": {
+      "end_to_end_time_reduction_percent": 76.71,
+      "end_to_end_speedup": 4.293,
+      "frame_processing_throughput_speedup": 5.41
+    },
+    "coreml_overlap_to_neural_engine_pose": {
+      "end_to_end_time_reduction_percent": 51.83,
+      "end_to_end_speedup": 2.076,
+      "frame_processing_throughput_speedup": 1.978
+    },
+    "same_day_coreml_overlap_rerun_to_neural_engine_pose": {
+      "rerun_end_to_end_seconds": 99.9,
+      "end_to_end_time_reduction_percent": 59.74,
+      "end_to_end_speedup": 2.484
+    },
+    "ball_detector_neural_engine_to_gpu": {
+      "per_call_speedup": 2.677
+    },
+    "pose_pytorch_to_neural_engine": {
+      "per_frame_speedup": 1.553
+    },
+    "cpu_serial_to_mlx_detector": {
+      "end_to_end_time_reduction_percent": 80.57,
+      "end_to_end_speedup": 5.145
+    },
+    "same_session_coreml_to_mlx_detector": {
+      "coreml_end_to_end_seconds": 38.6,
+      "mlx_end_to_end_seconds": 33.56,
+      "end_to_end_time_reduction_percent": 13.06,
+      "side_crop_wait_seconds": {
+        "coreml": 5.098,
+        "mlx": 0.361
+      }
+    },
+    "ball_detector_neural_engine_to_mlx": {
+      "per_call_speedup": 4.621
     }
   },
   "source_reports": {
     "cpu_serial": "diagnostic/ballform-yolo26s-cpu-rerun.json",
     "coreml_serial": "diagnostic/ballform-yolo26s-pipeline1.json",
-    "coreml_overlap": "diagnostic/ballform-yolo26s-pipeline2.json"
+    "coreml_overlap": "diagnostic/ballform-yolo26s-pipeline2.json",
+    "coreml_gpu": "diagnostic/ballform-coreml-gpu-torchpose-cold.json",
+    "models_kept_loaded": "diagnostic/ballform-coreml-gpu-torchpose-warm.json",
+    "neural_engine_pose": "diagnostic/ballform-coreml-gpu-anepose-warm.json",
+    "same_day_coreml_overlap_rerun": "diagnostic/ballform-coreml-ne-torchpose-cold.json",
+    "component_latency": "diagnostic/ballform-component-latency.json",
+    "mlx_detector": "diagnostic/ballform-mlx-detector.json",
+    "mlx_same_session_coreml": "diagnostic/ballform-mlx-same-session-coreml.json",
+    "mlx_detector_latency": "diagnostic/ballform-mlx-detector-latency.json"
   },
   "display_notes": [
     "These are single-run measurements on one clip, not averages or a general benchmark across videos.",
     "The throughput chart measures offline processing speed, not the source video's 29.77 FPS playback rate.",
     "Ball and pose work can overlap in the two-frame pipeline. Do not stack their summed times or compare the overlapped ball-work total with serial call latency.",
-    "The Core ML configuration requests CPU and Neural Engine execution; it does not establish the exact hardware used for every model operation."
+    "Compute units are requests to Core ML; they do not establish the exact hardware used for every model operation. With fp32 weights, 'CPU + Neural Engine' ran at CPU speed, so the detector was moved to the GPU and the pose model was converted to fp16 for the Neural Engine.",
+    "The last three runs were measured on 2026-09-24 with later code. A same-day rerun of the 'Core ML, overlapped' configuration took 99.90 s, versus 83.50 s on the original day, so single runs vary noticeably. Compare the new points with that rerun for a same-day comparison.",
+    "'Models kept loaded' saves little here because macOS had already cached the Core ML models (a new process loaded them in 0.56 s). When that system cache is cold, loading costs about 12 s per detector session per job, and keeping models loaded removes it."
   ]
 }
