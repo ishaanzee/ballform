@@ -27,6 +27,7 @@ pythonpath = ["."]
 [project.scripts]
 ballform-lan = "app.lan:main"
 ballform-share = "app.lan:main"
+ballform-report = "app.client_report:main"
 
 [tool.uv]
 package = true

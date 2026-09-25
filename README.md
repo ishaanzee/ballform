@@ -49,6 +49,16 @@ Both are optional. Without them everything still runs, just slower, and the resu
 
 A plain `uv sync` removes the detector package again. Use `uv sync --inexact`, or rerun the install.
 
+## sending a report to someone
+
+The results page is for you: it shows model names, timings and raw evidence. **Client report** opens the page meant for a player, parent or coach instead. It has plain-language metrics, a release snapshot for every shot, a consistency table when a form clip has more than one shot, a table of every shot in game mode, and the limitations. It leaves out model internals. Type a name next to "Prepared for" and your notes in the notes box, then use **Save as PDF**. An empty notes box is left off the PDF. Send the PDF with the annotated video.
+
+The same page can be written from the command line for any finished job:
+
+```bash
+uv run --inexact ballform-report <job-id> --for "Player name"   # writes data/jobs/<job-id>/client-report.html
+```
+
 ## getting a clip that does not sabotage the model
 
 For form work, keep the shooting arm, ball, feet, rim, and net visible. A side view is best for release and arc; a rear-oblique view is better for alignment. 60 fps and 1080p are a good target. A phone three to six feet high is usually enough. Do not digitally zoom halfway through the possession.

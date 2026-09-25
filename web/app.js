@@ -4,7 +4,7 @@ const ctx = canvas.getContext('2d');
 const token = new URLSearchParams(location.search).get('token') || '';
 const transport = new URLSearchParams(location.search).get('transport') || '';
 const jobKey = `ballform-job:${token || 'local'}`;
-let file, dragStart, rimBox, report;
+let file, dragStart, rimBox, report, reportJob;
 let courtPoints = [], marking = 'rim';
 let selectedPoseModelForJob = null;
 const poseModelLabels = {'yolo26m-pose':'YOLO26m pose','yolo26s-pose':'YOLO26s pose'};
@@ -179,7 +179,7 @@ function gameMarkup(game){
   return `<section class="game-review" aria-label="Shot-space analysis"><div class="score-row"><div><small>${game.score_basis?'Contest-only score (rim attempt)':'Shot-space score'}</small><strong>${scoreText}</strong></div><p>${game.confidence==null?'Evidence quality unavailable':`${Math.round(game.confidence*100)} / 100 evidence quality`}<br><small>Heuristic · higher means more measured space</small></p></div>${range?`<p class="cue">${esc(range.reason)}</p>`:''}<div class="metrics">${metricsMarkup(game.metrics)}</div>${components?`<details><summary>Score components</summary><div class="components">${components}</div></details>`:''}<p class="evidence">${(game.evidence||[]).map(esc).join(' · ')}</p>${(game.limitations||[]).length?`<ul class="game-limitations">${game.limitations.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}</section>`;
 }
 function render(id,result){
-  report=result;
+  report=result;reportJob=id;
   localStorage.removeItem(jobKey);
   $('#progressStep').classList.add('hidden');$('#workspace').classList.add('hidden');$('#results').classList.remove('hidden');
   const game=result.mode==='one_on_one';
@@ -215,6 +215,7 @@ function render(id,result){
   $('#limitations').innerHTML=result.limitations.map(x=>`<li>${esc(x)}</li>`).join('');window.scrollTo({top:$('#results').offsetTop-30,behavior:'smooth'});
 }
 $('#download').onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`ballform-${report.mode||'form'}-report.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+$('#clientReport').onclick=()=>{if(reportJob)window.open(apiUrl(`/api/jobs/${reportJob}/client-report`),'_blank','noopener');};
 $('#again').onclick=()=>location.reload();
 
 const existingJob = localStorage.getItem(jobKey);

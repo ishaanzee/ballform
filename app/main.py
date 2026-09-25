@@ -11,10 +11,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.analyzer import ROOT, analyze_video, preload_game_models
+from app.client_report import build_client_report
 from app.court import parse_landmarks
 from app.vision import CAMERA_ERROR, CAMERAS, validate_court
 
@@ -203,6 +204,16 @@ def get_video(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "Annotated video is not ready")
     return FileResponse(path, media_type="video/mp4", filename=f"ballform-{job_id}.mp4")
+
+
+@app.get("/api/jobs/{job_id}/client-report", response_class=HTMLResponse)
+def get_client_report(job_id: str, prepared_for: str = "") -> HTMLResponse:
+    if not job_id.isalnum():
+        raise HTTPException(404)
+    directory = JOBS_DIR / job_id
+    if not (directory / "result.json").exists():
+        raise HTTPException(404, "Report is not ready")
+    return HTMLResponse(build_client_report(directory, prepared_for[:120]))
 
 
 app.mount("/assets", StaticFiles(directory=ROOT / "web"), name="assets")
