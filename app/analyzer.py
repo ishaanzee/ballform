@@ -22,7 +22,9 @@ import psutil
 from ultralytics import YOLO
 
 from app.models import Detection, PoseFrame
-from app.game import analyze_game_shots
+from app.game import add_court_metrics, analyze_game_shots
+from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
+from app.court import fit as fit_court, parse_landmarks
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.shots import find_attempts
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
@@ -335,14 +337,15 @@ def _review_highlight(source_frame: int, frame_data: dict,
 
 def _add_review_overlays(source: Path, destination: Path, shots: list, player_frames: list[dict],
                          output_fps: float, source_fps: float, rim: RimInput,
-                         label_players: bool = False) -> None:
+                         label_players: bool = False, court_map=None) -> None:
     shooter_intervals = _shooter_intervals(shots, source_fps)
     has_makes = rim is not None and any(
         s.outcome in {"made", "likely made"} and s.outcome_frame is not None for s in shots)
     has_handlers = any(f.get("handler") is not None and f["handler"].track_id is not None
                        for f in player_frames)
     label_players = label_players and any(p.track_id for f in player_frames for p in f["players"])
-    if not shooter_intervals and not has_makes and not has_handlers and not label_players and rim is None:
+    if (not shooter_intervals and not has_makes and not has_handlers and not label_players and rim is None
+            and court_map is None):
         source.replace(destination)
         return
     capture = cv2.VideoCapture(str(source))
@@ -361,6 +364,8 @@ def _add_review_overlays(source: Path, destination: Path, shots: list, player_fr
         time_s = index / output_fps
         source_frame = (player_frames[index]["frame"] if index < len(player_frames)
                         else round(time_s * source_fps))
+        if court_map is not None:
+            draw_court(frame, court_map, source_frame)
         if index < len(player_frames):
             frame_data = player_frames[index]
             highlighted_id, label = _review_highlight(source_frame, frame_data, shooter_intervals)
@@ -512,7 +517,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
-                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
+                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose",
+                  court_landmarks: dict | None = None) -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     report = progress or (lambda _value, _message: None)
@@ -564,6 +570,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     if width < 64 or height < 64 or total < 3:
         capture.release()
         raise ValueError("The uploaded video is empty or too small to analyze.")
+    calibration = None
+    if court_landmarks is not None and game_mode:
+        # Fit before the long frame loop so an unusable marking fails fast.
+        court_landmarks = parse_landmarks(court_landmarks)
+        calibration = fit_court(court_landmarks["points"], width, height, court_landmarks["standard"])
     # Preserve more release/contest detail than the original 15 FPS pipeline.
     stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
@@ -775,6 +786,15 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             shot.cues = []
         game_summary = analyze_game_shots(shots, player_frames, observed_balls, fps, width / height,
                                           min_torso=10 / height)
+    court_map = None
+    if calibration is not None:
+        report(.9, "Following the calibrated court through camera motion")
+        court_started = time.perf_counter()
+        court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
+                                    cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
+        add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
+        (output_dir / "court.json").write_text(json.dumps(court_json(court_map)))
+        stage_times["court_calibration"] = time.perf_counter() - court_started
     view, view_confidence = classify_view(poses, aspect_ratio=width / height)
     if game_mode:
         view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
@@ -784,7 +804,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_started = time.perf_counter()
     marked_output = output_dir / "annotated_marked.mp4"
     _add_review_overlays(raw_output, marked_output, shots, player_frames, analyzed_fps, fps, scoring_rim,
-                         label_players=game_mode)
+                         label_players=game_mode, court_map=court_map)
     stage_times["review_overlays"] = time.perf_counter() - stage_started
     report(.95, "Encoding review video")
     stage_started = time.perf_counter()
@@ -835,6 +855,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         "camera_view": view, "camera_view_confidence": round(view_confidence, 2),
         "mode": mode, "handedness": handedness, "game_summary": game_summary,
         "camera_profile": profile, "court_polygon": court, "court_polygon_ignored": court_ignored,
+        "court_calibration": court_map.summary() if court_map else None,
         "vision": {"pose_model": Path(game_pose_path).name if game_pose_path else pose_path.name,
                    "pose_model_requested": pose_model if game_mode else None,
                    "pose_model_choice": pose_model if game_mode else None,
@@ -920,6 +941,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         elif profile == "moving" and rim_marked:
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; review every result.")
         result["limitations"].append("Jump shots need raised-hand ball contact and an arc rising above the release shoulders, or the detector's jump-shot class with an arc when the release is hidden. Layups, dunks, tips and putbacks need a hand contact followed by the ball reaching the basket (a ball-in-basket detection or the rim's area), or the detector's layup-dunk class with the ball rising above the player's head. Shot types come from the detector classes and image-plane geometry; the layup, dunk, tip and floater rules are checked only on synthetic tracks so far. Attempts whose ball is never seen near the basket, fully occluded releases and flat arcs may be omitted; a lob pass can be called a jump shot, and passes and slow-motion edits need manual review.")
+        if court_map is not None:
+            result["limitations"].append(court_map.limitation())
         result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession; they only cross-check the shooter of layups, dunks, tips and hidden-release jump shots.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
@@ -930,7 +953,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
-                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose") -> dict:
+                  rim_time_s: float | None = None, pose_model: str = "yolo26s-pose",
+                  court_landmarks: dict | None = None) -> dict:
     """Run analysis and append elapsed time plus sampled peak process memory."""
     process = psutil.Process()
     peak_rss = [process.memory_info().rss]
@@ -948,7 +972,7 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     sampler.start()
     try:
         result = _analyze_video(input_path, output_dir, rim, progress, mode, handedness, camera,
-                                court, rim_frame, rim_time_s, pose_model)
+                                court, rim_frame, rim_time_s, pose_model, court_landmarks)
     finally:
         stop.set()
         sampler.join()

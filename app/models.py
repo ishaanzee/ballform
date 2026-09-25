@@ -20,6 +20,8 @@ class PoseFrame:
     landmarks: dict[str, tuple[float, float, float]]
     track_id: int | None = None
     appearance: tuple[float, float, float] | None = None
+    # Normalized pose-model person box; its bottom centre stands in for hidden feet.
+    box: tuple[float, float, float, float] | None = None
 
 
 @dataclass

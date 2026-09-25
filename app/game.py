@@ -533,3 +533,168 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
         "mean_score": round(mean(scores), 1) if scores else None,
         "method": METHOD, "limitations": list(LIMITATIONS),
     }
+
+
+COURT_METRICS = ("shot_distance_ft", "shot_zone", "shooter_court_x_ft", "shooter_court_y_ft",
+                 "separation_ft", "contest_clearance_ft", "visible_hand_clearance_ft")
+COURT_LIMITATION = (
+    "Court calibration: feet are measured on the floor through a homography from user-marked court landmarks, "
+    "followed through camera motion. Player positions come from the feet (ankles, or the pose box bottom when ankles "
+    "are hidden); contest clearance in feet assumes the defender's hand and the ball are at the shooter's depth. "
+    "Measurements outside the marked landmarks are extrapolated and less accurate."
+)
+
+
+def _torso_px(pose: PoseFrame, width: int, height: int) -> float | None:
+    points = [pose.landmarks.get(name) for name in ("left_shoulder", "right_shoulder", "left_hip", "right_hip")]
+    if any(p is None or p[2] < .5 for p in points):
+        return None
+    shoulder = ((points[0][0] + points[1][0]) / 2 * width, (points[0][1] + points[1][1]) / 2 * height)
+    hip = ((points[2][0] + points[3][0]) / 2 * width, (points[2][1] + points[3][1]) / 2 * height)
+    return math.dist(shoulder, hip)
+
+
+def _grounded_position(player_frames: list[dict], track_id: int, near: dict, court_map, window: float = .8):
+    """Court position (feet) of a player on the floor at or just before release, or a reason it is unavailable.
+
+    An airborne foot maps through the floor homography to a point beyond the
+    player, so for a jump the last grounded frames before take-off are used.
+    """
+    from app.court import floor_point, lowest_foot_y, takeoff
+
+    width, height = court_map.width, court_map.height
+    samples = sorted(((frame, pose) for frame in player_frames
+                      if 0 <= near["time_s"] - frame["time_s"] <= window
+                      for pose in frame["players"] if pose.track_id == track_id),
+                     key=lambda item: item[0]["time_s"])
+    if not samples or samples[-1][0] is not near:
+        return "the player was not tracked on the release frame"
+    if court_map.reliable(near["frame"]) is None:
+        return "the court mapping was not reliable on the release frame"
+    foot_y, torso = [], []
+    for frame, pose in samples:
+        point, low = floor_point(pose, width, height), lowest_foot_y(pose, height)
+        steady = court_map.to_anchor_image(frame["frame"], (point[0][0], low)) if point and low is not None else None
+        foot_y.append(steady[1] if steady else None)
+        if (length := _torso_px(pose, width, height)) is not None:
+            torso.append(length)
+    jump = takeoff(foot_y, float(np.median(torso)) if torso else 0.)
+    if jump is None:
+        return "the feet were not visible before release"
+    used = jump.grounded if jump.jumped else [len(samples) - 1]
+    points, methods = [], set()
+    for index in used:
+        frame, pose = samples[index]
+        found = floor_point(pose, width, height)
+        court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        if court_point is not None:
+            points.append(court_point)
+            methods.add(found[1])
+    if not points:
+        return "no grounded frame had a reliable court mapping"
+    first = samples[used[0]][0]
+    return (tuple(float(v) for v in np.median(np.asarray(points), axis=0)),
+            {"jumped": jump.jumped, "rise_torso": jump.rise_torso, "frames": [samples[i][0]["frame"] for i in used],
+             "before_release_s": near["time_s"] - samples[used[-1]][0]["time_s"],
+             "first_frame": first["frame"], "method": " / ".join(sorted(methods))})
+
+
+def _contest_points(player_frames: list[dict], near: dict, defender_id: int, balls: list[Detection],
+                    window: float = .1):
+    """Per defender hand: (frame, wrist pixel, ball pixel) nearest release, with the rules of _contest_hands."""
+    release_ball = min(balls, key=lambda item: abs(item.time_s - near["time_s"]), default=None)
+    frames = sorted((frame for frame in player_frames if abs(frame["time_s"] - near["time_s"]) <= window),
+                    key=lambda frame: abs(frame["time_s"] - near["time_s"]))
+    hands = []
+    for side in ("left", "right"):
+        found = None
+        for frame in frames:
+            pose = next((p for p in frame["players"] if p.track_id == defender_id), None)
+            wrist = pose.landmarks.get(side + "_wrist") if pose is not None else None
+            ball = release_ball if frame is near else min(
+                balls, key=lambda item: abs(item.time_s - frame["time_s"]), default=None)
+            if (wrist is None or wrist[2] < .65 or ball is None or (frame is not near and (
+                    abs(ball.time_s - frame["time_s"]) > .025 or ball.confidence < .5))):
+                continue
+            found = (frame["frame"], (wrist[0], wrist[1]), (ball.x, ball.y))
+            break
+        hands.append(found)
+    return hands
+
+
+def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls: list[Detection], court_map,
+                      summary: dict | None = None) -> None:
+    """Add floor measurements in feet next to the torso-length metrics, which stay unchanged."""
+    from app.court import three_point_margin, vertical_plane_distance, zone
+
+    court = court_map.court
+    if summary is not None:
+        summary["limitations"] = [COURT_LIMITATION if item.startswith("No court calibration") else item
+                                  for item in summary["limitations"]]
+    by_frame = {frame["frame"]: frame for frame in player_frames}
+    for shot in shots:
+        game = shot.game
+        if game is None:
+            continue
+        metrics, evidence = game["metrics"], game["evidence"]
+        metrics.update({key: None for key in COURT_METRICS})
+        game["limitations"] = [COURT_LIMITATION if item.startswith("No court calibration") else item
+                               for item in game["limitations"]]
+        near = by_frame.get(game["release_frame"])
+        shooter_id = game["players"]["shooter_track_id"]
+        if near is None or shooter_id is None:
+            evidence.append("Court: shot distance unavailable because the shooter was not identified at release.")
+            continue
+        shooter = _grounded_position(player_frames, shooter_id, near, court_map)
+        if isinstance(shooter, str):
+            evidence.append(f"Court: shot distance unavailable because {shooter}.")
+            continue
+        spot, detail = shooter
+        distance = math.dist(spot, court.rim)
+        shot_zone = zone(spot, court)
+        metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
+                        "shooter_court_x_ft": round(spot[0], 1), "shooter_court_y_ft": round(spot[1], 1)})
+        if detail["jumped"]:
+            where = (f"the shooter's feet ({detail['method']}) on the last grounded frame"
+                     f"{'s' if len(detail['frames']) > 1 else ''} before take-off, "
+                     f"{detail['before_release_s']:.2f} s before release (frame {detail['frames'][-1]}); "
+                     f"the feet then rose {detail['rise_torso']:.1f} torso lengths")
+        else:
+            where = (f"the shooter's feet ({detail['method']}) on the release frame; no take-off was detected, "
+                     "so the shot was treated as taken from the floor")
+        margin = three_point_margin(spot, court)
+        evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from {where}. "
+                        f"{court.dims['label']} {'zone ' + shot_zone.replace('_', ' ') if shot_zone else 'zone unavailable (off the calibrated half)'}"
+                        f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
+        extrapolated = court_map.calibration.extrapolation_ft(spot)
+        if extrapolated > 2:
+            evidence.append(f"Court: the shooter stood {extrapolated:.0f} ft outside the marked landmarks, so the "
+                            "position is extrapolated; mark a landmark nearer the shot for a firmer measurement.")
+        defender_id = game["players"]["defender_track_id"]
+        if defender_id is None or metrics.get("separation_torso") is None:
+            continue
+        defender = _grounded_position(player_frames, defender_id, near, court_map)
+        if isinstance(defender, str):
+            evidence.append(f"Court: separation in feet unavailable because {defender}.")
+        else:
+            metrics["separation_ft"] = round(math.dist(spot, defender[0]), 1)
+            evidence.append("Court: separation in feet is measured on the floor from the shooter's take-off spot to "
+                            f"the defender's feet ({'last grounded frames' if defender[1]['jumped'] else 'release frame'}).")
+        hands = []
+        for found in _contest_points(player_frames, near, defender_id, balls):
+            camera = court_map.camera(found[0]) if found else None
+            if found is None or camera is None:
+                hands.append(None)
+                continue
+            frame, wrist, ball = found
+            size = (court_map.width, court_map.height)
+            hands.append(vertical_plane_distance(camera, spot, (wrist[0] * size[0], wrist[1] * size[1]),
+                                                 (ball[0] * size[0], ball[1] * size[1])))
+        visible = [hand for hand in hands if hand is not None]
+        if metrics.get("contest_clearance_torso") is not None and len(visible) == 2:
+            metrics["contest_clearance_ft"] = round(min(visible), 1)
+        elif metrics.get("visible_hand_clearance_torso") is not None and visible:
+            metrics["visible_hand_clearance_ft"] = round(min(visible), 1)
+        if visible:
+            evidence.append("Court: contest clearance in feet is approximate; it assumes the defender's hand and the "
+                            "ball are at the shooter's depth, using the camera recovered from the floor mapping.")

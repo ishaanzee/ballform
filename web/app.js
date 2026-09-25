@@ -66,6 +66,7 @@ function resizeCanvas(){ const r=preview.getBoundingClientRect(); canvas.width=r
 $('#scrubber').oninput = e => preview.currentTime = preview.duration * e.target.value / 100;
 function point(e){ const r=canvas.getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; }
 canvas.onpointerdown = e => {
+  if(marking==='landmarks') return window.courtCalibration?.place(e);
   if(marking==='court') {if(courtPoints.length<8){const p=point(e);courtPoints.push([p.x,p.y]);drawBox();}return;}
   dragStart=point(e); rimBox=null; canvas.setPointerCapture(e.pointerId);
 };
@@ -73,6 +74,7 @@ canvas.onpointermove = e => { if(!dragStart)return; const p=point(e); rimBox=[Ma
 canvas.onpointerup = () => dragStart=null;
 function drawBox(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
+  window.courtCalibration?.draw(ctx);
   const d=devicePixelRatio;ctx.lineWidth=3*d;ctx.setLineDash([]);
   if(courtPoints.length){
     ctx.strokeStyle='#50d4ed';ctx.fillStyle='#50d4ed';ctx.beginPath();
@@ -83,7 +85,7 @@ function drawBox(){
   if(!rimBox)return;
   const [x,y,w,h]=rimBox;ctx.strokeStyle='#ff6a32';ctx.setLineDash([8*d,5*d]);ctx.strokeRect(x*canvas.width,y*canvas.height,w*canvas.width,h*canvas.height);ctx.fillStyle='#ff6a32';ctx.font=`${12*d}px DM Mono`;ctx.fillText('RIM',x*canvas.width,(y*canvas.height)-7*d);
 }
-$('#clear').onclick = () => {if(marking==='court')courtPoints=[];else rimBox=null;drawBox();};
+$('#clear').onclick = () => {if(marking==='landmarks')return window.courtCalibration?.clear();if(marking==='court')courtPoints=[];else rimBox=null;drawBox();};
 
 function upload(form) {
   return new Promise((resolve, reject) => {
@@ -117,6 +119,7 @@ $('#analyze').onclick = async () => {
   form.append('camera', $('#cameraProfile').value);
   form.append('pose_model', $('#poseModel').value);
   if(courtPoints.length && courtAllowed())form.append('court',JSON.stringify(courtPoints));
+  window.courtCalibration?.append(form);
   const selectedModel = $('#poseModel').value;
   selectedPoseModelForJob = $('#analysisMode').value==='one_on_one' ? selectedModel : null;
   $('#modelStatus').textContent = selectedPoseModelForJob
@@ -161,7 +164,7 @@ const labels={elbow_angle_at_release_deg:'Elbow at release',set_point_elbow_angl
 Object.assign(labels,{visible_players:'Players visible at release',separation_torso:'Projected separation at release',contest_clearance_torso:'Defender hand / release clearance',separation_change_torso:'Separation change before release',defender_selection_margin_torso:'Defender selection margin',separation:'Release separation',contest_clearance:'Contest clearance'});
 labels.visible_hand_clearance_torso='Visible hand clearance (other hand unknown)';
 labels.gather_separation_torso='Separation at the gather (not scored)';
-function displayMetric(k,v){if(v==null)return 'Unavailable';const value=typeof v==='number'?Number(v.toFixed(2)):v;if(k.includes('angle')||k.includes('_deg'))return `${value}°`;if(k.includes('pct'))return `${value}%`;if(k.includes('torso'))return `${value} torso lengths`;if(k.endsWith('_s'))return `${value} s`;return value;}
+function displayMetric(k,v){if(v==null)return 'Unavailable';const value=typeof v==='number'?Number(v.toFixed(2)):v;if(k.includes('angle')||k.includes('_deg'))return `${value}°`;if(k.includes('pct'))return `${value}%`;if(k.includes('torso'))return `${value} torso lengths`;if(k.endsWith('_ft'))return `${value} ft`;if(k==='shot_zone')return String(v).replaceAll('_',' ');if(k.endsWith('_s'))return `${value} s`;return value;}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function label(k){return labels[k]||k.replaceAll('_',' ');}
 function metricsMarkup(metrics){return Object.entries(metrics||{}).map(([k,v])=>`<div class="metric"><small>${esc(label(k))}</small><strong>${esc(displayMetric(k,v))}</strong></div>`).join('');}
@@ -182,7 +185,7 @@ function render(id,result){
   const game=result.mode==='one_on_one';
   $('#reportMode').textContent=game?`GAME REVIEW · ${(result.camera_profile||'AUTO').toUpperCase()}`:`SHOOTING FORM · ${(result.handedness||$('#handedness').value).toUpperCase()} HAND`;
   $('#gameHelp').classList.toggle('hidden',!game);
-  if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.'+(method?.formula?` Score: ${method.formula}.`:'');}
+  if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. '+(result.court_calibration?'Torso-length distances are projected in the image and normalized to the shooter’s torso length; metrics in feet are measured on the calibrated floor. Compare torso-length metrics only across clips with similar camera angles.':'Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.')+(method?.formula?` Score: ${method.formula}.`:'');}
   const made=result.shots.filter(s=>s.outcome==='made'||s.outcome==='likely made').length;
   // Make/miss is unavailable when no rim was detected or marked. Reports saved before
   // rims were detected automatically have no rim_source; they keep the old rule.
@@ -197,6 +200,7 @@ function render(id,result){
   const requested=result.vision?.pose_model_requested??result.vision?.pose_model_choice;
   const actual=result.vision?.pose_model;
   const modelText=requested?`Pose model requested: ${poseModelLabels[requested]||requested}; loaded: ${actual||'not reported'}. `:'';
+  window.courtCalibration?.report(result);
   $('#visionSummary').textContent=game?`${modelText}Tracking: up to ${diagnostics.max_players_visible??0} player candidates per frame; ${diagnostics.ball_detections??0} ball observations; ${diagnostics.scene_cuts??0} camera cuts. ${performanceText} Review player IDs in the video to confirm the matchup.`:performanceText;
   // Name any optional speedup this analysis could not use, so a slow run is explained.
   const vision=result.vision||{}, slower=[];
