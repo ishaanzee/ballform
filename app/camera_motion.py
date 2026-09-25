@@ -378,4 +378,4 @@ def draw_court(frame: np.ndarray, court_map: CourtMap, frame_no: int) -> None:
     if mapping is None:
         return
     lines = project_lines(np.linalg.inv(mapping.image_to_court), court_map.court, frame.shape[1], frame.shape[0])
-    cv2.polylines(frame, lines, False, (255, 210, 80), 1, cv2.LINE_AA)
+    cv2.polylines(frame, lines, False, (255, 210, 80), 2, cv2.LINE_AA)

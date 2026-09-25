@@ -85,6 +85,30 @@ Separation is projected hip-to-hip distance in shooter torso lengths. Contest cl
 
 Form mode reports 2D image-plane estimates such as release timing, launch angle, elbow angle, and upper-arm elevation. These are good for comparing your own reps from the same setup. They are not calibrated 3D biomechanics.
 
+## court calibration (optional, for feet)
+
+Game analyses can report real floor distances. In the preview, choose **Calibrate court**, pick the court standard (NBA, FIBA, NCAA or high school), scrub to a frame where the floor lines are clear, then pair landmarks: pick one on the half-court diagram and click the same spot on the video, where the painted lines meet. The page draws the fitted court over the frame so you can check it before analyzing.
+
+Mark five or more landmarks spread over the floor. Four always fit exactly, so their error cannot be checked; from five, the page also shows how far each point moves when it is left out. Include one far from the basket when you can, such as where the half-court line meets a sideline. On a test broadcast, six clicks bunched around the lane agreed within 2 px but put half court about 2.5 ft away from where a fit including a half-court click did. Spots inside the arc moved by under 1 ft. Reports say when a shot was taken outside the marked area, because its position is then extrapolated.
+
+The floor mapping is a homography, so it is valid only for points on the floor. The ball and the rim are never mapped through it. On moving cameras it follows pans and zooms from floor features only: the court under the current mapping plus a 6 ft apron, minus every player (and their floor reflection) and minus static broadcast graphics. The chain runs forward and backward from the marked frame and stops at camera cuts or when too few floor features survive. Frames it cannot map are marked unreliable and get no measurements in feet. Fixed cameras (courtside and elevated) keep the marked mapping. The review video draws the court lines on every reliably mapped frame.
+
+What it adds next to the torso-length metrics, which are unchanged:
+
+- **Shot distance** from the shooter's floor spot to the floor point under the rim, which comes from the court template. Shooters are usually airborne at release, and airborne feet map to a point beyond the player, so the spot comes from the ankles on the last grounded frames before take-off. The report says which frames were used.
+- **Shot zone** (paint, midrange, corner three, above-the-break three), the shooter's court position, and how far the spot is behind or inside the three-point line.
+- **Floor separation** from the shooter's take-off spot to the defender's feet.
+- **Contest clearance in feet**, which is approximate. It assumes the defender's hand and the ball are at the shooter's depth, and uses the camera recovered from the floor mapping.
+
+Player positions use the midpoint of the visible ankles, or the bottom of the pose box when both are hidden (reported as such). What was checked, on four broadcast clips with hand-placed landmarks:
+
+- **Fit:** 1.4–3.5 px RMS error on the clicked points. Unclicked landmarks, such as the 28 ft coaching-box line, reprojected within 3 px.
+- **Drift:** projected lane lines stayed within 2 px of the paint through the shot on every clip, and within about 7 px to the end of each clip. The worst case was one clip's baseline, about 16 px off at the end.
+- **Known distances:** lane width mapped to 15.6 ft (true 16) and the baseline-to-free-throw distance to 18.8 ft (true 19), on the anchor frame and 140 frames later alike.
+- **Consistency:** two different broadcast edits of the same shot, calibrated separately, gave 24.9 and 24.8 ft.
+
+Mapped positions move smoothly overall, but about 3% of frame-to-frame steps jump by more than a player can run, from lifted feet and ankle jitter. They are fine for spots and spacing, not for speeds. There are no hand-labelled ground-truth distances yet.
+
 ## phone upload, still local
 
 If the clip is on an iPhone, install [Tailscale for macOS](https://tailscale.com/download/mac) and [Tailscale for iOS](https://tailscale.com/download/ios), sign into the same account, then run:
@@ -150,13 +174,14 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 
 ## code map
 
-`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/game.py` handles shooter/defender association and the shot-space score. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
+`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/game.py` handles shooter/defender association and the shot-space score. `app/court.py` holds the court templates, the landmark fit and floor geometry; `app/camera_motion.py` follows the floor mapping through camera motion. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
 
 Run the checks with:
 
 ```bash
 uv run pytest -q
 node --check web/app.js
+node --check web/court.js
 ```
 
 Ballform is AGPL-3.0-only because it integrates the AGPL-licensed Ultralytics package and model. MediaPipe is Apache-2.0. See `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md`, and `SECURITY.md` before distributing a modified service.
