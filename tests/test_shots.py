@@ -133,6 +133,16 @@ def test_tip_after_the_ball_reaches_the_basket():
     assert shots[1].attempt["shooter_track_id"] == 2 and shots[1].number == 2
 
 
+def test_hand_over_the_ball_near_the_rim_in_flight_is_not_a_new_attempt():
+    # 2fcb: the falling jump shot passed over a raised hand behind the baseline
+    # just before reaching the rim, which read as a dunk.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(25)}
+    holders = {f: (2, path[f]) for f in (17, 18)}
+    balls, frames = scene(path, holders, [(20, *basket_box(.8)), (21, *basket_box(.8))], {17: 2, 18: 2})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert [shot.shot_type for shot in shots] == ["jump shot"]
+
+
 def test_contest_mid_flight_is_not_a_new_attempt():
     far_basket = (.8, .1)
     path = {f: lerp((.3, .3), far_basket, f / 20) for f in range(25)}
@@ -206,3 +216,24 @@ def test_putback_after_a_rebound_is_a_new_layup():
     assert [shot.shot_type for shot in shots] == ["jump shot", "layup"]
     assert shots[1].attempt["shooter_track_id"] == 2
     assert any(item.startswith("Putback") for item in shots[1].evidence)
+
+
+def test_ball_passing_a_hand_on_a_parabola_is_not_a_touch():
+    # After the jump shot reaches the basket, the ball drops past a raised hand
+    # behind the rim without changing course (2fcb frame 326).
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: (.5 + .004 * (f - 20), .1 + .003 * (f - 20) + .0004 * (f - 20) ** 2) for f in range(21, 45)})
+    holders = {f: (2, path[f]) for f in (28, 29)}
+    events = [(20, *basket_box(.8)), (30, *basket_box(.8)), (31, *basket_box(.8))]
+    balls, frames = scene(path, holders, events)
+    assert [shot.shot_type for shot in find_attempts([arc_shot()], balls, frames, FPS, None, 1.)] == ["jump shot"]
+
+
+def test_rim_area_entry_survives_a_low_confidence_frame():
+    path = {f: lerp((.42, .35), (.5, .05), f / 10) for f in range(11)}
+    path.update({f: lerp((.5, .05), (.5, .2), (f - 10) / 8) for f in range(11, 25)})
+    balls, frames = scene(path, {})
+    balls[12].confidence = .3
+    from app.shots import basket_events
+    # A hand contact between the two frames (2fcb) would stop the entries merging.
+    assert len(basket_events(frames, balls, (.47, .08, .06, .04), FPS, [12])) == 1

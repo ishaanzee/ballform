@@ -23,6 +23,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
 from app.scoring import RimInput, _rim_at, arc_apexes, rim_outcome
@@ -34,8 +36,8 @@ CONTACT_REACH = .65
 CONTACT_MARGIN = .2
 # A layup, dunk or tip reaches the basket this soon after the last touch.
 CONTACT_TO_BASKET_S = 1.2
-# A single low-confidence ball-in-basket frame fires on a ball passing in front
-# of the rim (3074e frames 54 and 136); a lone detection must be this confident.
+# A single low-confidence ball-in-basket frame fires on an empty net (3074e
+# frames 54 and 136); a lone detection must be this confident.
 BASKET_CONFIDENCE = .5
 # Detector class runs this close to an existing shot's release belong to it.
 SHOT_WINDOW_S = .7
@@ -44,6 +46,11 @@ FLIGHT_S = 3.0
 # A contact this close to the basket (torso lengths) is at the rim.
 AT_RIM = 1.2
 TIP_WINDOW_S = 2.5
+# A touch bends the ball's path. In 2D a ball flying past a hand, e.g. a fan's
+# behind the baseline, stays on a parabola: the largest residual around the
+# contact was 0.022 there versus 0.050-0.065 at three real releases (units of
+# frame height; ball radius about 0.016).
+FREE_FLIGHT_RADII = 2.5
 RIM_TYPES = {"layup", "dunk", "layup or dunk", "tip"}
 
 
@@ -140,8 +147,8 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
                   contact_frames: list[int] = ()) -> list[BasketEvent]:
     """Moments the ball reaches the basket: ball-in-basket detections and rim-area entries.
 
-    Neither means a make: the ball-in-basket class also fires on a ball sitting
-    on the rim (2c7e frames 376-394, a miss by the scoreboard). Detections within
+    Neither means a make: lone ball-in-basket detections also fire on an empty
+    net, and a ball in the rim's area can still miss. Detections within
     0.5 s merge into one event unless a hand touched the ball in between (a tip).
     """
     events = []
@@ -150,11 +157,14 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
             x1, y1, x2, y2 = run.box
             events.append(BasketEvent(run.start, ["ball_in_basket"], run.peak, ((x1 + x2) / 2, (y1 + y2) / 2)))
     if rim is not None:
+        # An entry needs the ball confidently outside first; a low-confidence
+        # frame inside the area is not an exit and re-entry.
         was_inside = False
         for ball in balls:
             box = _rim_at(rim, ball.frame)
-            inside = (box is not None and ball.confidence >= .45
-                      and box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
+            if box is None or ball.confidence < .45:
+                continue
+            inside = (box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
                       and box[1] - 1.5 * box[3] <= ball.y <= box[1] + 1.2 * box[3])
             if inside and not was_inside:
                 events.append(BasketEvent(ball.frame, ["rim_area"], 0., (box[0] + box[2] / 2, box[1] + .45 * box[3])))
@@ -198,6 +208,23 @@ def _handler_before(frames: list[dict], frame: int, fps: float, seconds: float =
     return None
 
 
+def free_flight(balls: list[Detection], frame: int, fps: float, aspect: float) -> bool:
+    """True when the ball stays on one parabola through ``frame``: nothing touched it.
+
+    Needs three confident observations on each side within 0.3 s; otherwise the
+    contact is not rejected.
+    """
+    points = [b for b in balls if abs(b.frame - frame) <= .3 * fps and b.confidence >= .45]
+    if sum(b.frame < frame for b in points) < 3 or sum(b.frame > frame for b in points) < 3:
+        return False
+    t = np.asarray([(b.frame - frame) / fps for b in points])
+    x = np.asarray([b.x * aspect for b in points])
+    y = np.asarray([b.y for b in points])
+    residual = np.hypot(x - np.polyval(np.polyfit(t, x, 1), t), y - np.polyval(np.polyfit(t, y, 2), t))
+    radius = float(np.mean([b.radius for b in points])) * aspect
+    return float(residual.max()) < max(.01, FREE_FLIGHT_RADII * radius)
+
+
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
     """The arc path's rule: apex 0.75 torso above the shoulders and 0.75 torso of rise."""
     shoulders = [contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")]
@@ -222,7 +249,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
         evidence = ["Outcome unavailable because the rim was not marked"]
         if event is not None and "ball_in_basket" in event.sources:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
-                            "it also fires on a ball sitting on the rim, so it is not treated as a make without a rim.")
+                            "lone detections also fire on an empty net, so it is not treated as a make without a rim.")
         return "unknown", 0., evidence, None
     outcome, confidence, evidence, frame = rim_outcome(segment, apex_frame, rim, net_motion, fps)
     if event is not None and "ball_in_basket" in event.sources:
@@ -317,23 +344,23 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
         recent = [c for c in contacts if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
                   and (current is None or c.frame > current.release + .15 * fps)]
-        near = [c for c in recent if math.hypot(*_torso_distance(c, event.location, aspect)) <= AT_RIM]
         if current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps:
-            # In flight: only a touch at the rim starts a new attempt (a tip-in); a
-            # contest mid-flight does not.
-            if not near:
-                current.reached = event.frame
-                if "ball_in_basket" in event.sources and not any("ball-in-basket" in e for e in current.shot.evidence):
-                    current.shot.evidence.append(
-                        f"Detector ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; it also "
-                        "fires on a ball sitting on the rim, so it does not change the outcome")
-                continue
-            recent = near
-        elif current is not None and current.reached is not None:
+            # A shot in flight claims its arrival at the basket. A hand touching it
+            # on the way is usually a contest or, in 2D, a background hand the ball
+            # passes over (2fcb frame 320, a fan behind the baseline).
+            current.reached = event.frame
+            if "ball_in_basket" in event.sources and not any("ball-in-basket" in e for e in current.shot.evidence):
+                current.shot.evidence.append(
+                    f"Detector ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
+                    "it does not change the outcome, which needs the rim")
+            continue
+        if current is not None and current.reached is not None:
             recent = [c for c in recent if c.frame > current.reached]
         if not recent:
             continue
         contact = recent[-1]
+        if free_flight(balls, contact.frame, fps, aspect):
+            continue
         dx, dy = _torso_distance(contact, event.location, aspect)
         at_rim = math.hypot(dx, dy) <= AT_RIM
         path = [b for b in balls if contact.frame <= b.frame <= event.frame]
@@ -384,6 +411,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         if not prior:
             continue
         contact = prior[-1]
+        if free_flight(balls, contact.frame, fps, aspect):
+            continue
         after = [b for b in balls if contact.frame < b.frame <= contact.frame + fps]
         others = [c for c in contacts if contact.frame < c.frame <= contact.frame + .3 * fps]
         shoulders = sum(contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")) / 2
