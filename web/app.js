@@ -70,8 +70,8 @@ canvas.onpointerdown = e => {
   if(marking==='court') {if(courtPoints.length<8){const p=point(e);courtPoints.push([p.x,p.y]);drawBox();}return;}
   dragStart=point(e); rimBox=null; canvas.setPointerCapture(e.pointerId);
 };
-canvas.onpointermove = e => { if(!dragStart)return; const p=point(e); rimBox=[Math.min(p.x,dragStart.x),Math.min(p.y,dragStart.y),Math.abs(p.x-dragStart.x),Math.abs(p.y-dragStart.y)]; drawBox(); };
-canvas.onpointerup = () => dragStart=null;
+canvas.onpointermove = e => { if(marking==='landmarks') return window.courtCalibration?.move(e); if(!dragStart)return; const p=point(e); rimBox=[Math.min(p.x,dragStart.x),Math.min(p.y,dragStart.y),Math.abs(p.x-dragStart.x),Math.abs(p.y-dragStart.y)]; drawBox(); };
+canvas.onpointerup = () => { window.courtCalibration?.release(); dragStart=null; };
 function drawBox(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
   window.courtCalibration?.draw(ctx);

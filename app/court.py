@@ -55,6 +55,9 @@ LANDMARK_LABELS = {
     "center_right": "Centre circle / half-court line, right",
 }
 ZONES = ("paint", "midrange", "corner_three", "above_break_three")
+# How the landmarks were placed: clicked by hand, proposed by auto-detect and accepted
+# as proposed, or proposed and then moved, added to or removed by hand.
+LANDMARK_SOURCES = ("manual", "auto", "auto, adjusted")
 
 
 @dataclass(frozen=True)
@@ -137,8 +140,10 @@ def template_json() -> dict:
 def parse_landmarks(payload) -> dict:
     """Validate the court_landmarks form field.
 
-    {"standard": "nba", "time_s": 0.0 | "frame": 0, "points": [{"id": ..., "image": [x, y]}, ...]}
-    with image points normalized to the frame. Raises ValueError with a user-facing message.
+    {"standard": "nba", "time_s": 0.0 | "frame": 0, "points": [{"id": ..., "image": [x, y]}, ...],
+     "source": "manual" | "auto" | "auto, adjusted"}
+    with image points normalized to the frame; source is optional and defaults to manual.
+    Raises ValueError with a user-facing message.
     """
     if isinstance(payload, str):
         try:
@@ -161,6 +166,9 @@ def parse_landmarks(payload) -> dict:
         time_s = float(time_s)
     else:
         raise ValueError("Court landmarks need the video time (time_s) or frame they were marked on.")
+    source = payload.get("source", "manual")
+    if source not in LANDMARK_SOURCES:
+        raise ValueError(f"Court landmark source must be one of: {', '.join(LANDMARK_SOURCES)}.")
     court = template(standard)
     points, seen = [], set()
     for item in payload.get("points") or []:
@@ -179,7 +187,7 @@ def parse_landmarks(payload) -> dict:
         raise ValueError("Court landmarks need 4 points with no 3 on one court line, "
                          "for example the lane corners plus a three-point landmark.")
     return {"standard": standard, "frame": frame, "time_s": time_s if frame is None else None,
-            "points": points}
+            "points": points, "source": source}
 
 
 def general_position(points) -> bool:
@@ -210,6 +218,7 @@ class Calibration:
     errors_px: list[float]
     leave_one_out_px: list[float] | None
     outliers: list[str] = field(default_factory=list)
+    source: str = "manual"
 
     def extrapolation_ft(self, court_point) -> float:
         """Feet outside the area spanned by the used clicks (0 inside it).
@@ -233,7 +242,7 @@ class Calibration:
             return None if not values else {"rms": round(float(np.sqrt(np.mean(np.square(values)))), 2),
                                             "max": round(float(np.max(values)), 2), "points": len(values)}
         return {
-            "standard": self.standard, "points": len(self.ids),
+            "standard": self.standard, "points": len(self.ids), "landmark_source": self.source,
             "clicked_error_px": stats(self.errors_px),
             "leave_one_out_error_px": stats(self.leave_one_out_px),
             "per_point_error_px": {key: round(e, 2) for key, e in zip(self.ids, self.errors_px)},

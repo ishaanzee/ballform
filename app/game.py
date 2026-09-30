@@ -538,9 +538,10 @@ def analyze_game_shots(shots: list[ShotResult], player_frames: list[dict],
 COURT_METRICS = ("shot_distance_ft", "shot_zone", "shooter_court_x_ft", "shooter_court_y_ft",
                  "separation_ft", "contest_clearance_ft", "visible_hand_clearance_ft")
 COURT_LIMITATION = (
-    "Court calibration: feet are measured on the floor through a homography from user-marked court landmarks, "
-    "followed through camera motion. Player positions come from the feet (ankles, or the pose box bottom when ankles "
-    "are hidden); contest clearance in feet assumes the defender's hand and the ball are at the shooter's depth. "
+    "Court calibration: feet are measured on the floor through a homography from court landmarks placed in the "
+    "preview (clicked by hand, or proposed automatically from the painted lines), followed through camera motion. "
+    "Player positions come from the feet (ankles, or the pose box bottom when ankles are hidden); contest clearance "
+    "in feet assumes the defender's hand and the ball are at the shooter's depth. "
     "Measurements outside the marked landmarks are extrapolated and less accurate."
 )
 

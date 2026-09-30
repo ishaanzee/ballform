@@ -49,8 +49,9 @@
           <div class="court-side">
             <label>Court lines<select id="courtStandard"><option value="nba">NBA</option><option value="fiba">FIBA</option><option value="ncaa">NCAA</option><option value="nfhs">High school (NFHS)</option></select></label>
             <p>Scrub to a frame where the floor lines are clear. Pick a landmark on the diagram, then click the same spot on the video, where the painted lines meet. Mark 5 or more spread over the floor, including one far from the basket such as half court.</p>
+            <p>Or press <b>Auto-detect court</b> to have Ballform propose the landmarks from the painted lines of this frame. It runs on this computer. Check the drawn court, drag any point that is off, or select one on the diagram and remove it.</p>
             <p id="courtStatus" role="status" aria-live="polite"></p>
-            <div class="court-buttons"><button id="courtReturn" class="ghost hidden" type="button">Return to marked frame</button><button id="courtClear" class="ghost" type="button">Clear court marks</button></div>
+            <div class="court-buttons"><button id="courtAuto" class="ghost" type="button">Auto-detect court</button><button id="courtRemove" class="ghost" type="button" disabled>Remove selected point</button><button id="courtReturn" class="ghost hidden" type="button">Return to marked frame</button><button id="courtClear" class="ghost" type="button">Clear court marks</button></div>
           </div>
         </div>
         <div class="actions">
@@ -82,7 +83,7 @@
     </section>
   </main>
   <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
-  <script src="/assets/app.js?v=client-report-1"></script>
-  <script src="/assets/court.js?v=court-calibration-1"></script>
+  <script src="/assets/app.js?v=court-autodetect-1"></script>
+  <script src="/assets/court.js?v=court-autodetect-1"></script>
 </body>
 </html>

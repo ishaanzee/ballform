@@ -1,10 +1,13 @@
 // Court calibration: pair landmarks on a half-court diagram with clicks on one video frame,
-// preview the fitted court over the frame, and send the pairs with the analysis.
+// or let the server propose them from the painted lines, preview the fitted court over the
+// frame, and send the pairs with the analysis.
 window.courtCalibration = (() => {
   const q = (s) => document.querySelector(s);
   const svgNS = 'http://www.w3.org/2000/svg';
   const scale = 6, pad = 14;  // diagram pixels per foot, margin
   let templates = null, standard = 'nba', marks = {}, selected = null, markedTime = null, fitted = null;
+  // source: 'manual' | 'auto' (as proposed) | 'auto, adjusted' (proposed, then moved, added or removed)
+  let source = 'manual', notice = '', dragging = null, detecting = false;
 
   fetch('/assets/court-template.json').then(r => r.json()).then(data => { templates = data; renderDiagram(); update(); })
     .catch(() => { q('#courtStatus').textContent = 'The court diagram could not be loaded; court calibration is unavailable.'; });
@@ -148,6 +151,9 @@ window.courtCalibration = (() => {
       g.setAttribute('aria-label', `${court()?.landmarks[g.dataset.id].label}${g.dataset.id in marks ? ' (marked)' : ''}`);
     });
     computeFit();
+    q('#courtRemove').disabled = !(selected && selected in marks && onFrame());
+    q('#courtAuto').disabled = detecting;
+    q('#courtAuto').textContent = detecting ? 'Detecting…' : 'Auto-detect court';
     q('#courtStatus').textContent = statusText();
     q('#courtReturn').classList.toggle('hidden', onFrame());
     if (typeof drawBox === 'function') drawBox();
@@ -156,36 +162,128 @@ window.courtCalibration = (() => {
   function statusText() {
     const c = court(), n = Object.keys(marks).length;
     if (!c) return '';
-    const pick = selected ? `Now click “${c.landmarks[selected].label}” on the video.` : 'Pick a landmark on the diagram, then click the same spot on the video.';
-    if (!onFrame()) return `Court marks belong to the frame at ${markedTime.toFixed(2)} s. Return to it to see or add to them.`;
-    if (n < 4) return `${pick} ${n} of at least 4 marked (5 or more lets Ballform check the fit).`;
-    if (fitted?.error) return `${pick} These marks cannot define the floor yet: 4 of them must not lie on one line.`;
+    if (detecting) return 'Looking for the painted court lines on this frame…';
+    const lead = notice ? `${notice} ` : '';
+    const pick = selected
+      ? `Now click “${c.landmarks[selected].label}” on the video${selected in marks ? ', or drag its point' : ''}.`
+      : 'Pick a landmark on the diagram, then click the same spot on the video.';
+    if (!onFrame()) return `${lead}Court marks belong to the frame at ${markedTime.toFixed(2)} s. Return to it to see or add to them.`;
+    if (n < 4) return `${lead}${pick} ${n} of at least 4 marked (5 or more lets Ballform check the fit).`;
+    if (fitted?.error) return `${lead}${pick} These marks cannot define the floor yet: 4 of them must not lie on one line.`;
     const rms = Math.sqrt(fitted.errors.reduce((a, e) => a + e * e, 0) / n);
-    let text = `${pick} Error on the clicked points: ${rms.toFixed(1)} px RMS, ${Math.max(...fitted.errors).toFixed(1)} px max.`;
-    if (!fitted.loo) text += ' With exactly 4 points the fit always passes through them, so its error cannot be checked; add a fifth.';
-    else {
-      const valid = fitted.loo.map((e, i) => [e, fitted.ids[i]]).filter(([e]) => e != null);
-      if (valid.length) {
-        const [worst, id] = valid.reduce((a, b) => (b[0] > a[0] ? b : a));
-        text += ` Leaving each point out moves it by up to ${worst.toFixed(0)} px (${c.landmarks[id].label}); `
-          + 'a large value is expected for a lone far landmark, but next to other marks it suggests a misclick.';
+    let text = `${lead}${pick}`;
+    if (source === 'auto') {
+      // Proposed points all come from one fitted court, so their click and leave-one-out errors are ~0 and say nothing.
+      text += ' The proposed points sit exactly on the fitted court, so there is no click error to show: judge the fit by whether the drawn lines follow the paint.';
+    } else {
+      text += ` Error on the ${source === 'manual' ? 'clicked' : 'marked'} points: ${rms.toFixed(1)} px RMS, ${Math.max(...fitted.errors).toFixed(1)} px max.`;
+      if (!fitted.loo) text += ' With exactly 4 points the fit always passes through them, so its error cannot be checked; add a fifth.';
+      else {
+        const valid = fitted.loo.map((e, i) => [e, fitted.ids[i]]).filter(([e]) => e != null);
+        if (valid.length) {
+          const [worst, id] = valid.reduce((a, b) => (b[0] > a[0] ? b : a));
+          text += ` Leaving each point out moves it by up to ${worst.toFixed(0)} px (${c.landmarks[id].label}); `
+            + 'a large value is expected for a lone far landmark, but next to other marks it suggests a misclick.';
+        }
       }
     }
     if (fitted.far < c.length / 4) text += ' All marks are near the basket, so far-court distances are extrapolated; add a half-court or far-sideline landmark if one is visible.';
     return text + ' Check that the drawn lines sit on the court.';
   }
 
-  function place(e) {
-    if (!court() || !selected) { q('#courtStatus').textContent = 'Pick a landmark on the diagram first.'; return; }
-    if (!onFrame()) return;
+  const adjusted = () => { if (source === 'auto') source = 'auto, adjusted'; };
+  function normalized(e) {
     const {r, w, h, x, y} = picture();
-    const nx = (e.clientX - r.left - x) / w, ny = (e.clientY - r.top - y) / h;
+    return [(e.clientX - r.left - x) / w, (e.clientY - r.top - y) / h];
+  }
+  function nearestMark(e) {  // a placed point within 12 screen px of the pointer
+    const {r, w, h, x, y} = picture();
+    let best = null, bestD = 12;
+    for (const [id, [nx, ny]] of Object.entries(marks)) {
+      const d = Math.hypot(r.left + x + nx * w - e.clientX, r.top + y + ny * h - e.clientY);
+      if (d <= bestD) { best = id; bestD = d; }
+    }
+    return best;
+  }
+
+  function place(e) {
+    if (!court() || detecting) return;
+    if (onFrame() && Object.keys(marks).length) {
+      const hit = nearestMark(e);
+      if (hit) { dragging = hit; selected = hit; canvas.setPointerCapture?.(e.pointerId); update(); return; }
+    }
+    if (!selected) { q('#courtStatus').textContent = 'Pick a landmark on the diagram first, or drag a placed point.'; return; }
+    if (!onFrame()) return;
+    const [nx, ny] = normalized(e);
     if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
     markedTime ??= preview.currentTime;
+    if (Object.keys(marks).length) adjusted();
     marks[selected] = [nx, ny];
     // Move on to the next unmarked landmark so pairs can be placed quickly.
     const ids = Object.keys(court().landmarks);
     selected = ids.slice(ids.indexOf(selected) + 1).find(id => !(id in marks)) || null;
+    update();
+  }
+
+  function move(e) {
+    if (!dragging) return;
+    const [nx, ny] = normalized(e);
+    marks[dragging] = [Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))];
+    adjusted();
+    update();
+  }
+  function release() { dragging = null; }
+
+  function remove() {
+    if (!selected || !(selected in marks) || !onFrame()) return;
+    delete marks[selected];
+    adjusted();
+    if (!Object.keys(marks).length) { markedTime = null; source = 'manual'; notice = ''; }
+    update();
+  }
+
+  // Ask the local server for landmarks fitted to the painted lines of the current frame.
+  async function autoDetect() {
+    const c = court(), vw = preview.videoWidth, vh = preview.videoHeight;
+    if (!c || !vw || !vh || detecting) return;
+    const count = Object.keys(marks).length;
+    if (count && typeof confirm === 'function'
+        && !confirm(`Replace the ${count} court marks with landmarks proposed for this frame?`)) return;
+    const time = preview.currentTime;
+    detecting = true; update();
+    let result;
+    try {
+      const frame = document.createElement('canvas');
+      frame.width = vw; frame.height = vh;
+      frame.getContext('2d').drawImage(preview, 0, 0, vw, vh);
+      const blob = await new Promise(resolve => frame.toBlob(resolve, 'image/jpeg', .92));
+      const form = new FormData();
+      form.append('frame', blob, 'frame.jpg');
+      form.append('standard', standard);
+      const response = await fetch(apiUrl('/api/court/detect'), {method: 'POST', body: form});
+      result = await response.json().catch(() => ({}));
+      if (!response.ok) result = {ok: false, reason: result.detail || `Auto-detect failed (HTTP ${response.status}).`};
+    } catch (error) {
+      result = {ok: false, reason: `Auto-detect failed: ${error.message || error}.`};
+    }
+    detecting = false;
+    applyProposal(result, time);
+  }
+
+  function applyProposal(result, time) {
+    const c = court();
+    if (!c) return;
+    if (!result?.ok) {
+      notice = `Auto-detect found no usable court on this frame: ${result?.reason || 'no reason given.'} Your marks are unchanged.`;
+      update();
+      return;
+    }
+    marks = {};
+    for (const {id, image} of result.points || []) if (c.landmarks[id]) marks[id] = image;
+    markedTime = time; selected = null; source = 'auto';
+    notice = `Auto-detect proposed ${Object.keys(marks).length} landmarks; ${Math.round(result.confidence * 100)}% of the `
+      + 'court lines expected in view lie on painted lines. Check the drawn court against the paint, drag any point '
+      + 'that is off, or select one on the diagram and remove it. Nothing is used until you analyze.';
     update();
   }
 
@@ -215,7 +313,8 @@ window.courtCalibration = (() => {
     ctx.font = `${11 * d}px DM Mono, monospace`;
     Object.entries(marks).forEach(([id, [nx, ny]], i) => {
       const [cx, cy] = toCanvas([nx * vw, ny * vh]);
-      ctx.fillStyle = '#fa5a24'; ctx.beginPath(); ctx.arc(cx, cy, 4 * d, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fa5a24'; ctx.beginPath(); ctx.arc(cx, cy, (id === selected ? 6 : 4) * d, 0, Math.PI * 2); ctx.fill();
+      if (id === selected) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * d; ctx.stroke(); }
       ctx.fillStyle = '#fff'; ctx.fillText(String(i + 1), cx + 6 * d, cy - 6 * d);
     });
     ctx.restore();
@@ -231,26 +330,29 @@ window.courtCalibration = (() => {
     note.classList.toggle('hidden', !summary);
     if (!summary) return;
     const error = summary.clicked_error_px;
-    note.textContent = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks, `
-      + `${error.rms} px RMS error on the clicked points; the floor mapping held on ${summary.reliable_frames} of `
+    const placed = {auto: ' (proposed automatically and accepted)', 'auto, adjusted': ' (proposed automatically, adjusted by hand)'}[summary.landmark_source] || '';
+    note.textContent = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks${placed}, `
+      + `${error.rms} px RMS error on the marked points; the floor mapping held on ${summary.reliable_frames} of `
       + `${summary.frames} analyzed frames. Metrics in feet are measured on the floor; the torso-length metrics are `
       + 'unchanged. Check the court lines drawn in the video.';
   }
 
-  function clear() { marks = {}; markedTime = null; selected = null; update(); }
+  function clear() { marks = {}; markedTime = null; selected = null; source = 'manual'; notice = ''; dragging = null; update(); }
 
   function append(form) {
     if (!game() || !court() || !fitted?.h) return;
-    form.append('court_landmarks', JSON.stringify({standard, time_s: markedTime,
+    form.append('court_landmarks', JSON.stringify({standard, time_s: markedTime, source,
       points: Object.entries(marks).map(([id, image]) => ({id, image}))}));
   }
 
   q('#markLandmarks').addEventListener('click', () => { marking = 'landmarks'; q('#courtPanel').classList.remove('hidden'); update(); });
-  q('#courtStandard').addEventListener('change', e => { standard = e.target.value; marks = {}; markedTime = null; selected = null; renderDiagram(); });
+  q('#courtStandard').addEventListener('change', e => { standard = e.target.value; marks = {}; markedTime = null; selected = null; source = 'manual'; notice = ''; renderDiagram(); });
   q('#courtClear').addEventListener('click', clear);
+  q('#courtAuto').addEventListener('click', () => { marking = 'landmarks'; autoDetect(); });
+  q('#courtRemove').addEventListener('click', remove);
   q('#courtReturn').addEventListener('click', () => { if (markedTime != null) preview.currentTime = markedTime; });
   q('#analysisMode').addEventListener('change', update);
   preview.addEventListener('seeked', update);
   preview.addEventListener('loadedmetadata', clear);
-  return {place, draw, clear, append, report};
+  return {place, move, release, remove, draw, clear, append, report, applyProposal, source: () => source};
 })();
