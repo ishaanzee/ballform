@@ -1,5 +1,7 @@
 import json
 
+import cv2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -161,3 +163,31 @@ def test_run_saves_the_analysis_settings_for_reruns(client, monkeypatch, tmp_pat
     saved = json.loads((tmp_path / "job" / "settings.json").read_text())
     assert saved["mode"] == "one_on_one" and saved["camera"] == "moving" and saved["rim_frame"] == 12
     assert saved["rim"] == [.1, .1, .2, .2] and saved["court_landmarks"] == LANDMARKS
+
+
+def test_court_detect_proposes_landmarks_for_a_frame(client):
+    from app.court import parse_landmarks
+    from tests_support_court import render_court, synthetic_camera
+    court_to_image = synthetic_camera(focal=2600.)[2] @ np.diag([-1., 1., 1.])  # diagram handedness
+    _, png = cv2.imencode(".png", render_court(court_to_image, seed=3))
+    response = client.post("/api/court/detect", files={"frame": ("frame.png", png.tobytes(), "image/png")},
+                           data={"standard": "nba"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] and body["standard"] == "nba" and len(body["points"]) >= 5
+    # What the page gets back is what it sends with the analysis, and nothing was stored.
+    parsed = parse_landmarks({"standard": "nba", "time_s": 1.5, "source": "auto", "points": body["points"]})
+    assert parsed["source"] == "auto"
+    assert not list(main.JOBS_DIR.iterdir())
+
+
+def test_court_detect_rejects_bad_input(client):
+    assert client.post("/api/court/detect", files={"frame": ("f.png", b"not an image")}).status_code == 422
+    assert client.post("/api/court/detect", files={"frame": ("f.png", b"x")},
+                       data={"standard": "wnba"}).status_code == 422
+
+
+def test_court_detect_explains_a_frame_without_a_court(client):
+    _, png = cv2.imencode(".png", np.full((360, 640, 3), 90, np.uint8))
+    body = client.post("/api/court/detect", files={"frame": ("f.png", png.tobytes())}).json()
+    assert body["ok"] is False and body["reason"] and body["points"] == []

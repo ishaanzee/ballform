@@ -664,6 +664,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         # Fit before the long frame loop so an unusable marking fails fast.
         court_landmarks = parse_landmarks(court_landmarks)
         calibration = fit_court(court_landmarks["points"], width, height, court_landmarks["standard"])
+        calibration.source = court_landmarks["source"]
     # Preserve more release/contest detail than the original 15 FPS pipeline.
     stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
