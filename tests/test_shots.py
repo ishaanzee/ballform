@@ -193,6 +193,29 @@ def test_floater_needs_layup_dunk_class_at_least_as_confident_as_jump_shot(layup
     assert find_attempts([shot], balls, frames, FPS, None, 1.)[0].shot_type == expected
 
 
+def arc_shots_reaching(releases_and_reaches):
+    """Arc shots released at the given frames, each reaching the basket at its paired frame."""
+    path = {f: (.45, .3) for f in range(max(r for _, r in releases_and_reaches) + 10)}
+    events = [(reach, *basket_box(.8)) for _, reach in releases_and_reaches]
+    balls, frames = scene(path, {}, events)
+    shots = [ShotResult(i + 1, 0., release / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
+             for i, (release, _) in enumerate(releases_and_reaches)]
+    return find_attempts(shots, balls, frames, FPS, None, 1.)
+
+
+def test_arc_shot_reaching_the_basket_right_after_release_is_a_rim_finish():
+    shot, = arc_shots_reaching([(10, 16)])
+    assert shot.shot_type == "layup or dunk"
+    assert any(item.startswith("Rim finish: the ball reached the basket 0.20 s") for item in shot.evidence)
+
+
+def test_quick_rim_finish_right_after_the_previous_shot_got_there_is_a_tip():
+    first, tip = arc_shots_reaching([(0, 20), (40, 44)])
+    assert (first.shot_type, tip.shot_type) == ("jump shot", "tip")
+    first, putback = arc_shots_reaching([(0, 20), (60, 64)])
+    assert putback.shot_type == "layup or dunk"
+
+
 def test_layup_outcome_uses_the_rim_when_one_exists():
     path = {f: (.42, .35) for f in range(11)}
     path.update({f: lerp((.42, .35), (.5, .05), (f - 10) / 10) for f in range(11, 21)})

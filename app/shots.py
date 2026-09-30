@@ -4,6 +4,8 @@
 release contact. This module labels every game shot with a type and adds the
 attempts that path misses:
 
+* Arc shots that reach the basket within RIM_FLIGHT_S of release: rim
+  finishes that drew a small arc, typed tip or "layup or dunk".
 * Hidden-release jump shots: the detector's jump-shot class and a ball arc
   above the last visible hand contact, when the release itself was hidden.
 * Rim attempts (layups, dunks, tips, putbacks): the ball reaches the basket,
@@ -46,6 +48,14 @@ FLIGHT_S = 3.0
 # A contact this close to the basket (torso lengths) is at the rim.
 AT_RIM = 1.2
 TIP_WINDOW_S = 2.5
+# An arc shot whose ball reaches the basket this soon after release was let go
+# at the rim. On the labeled broadcast clips, jump shots took 1.05-1.38 s,
+# floaters 0.50-0.65 s, and 11 of 14 rim finishes 0.30 s or less (the other
+# three had a release estimate 0.3-0.6 s early).
+RIM_FLIGHT_S = .4
+# Such a finish within this long of the previous shot reaching the basket is a
+# tip: labeled tips came 0.80-0.90 s after, a gathered putback dunk 1.48 s.
+TIP_AFTER_REACH_S = 1.
 # A touch bends the ball's path. In 2D a ball flying past a hand, e.g. a fan's
 # behind the baseline, stays on a parabola: the largest residual around the
 # contact was 0.022 there versus 0.050-0.065 at three real releases (units of
@@ -305,10 +315,26 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     window = round(SHOT_WINDOW_S * fps)
 
     anchors = []
-    for shot in shots:
+    previous_reach = None
+    for shot in sorted(shots, key=lambda s: s.release_s):
         release = round(shot.release_s * fps)
-        shot.shot_type, notes = _jump_type(release, c6, c7, fps)
+        # From broadcast height a layup off the glass still draws a small arc,
+        # so the arc path finds it; its flight time says it was a finish.
+        reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
+        if reach is not None and reach - release <= RIM_FLIGHT_S * fps:
+            flight = f"the ball reached the basket {max(0, reach - release) / fps:.2f} s after release"
+            if (previous_reach is not None and previous_reach < reach
+                    and release - previous_reach <= TIP_AFTER_REACH_S * fps):
+                shot.shot_type = "tip"
+                notes = [f"Tip: {flight}, {(release - previous_reach) / fps:.2f} s after the previous shot got there"]
+            else:
+                shot.shot_type = "layup or dunk"
+                notes = [f"Rim finish: {flight}; a jump shot or floater takes longer",
+                         *_class_note(_overlapping(c7, release - window, reach), "layup-dunk")]
+        else:
+            shot.shot_type, notes = _jump_type(release, c6, c7, fps)
         shot.evidence += notes
+        previous_reach = reach if reach is not None else previous_reach
         anchors.append(Anchor(release, None, shot))
 
     # Hidden-release jump shots: jump-shot class plus a supported arc, no known shot nearby.
