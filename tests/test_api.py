@@ -151,3 +151,13 @@ def test_invalid_court_landmarks_are_rejected_with_a_reason(client, data, messag
                            data={"mode": "one_on_one", **data})
     assert response.status_code == 422 and message in response.json()["detail"]
     assert not list(main.JOBS_DIR.iterdir())
+
+
+def test_run_saves_the_analysis_settings_for_reruns(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "analyze_video", lambda *args, **kwargs: {})
+    (tmp_path / "job").mkdir()
+    main._run("job", tmp_path / "job" / "input.mp4", (.1, .1, .2, .2), "one_on_one", "left", "moving",
+              rim_frame=12, court_landmarks=LANDMARKS)
+    saved = json.loads((tmp_path / "job" / "settings.json").read_text())
+    assert saved["mode"] == "one_on_one" and saved["camera"] == "moving" and saved["rim_frame"] == 12
+    assert saved["rim"] == [.1, .1, .2, .2] and saved["court_landmarks"] == LANDMARKS

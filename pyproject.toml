@@ -28,6 +28,7 @@ pythonpath = ["."]
 ballform-lan = "app.lan:main"
 ballform-share = "app.lan:main"
 ballform-report = "app.client_report:main"
+ballform-eval = "app.evaluation:main"
 
 [tool.uv]
 package = true

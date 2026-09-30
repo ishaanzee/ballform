@@ -59,6 +59,11 @@ def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] |
          rim_frame: int | None = None, rim_time_s: float | None = None,
          pose_model: str = "yolo26s-pose", court_landmarks: dict | None = None) -> None:
     try:
+        # Kept so scripts/evaluate.py can rerun a labeled clip with the same options.
+        (input_path.parent / "settings.json").write_text(json.dumps({
+            "rim": rim, "mode": mode, "handedness": handedness, "camera": camera, "court": court,
+            "rim_frame": rim_frame, "rim_time_s": rim_time_s, "pose_model": pose_model,
+            "court_landmarks": court_landmarks}))
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
