@@ -59,6 +59,17 @@ def test_summary_scores_outcomes_types_distance_and_zones(tmp_path):
     assert summary["zone"]["accuracy"] == "3/3 (100%)"
 
 
+def test_shot_type_is_also_scored_as_shot_versus_rim(tmp_path):
+    write_job(tmp_path, "a", [shot(1.0, shot_type="floater"), shot(3.0, shot_type="layup or dunk"),
+                              shot(5.0, shot_type="floater"), shot(7.0, shot_type="tip")])
+    labels = read_labels_from(tmp_path, "a,1.0,made,jump shot,,,,,\na,3.0,made,tip,,,,,\n"
+                              "a,5.0,made,layup,,,,,\na,7.0,made,dunk,,,,,\n")
+    summary = summarize(evaluate(labels, tmp_path, .75))["shot_type"]
+    assert summary["accuracy"] == "0/4 (0%)"
+    assert summary["shot_vs_rim"] == "3/4 (75%)"
+    assert summary["shot_vs_rim_labeled_vs_predicted"] == {"shot": {"shot": 1}, "rim": {"rim": 2, "shot": 1}}
+
+
 def test_a_missing_job_is_reported_not_fatal(tmp_path):
     summary = summarize(evaluate(read_labels_from(tmp_path, "gone,1.0,made,,,,,,\n"), tmp_path, .75))
     assert summary["clips_failed"] == 1 and summary["labeled_shots"] == 0
