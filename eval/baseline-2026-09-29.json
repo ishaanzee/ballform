@@ -1,0 +1,171 @@
+{
+  "summary": {
+    "clips": 8,
+    "clips_failed": 0,
+    "labeled_shots": 8,
+    "predicted_shots": 10,
+    "matched": 7,
+    "detection": {
+      "recall": "7/8 (88%)",
+      "precision": "7/10 (70%)"
+    },
+    "release_error_s_median": 0.06,
+    "outcome": {
+      "coverage": "6/7 (86%)",
+      "accuracy_when_called": "6/6 (100%)",
+      "labeled_vs_predicted": {
+        "made": {
+          "made": 6
+        },
+        "missed": {
+          "unknown": 1
+        }
+      },
+      "misses_called_made": 0
+    },
+    "shot_type": {
+      "accuracy": "2/7 (29%)"
+    },
+    "distance_ft": {
+      "coverage": "0/6 (0%)"
+    },
+    "zone": {
+      "accuracy": "0/0",
+      "two_vs_three": "0/0"
+    }
+  },
+  "shots": [
+    {
+      "job_id": "2fcb9c782ebf",
+      "label_release_s": 4.1,
+      "predicted_release_s": 4.04,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / -",
+      "distance_ft": "25.0 / None",
+      "zone": "above_break_three / -",
+      "shooter_label": "#77 LAL purple (Doncic)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "2c7e42acbf01",
+      "label_release_s": null,
+      "predicted_release_s": 3.85,
+      "problem": "false shot",
+      "outcome": "- / missed",
+      "shot_type": "- / -",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "2c7e42acbf01",
+      "label_release_s": 4.9,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "29.0 / -",
+      "zone": "above_break_three / -",
+      "shooter_label": "#77 LAL white (Doncic)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "3074e08ada0f",
+      "label_release_s": 6.8,
+      "predicted_release_s": 6.79,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / -",
+      "distance_ft": "26.0 / None",
+      "zone": "above_break_three / -",
+      "shooter_label": "#77 DAL navy (Doncic)",
+      "predicted_shooter_track": 11
+    },
+    {
+      "job_id": "22847e65c6e8",
+      "label_release_s": 4.9,
+      "predicted_release_s": 4.47,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / jump shot",
+      "distance_ft": "5.0 / None",
+      "zone": "paint / -",
+      "shooter_label": "LAL gold (Vanderbilt per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "63f63cabf0cf",
+      "label_release_s": 4.3,
+      "predicted_release_s": 4.14,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "4.0 / None",
+      "zone": "paint / -",
+      "shooter_label": "#77 LAL gold (Doncic per pbp)",
+      "predicted_shooter_track": 16
+    },
+    {
+      "job_id": "743bcc4d0686",
+      "label_release_s": 4.0,
+      "predicted_release_s": 3.97,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "26.0 / None",
+      "zone": "above_break_three / -",
+      "shooter_label": "#1 SAS white (Wembanyama per pbp)",
+      "predicted_shooter_track": 7
+    },
+    {
+      "job_id": "5adf35c63b02",
+      "label_release_s": null,
+      "predicted_release_s": 2.4,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / jump shot",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 9
+    },
+    {
+      "job_id": "5adf35c63b02",
+      "label_release_s": 4.1,
+      "predicted_release_s": 4.0,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / layup",
+      "distance_ft": "25.0 / None",
+      "zone": "above_break_three / -",
+      "shooter_label": "#8 NYK blue (Anunoby per pbp)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "567b7beaa0c8",
+      "label_release_s": null,
+      "predicted_release_s": 0.37,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / jump shot",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "567b7beaa0c8",
+      "label_release_s": 3.1,
+      "predicted_release_s": 3.14,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": "corner_three / -",
+      "shooter_label": "#15 LAL dark (Reaves)",
+      "predicted_shooter_track": 3
+    }
+  ]
+}
