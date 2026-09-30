@@ -34,6 +34,7 @@ from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile,
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 from app.possession import decode_handlers
+from app.trajectory import floor_trajectories, trajectories_json
 
 ROOT = Path(__file__).resolve().parents[1]
 POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
@@ -869,7 +870,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
                                     cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
         add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
-        (output_dir / "court.json").write_text(json.dumps(court_json(court_map)))
+        # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
+        trajectories = floor_trajectories(player_frames, court_map, cut_frames)
+        (output_dir / "court.json").write_text(json.dumps({**court_json(court_map),
+                                                           "trajectories": trajectories_json(trajectories)}))
         stage_times["court_calibration"] = time.perf_counter() - court_started
     view, view_confidence = classify_view(poses, aspect_ratio=width / height)
     if game_mode:

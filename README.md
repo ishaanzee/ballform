@@ -129,7 +129,18 @@ Player positions use the midpoint of the visible ankles, or the bottom of the po
 - **Known distances:** lane width mapped to 15.6 ft (true 16) and the baseline-to-free-throw distance to 18.8 ft (true 19), on the anchor frame and 140 frames later alike.
 - **Consistency:** two different broadcast edits of the same shot, calibrated separately, gave 24.9 and 24.8 ft.
 
-Mapped positions move smoothly overall, but about 3% of frame-to-frame steps jump by more than a player can run, from lifted feet and ankle jitter. They are fine for spots and spacing, not for speeds. There are no hand-labelled ground-truth distances yet.
+Single-frame floor positions jitter. On the three calibrated test clips (seven calibrated analyses), 2.4–4.6% of raw frame-to-frame steps were faster than 30 ft/s (about 20 mph), from ankle jitter, lifted feet and ankles that land on another player. Each player's positions are now also smoothed into a floor trajectory (`app/trajectory.py`): a constant-velocity Kalman filter run forward and back, with measurement noise set by how the point was found (both ankles, one ankle, pose box) and converted to feet at the player's distance from the camera. A frame where the lower foot is well above its level just before and after is skipped as airborne, outliers are down-weighted, and a trajectory stops at a camera cut, at a frame without a reliable court mapping, or after a half-second gap. Shorter gaps, including joins between stitched track fragments, are bridged. The noise settings maximise the filter's likelihood on the three clips (`uv run python scripts/measure_floor_trajectories.py --tune`).
+
+Measured with `uv run python scripts/measure_floor_trajectories.py`, which rebuilds each calibrated job from its saved `court.json` and `observations.json`:
+
+- Smoothed steps over 30 ft/s fell to 0–0.17% per analysis. The remaining case is a player whose ankle keypoints slid onto the player in front of him, which smoothing cannot tell from running. Median smoothed speeds were 3.4–4.7 ft/s and the 99th percentile 18–21 ft/s.
+- Leaving out every third floor point and predicting it from the rest missed by 0.10–0.15 ft at the median and 0.35–0.46 ft at the 90th percentile.
+- Separate calibrations of the same observations (three pairs, all from one clip) gave per-frame speeds within 0.1 ft/s of each other at the median (0.5 ft/s at the 95th percentile) and positions within 0.15–0.5 ft.
+- On a synthetic 20 ft/s sprint that stops dead, the smoothed speed starts dropping 0.1 s early and takes 0.2 s to fall from 90% to 10%. A sharp 90° cut at 15 ft/s briefly reads as 10 ft/s.
+
+One camera cannot tell a lifted foot from a quick step away from it and back, so some of those steps are skipped as airborne and bridged, which underestimates them. On these clips the pose box bottom sat a median 13% of the player's height below the ankles; trajectories correct for that, while shot metrics still use the box bottom as before when both ankles are hidden. The trajectories are saved in `court.json` under `trajectories`. Shot metrics do not use them, so shot distance, zone and floor separation are unchanged.
+
+A per-shot speed (the shooter's speed and the defender's closing speed over the 0.5 s before release) was tried and left out of reports. That half second holds the gather and the jump. Across reasonable smoother settings, one shooter's speed moved between 3.3 and 5.3 ft/s and one defender's closing speed between −0.1 and −3.4 ft/s, and the defender's value was missing on two of the three shots. There are still no hand-labelled ground-truth positions, distances or speeds.
 
 ## phone upload, still local
 
@@ -202,7 +213,7 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 
 ## code map
 
-`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/shots.py` adds hidden-release jump shots and rim attempts and labels shot types. `app/game.py` handles shooter/defender association and the shot-space score. `app/court.py` holds the court templates, the landmark fit and floor geometry; `app/camera_motion.py` follows the floor mapping through camera motion. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
+`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/shots.py` adds hidden-release jump shots and rim attempts and labels shot types. `app/game.py` handles shooter/defender association and the shot-space score. `app/court.py` holds the court templates, the landmark fit and floor geometry; `app/camera_motion.py` follows the floor mapping through camera motion; `app/trajectory.py` smooths each player's floor positions into trajectories. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
 
 Run the checks with:
 
