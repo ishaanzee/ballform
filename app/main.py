@@ -10,12 +10,17 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import cv2
+import numpy as np
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from app.analyzer import ROOT, analyze_video, preload_game_models
-from app.court import parse_landmarks
+from app.client_report import build_client_report
+from app.court import STANDARDS, parse_landmarks
+from app.court_detect import propose as propose_court
 from app.vision import CAMERA_ERROR, CAMERAS, validate_court
 
 
@@ -45,6 +50,7 @@ LOCK = threading.Lock()
 ANALYSIS_LOCK = threading.Lock()
 ACCESS_TOKEN = os.environ.get("BALLFORM_ACCESS_TOKEN", "")
 MAX_BYTES = 750 * 1024 * 1024
+MAX_FRAME_BYTES = 40 * 1024 * 1024
 ALLOWED = {".mp4", ".mov", ".m4v", ".avi", ".webm"}
 
 
@@ -58,6 +64,11 @@ def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] |
          rim_frame: int | None = None, rim_time_s: float | None = None,
          pose_model: str = "yolo26s-pose", court_landmarks: dict | None = None) -> None:
     try:
+        # Kept so scripts/evaluate.py can rerun a labeled clip with the same options.
+        (input_path.parent / "settings.json").write_text(json.dumps({
+            "rim": rim, "mode": mode, "handedness": handedness, "camera": camera, "court": court,
+            "rim_frame": rim_frame, "rim_time_s": rim_time_s, "pose_model": pose_model,
+            "court_landmarks": court_landmarks}))
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
@@ -183,6 +194,23 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
     return {"job_id": job_id, "pose_model_requested": pose_model if mode == "one_on_one" else None}
 
 
+@app.post("/api/court/detect")
+async def detect_court(frame: UploadFile = File(...), standard: str = Form("nba")) -> dict:
+    """Propose court landmarks for one preview frame (a PNG or JPEG the page grabbed from the video).
+
+    The frame is decoded and fitted in memory on this machine; nothing is stored.
+    """
+    if standard not in STANDARDS:
+        raise HTTPException(422, f"Court standard must be one of: {', '.join(STANDARDS)}.")
+    data = await frame.read(MAX_FRAME_BYTES + 1)
+    if len(data) > MAX_FRAME_BYTES:
+        raise HTTPException(413, "The frame image is too large.")
+    image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
+    if image is None or image.shape[0] < 64 or image.shape[1] < 64:
+        raise HTTPException(422, "The frame could not be read as an image.")
+    return await run_in_threadpool(lambda: propose_court(image, standard).to_dict())
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     if not job_id.isalnum():
@@ -203,6 +231,16 @@ def get_video(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "Annotated video is not ready")
     return FileResponse(path, media_type="video/mp4", filename=f"ballform-{job_id}.mp4")
+
+
+@app.get("/api/jobs/{job_id}/client-report", response_class=HTMLResponse)
+def get_client_report(job_id: str, prepared_for: str = "") -> HTMLResponse:
+    if not job_id.isalnum():
+        raise HTTPException(404)
+    directory = JOBS_DIR / job_id
+    if not (directory / "result.json").exists():
+        raise HTTPException(404, "Report is not ready")
+    return HTMLResponse(build_client_report(directory, prepared_for[:120]))
 
 
 app.mount("/assets", StaticFiles(directory=ROOT / "web"), name="assets")

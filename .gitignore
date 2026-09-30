@@ -13,3 +13,7 @@ data/jobs/*
 models/*
 !models/.gitkeep
 diagnostic/
+
+eval/runs/
+eval/report.json
+eval/clips/
