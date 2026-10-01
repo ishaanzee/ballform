@@ -1,0 +1,538 @@
+{
+  "schema_version": 1,
+  "title": "Review video in one pass + side-crop pose on the GPU",
+  "measured_on": "2026-09-25",
+  "hardware": "Apple M3 Pro, 36 GB unified memory",
+  "setup": {
+    "mode": "one_on_one (game)",
+    "camera": "moving",
+    "pose_model": "YOLO26s-pose, fp16 Core ML",
+    "ball_model": "basketball RF-DETR Medium, MLX + Metal (fast_rfdetr)",
+    "models_preloaded": true
+  },
+  "changes": [
+    {
+      "id": "single_pass_video",
+      "summary": "The review video is decoded, drawn and encoded once with VideoToolbox H.264, instead of an MPEG-4 write in the frame loop, an MPEG-4 overlay pass and a libx264 re-encode.",
+      "changes_results": false
+    },
+    {
+      "id": "gpu_side_pose",
+      "summary": "On frames where the GPU is not running side-crop ball detection, the right side crop's pose runs on the GPU while the Neural Engine runs the full view and left crop.",
+      "changes_results": "slightly: GPU vs Neural Engine fp16 keypoints"
+    }
+  ],
+  "headline": {
+    "reference_clip": "3074",
+    "before_elapsed_s": 28.35,
+    "after_elapsed_s": 20.46,
+    "elapsed_reduction_percent": 27.8,
+    "mean_reduction_across_clips_percent": 25.1,
+    "review_video_before_s": 4.34,
+    "review_video_after_s": 1.52
+  },
+  "charts": [
+    {
+      "id": "per_clip_end_to_end",
+      "type": "grouped_bar",
+      "title": "End-to-end analysis time per clip",
+      "y_label": "Seconds (lower is better)",
+      "x": "clip",
+      "series": [
+        {
+          "id": "before",
+          "label": "Before",
+          "values": [
+            28.35,
+            19.0,
+            22.06,
+            27.58
+          ]
+        },
+        {
+          "id": "after",
+          "label": "After",
+          "values": [
+            20.46,
+            14.17,
+            16.68,
+            21.26
+          ]
+        }
+      ],
+      "categories": [
+        "3074",
+        "2fcb",
+        "2c7e",
+        "5a58"
+      ],
+      "note": "Rim detected automatically. One run per clip per configuration."
+    },
+    {
+      "id": "reference_clip_stages",
+      "type": "stacked_bar",
+      "title": "Where the time goes (clip 3074)",
+      "y_label": "Seconds",
+      "categories": [
+        "Before",
+        "After"
+      ],
+      "series": [
+        {
+          "id": "frame_processing",
+          "label": "frame processing",
+          "values": [
+            23.87,
+            18.75
+          ]
+        },
+        {
+          "id": "review_video",
+          "label": "review video",
+          "values": [
+            4.34,
+            1.52
+          ]
+        },
+        {
+          "id": "scoring_and_observations",
+          "label": "scoring and observations",
+          "values": [
+            0.12,
+            0.18
+          ]
+        },
+        {
+          "id": "other",
+          "label": "other",
+          "values": [
+            0.02,
+            0.01
+          ]
+        }
+      ],
+      "note": "'other' is elapsed time not covered by the listed stages (setup, report writing)."
+    },
+    {
+      "id": "reference_clip_steps",
+      "type": "bar",
+      "title": "Each change on its own (reference clip, marked rim)",
+      "y_label": "Seconds, mean of 2 runs (lower is better)",
+      "points": [
+        {
+          "run": "before",
+          "label": "Before (previous commit)",
+          "elapsed_s": 32.83,
+          "elapsed_runs_s": [
+            32.69,
+            32.98
+          ],
+          "frame_processing_s": 24.09,
+          "throughput_fps": 11.87,
+          "review_video_s": 4.46,
+          "rim_tracking_s": 4.15,
+          "score": 97.4
+        },
+        {
+          "run": "videoonly",
+          "label": "+ single-pass hardware video",
+          "elapsed_s": 28.3,
+          "elapsed_runs_s": [
+            28.22,
+            28.39
+          ],
+          "frame_processing_s": 22.44,
+          "throughput_fps": 12.75,
+          "review_video_s": 1.53,
+          "rim_tracking_s": 4.14,
+          "score": 97.4
+        },
+        {
+          "run": "after",
+          "label": "+ side-crop pose on GPU",
+          "elapsed_s": 24.96,
+          "elapsed_runs_s": [
+            24.82,
+            25.1
+          ],
+          "frame_processing_s": 19.08,
+          "throughput_fps": 14.99,
+          "review_video_s": 1.54,
+          "rim_tracking_s": 4.15,
+          "score": 97.4
+        }
+      ],
+      "note": "diagnostic/5on5clip3.mp4 with the rim marked on frame 0, which adds ~4 s of rim tracking to every run."
+    },
+    {
+      "id": "frame_throughput",
+      "type": "bar",
+      "title": "Frame-processing throughput (reference clip)",
+      "y_label": "Analyzed frames per second (higher is better)",
+      "points": [
+        {
+          "run": "before",
+          "label": "Before (previous commit)",
+          "value": 11.87
+        },
+        {
+          "run": "videoonly",
+          "label": "+ single-pass hardware video",
+          "value": 12.75
+        },
+        {
+          "run": "after",
+          "label": "+ side-crop pose on GPU",
+          "value": 14.99
+        }
+      ],
+      "formula": "286 / frame_processing_s"
+    },
+    {
+      "id": "side_pose_placement",
+      "type": "grouped_bar",
+      "title": "Where to run side-crop pose",
+      "y_label": "Frame processing, seconds (lower is better)",
+      "categories": [
+        "3074",
+        "2fcb",
+        "2c7e",
+        "5a58"
+      ],
+      "series": [
+        {
+          "id": "base",
+          "label": "All three passes on Neural Engine (before)",
+          "values": [
+            23.87,
+            15.89,
+            18.54,
+            23.21
+          ]
+        },
+        {
+          "id": "gpupose",
+          "label": "Both side crops on GPU, every frame",
+          "values": [
+            23.74,
+            17.28,
+            20.81,
+            24.95
+          ]
+        },
+        {
+          "id": "gp-one",
+          "label": "Right crop on GPU, every frame",
+          "values": [
+            21.69,
+            15.67,
+            18.58,
+            22.73
+          ]
+        },
+        {
+          "id": "gp-adaptiveboth",
+          "label": "Both side crops on GPU, only when GPU free",
+          "values": [
+            21.76,
+            14.98,
+            17.42,
+            21.48
+          ]
+        },
+        {
+          "id": "gp-adaptive",
+          "label": "Right crop on GPU, only when GPU free (shipped)",
+          "values": [
+            20.62,
+            14.5,
+            16.95,
+            20.95
+          ]
+        }
+      ],
+      "summary": [
+        {
+          "variant": "base",
+          "total_frame_processing_s": 81.51,
+          "reduction_vs_before_percent": 0.0
+        },
+        {
+          "variant": "gpupose",
+          "total_frame_processing_s": 86.78,
+          "reduction_vs_before_percent": -6.5
+        },
+        {
+          "variant": "gp-one",
+          "total_frame_processing_s": 78.67,
+          "reduction_vs_before_percent": 3.5
+        },
+        {
+          "variant": "gp-adaptiveboth",
+          "total_frame_processing_s": 75.64,
+          "reduction_vs_before_percent": 7.2
+        },
+        {
+          "variant": "gp-adaptive",
+          "total_frame_processing_s": 73.02,
+          "reduction_vs_before_percent": 10.4
+        }
+      ],
+      "note": "Measured with the old three-encode video path, so only pose placement differs. The ball detector already keeps the GPU 70-75% busy, so always using it for pose makes things slower."
+    },
+    {
+      "id": "pose_pass_latency",
+      "type": "bar",
+      "title": "Pose pass latency, isolated",
+      "y_label": "Milliseconds, median of 30 frames (lower is better)",
+      "points": [
+        {
+          "run": "ane_full_1280",
+          "label": "Full view, Neural Engine",
+          "value": 19.1
+        },
+        {
+          "run": "ane_side_960",
+          "label": "Side crop, Neural Engine",
+          "value": 20.2
+        },
+        {
+          "run": "gpu_side_960",
+          "label": "Side crop, Core ML GPU",
+          "value": 15.8
+        },
+        {
+          "run": "mps_side_960",
+          "label": "Side crop, PyTorch MPS",
+          "value": 29.1
+        }
+      ],
+      "note": "Warm, one model at a time, includes preprocessing and readback. Microbenchmark, not saved to a report."
+    },
+    {
+      "id": "pose_frame_latency",
+      "type": "grouped_bar",
+      "title": "Three pose passes per frame, isolated",
+      "y_label": "Milliseconds, median (lower is better)",
+      "categories": [
+        "GPU idle",
+        "Ball detector running on GPU"
+      ],
+      "series": [
+        {
+          "id": "serial_ane",
+          "label": "All on Neural Engine",
+          "values": [
+            58.8,
+            61.5
+          ]
+        },
+        {
+          "id": "ane_plus_gpu",
+          "label": "Full on Neural Engine, both sides on GPU",
+          "values": [
+            35.2,
+            55.8
+          ]
+        }
+      ],
+      "note": "Shows why the GPU gain mostly disappears under contention with the ball detector."
+    },
+    {
+      "id": "encoder_comparison",
+      "type": "table",
+      "title": "H.264 encoders on 286 raw 1080p frames",
+      "columns": [
+        "encoder",
+        "seconds",
+        "size_mb",
+        "ssim"
+      ],
+      "rows": [
+        [
+          "libx264 fast CRF 22 (before)",
+          1.91,
+          7.6,
+          0.988
+        ],
+        [
+          "VideoToolbox q 55",
+          1.56,
+          8.0,
+          0.978
+        ],
+        [
+          "VideoToolbox q 65 (shipped)",
+          1.53,
+          12.0,
+          0.985
+        ],
+        [
+          "VideoToolbox 8 Mb/s",
+          1.59,
+          10.0,
+          0.983
+        ],
+        [
+          "VideoToolbox 12 Mb/s",
+          1.61,
+          15.0,
+          0.989
+        ]
+      ],
+      "note": "Encoding from a raw file is only ~20% faster; most of the video saving comes from dropping two MPEG-4 encodes and overlapping encoding with drawing."
+    }
+  ],
+  "clips": [
+    {
+      "clip": "3074",
+      "source": "data/jobs/3074e08ada0f/input.mp4",
+      "duration_s": 10.01,
+      "source_fps": 29.77,
+      "analyzed_frames": 286,
+      "before": {
+        "elapsed_s": 28.35,
+        "frame_processing_s": 23.87,
+        "review_video_s": 4.34,
+        "shot": {
+          "release_s": 6.79,
+          "outcome": "made",
+          "outcome_frame": 243,
+          "shooter_track_id": 1,
+          "defender_track_id": 7,
+          "score": 97.4
+        }
+      },
+      "after": {
+        "elapsed_s": 20.46,
+        "frame_processing_s": 18.75,
+        "review_video_s": 1.52,
+        "shot": {
+          "release_s": 6.79,
+          "outcome": "made",
+          "outcome_frame": 243,
+          "shooter_track_id": 1,
+          "defender_track_id": 7,
+          "score": 97.4
+        }
+      },
+      "elapsed_reduction_percent": 27.8,
+      "speedup": 1.386
+    },
+    {
+      "clip": "2fcb",
+      "source": "data/jobs/2fcb9c782ebf/input.mp4",
+      "duration_s": 10.04,
+      "source_fps": 59.84,
+      "analyzed_frames": 175,
+      "before": {
+        "elapsed_s": 19.0,
+        "frame_processing_s": 15.89,
+        "review_video_s": 3.03,
+        "shot": {
+          "release_s": 4.04,
+          "outcome": "made",
+          "outcome_frame": 325,
+          "shooter_track_id": 3,
+          "defender_track_id": 1,
+          "score": 91.3
+        }
+      },
+      "after": {
+        "elapsed_s": 14.17,
+        "frame_processing_s": 13.01,
+        "review_video_s": 1.07,
+        "shot": {
+          "release_s": 4.04,
+          "outcome": "made",
+          "outcome_frame": 325,
+          "shooter_track_id": 3,
+          "defender_track_id": 1,
+          "score": 89.8
+        }
+      },
+      "elapsed_reduction_percent": 25.4,
+      "speedup": 1.341
+    },
+    {
+      "clip": "2c7e",
+      "source": "data/jobs/2c7e42acbf01/input.mp4",
+      "duration_s": 7.56,
+      "source_fps": 59.28,
+      "analyzed_frames": 204,
+      "before": {
+        "elapsed_s": 22.06,
+        "frame_processing_s": 18.54,
+        "review_video_s": 3.44,
+        "shot": {
+          "release_s": 4.86,
+          "outcome": "made",
+          "outcome_frame": 374,
+          "shooter_track_id": 9,
+          "defender_track_id": 4,
+          "score": 72.7
+        }
+      },
+      "after": {
+        "elapsed_s": 16.68,
+        "frame_processing_s": 15.42,
+        "review_video_s": 1.16,
+        "shot": {
+          "release_s": 4.86,
+          "outcome": "made",
+          "outcome_frame": 374,
+          "shooter_track_id": 9,
+          "defender_track_id": 4,
+          "score": 72.7
+        }
+      },
+      "elapsed_reduction_percent": 24.4,
+      "speedup": 1.323
+    },
+    {
+      "clip": "5a58",
+      "source": "data/jobs/5a58bbf3f21e/input.mp4",
+      "duration_s": 10.03,
+      "source_fps": 59.94,
+      "analyzed_frames": 301,
+      "before": {
+        "elapsed_s": 27.58,
+        "frame_processing_s": 23.21,
+        "review_video_s": 4.29,
+        "shot": {
+          "release_s": 8.24,
+          "outcome": "made",
+          "outcome_frame": 576,
+          "shooter_track_id": 14,
+          "defender_track_id": 11,
+          "score": 76.2
+        }
+      },
+      "after": {
+        "elapsed_s": 21.26,
+        "frame_processing_s": 19.56,
+        "review_video_s": 1.6,
+        "shot": {
+          "release_s": 8.24,
+          "outcome": "made",
+          "outcome_frame": 576,
+          "shooter_track_id": 14,
+          "defender_track_id": 11,
+          "score": 76.2
+        }
+      },
+      "elapsed_reduction_percent": 22.9,
+      "speedup": 1.297
+    }
+  ],
+  "accuracy_check": {
+    "single_pass_video": "observations.json, court.json, shots and game summaries identical to before in game, form, calibrated-court and playing-area-polygon runs.",
+    "gpu_side_pose": "Keypoints moved by a median of 0 px, ~1 px at p95 and 2-3 px at p99. Ball handlers, shots, release times, make frames, shooters, defenders and outcomes unchanged on all four clips. Clip 2fcb's score moved 91.3 -> 89.8 (separation 2.714 -> 2.680 torso lengths)."
+  },
+  "display_notes": [
+    "Single runs unless stated; repeats of the reference-clip runs were within 0.3 s.",
+    "Per-clip runs use an automatically detected rim; the reference-clip step runs use a marked rim and are ~4 s slower for that reason.",
+    "Pose-work totals in reports sum overlapping work and rise when passes run concurrently; use frame processing or elapsed time for charts."
+  ],
+  "source_reports_dir": "diagnostic/perf-2026-09-25"
+}

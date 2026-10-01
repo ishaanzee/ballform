@@ -15,6 +15,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.shots import RIM_TYPES
+
 ROOT = Path(__file__).resolve().parents[1]
 JOBS_DIR = ROOT / "data" / "jobs"
 EVAL_DIR = ROOT / "eval"
@@ -111,6 +113,11 @@ def _type_correct(label: str, predicted: str) -> bool:
     return predicted == label or (predicted == "layup or dunk" and label in {"layup", "dunk"})
 
 
+def _type_group(shot_type: str) -> str:
+    """The coarse split scored until there are enough labels per fine type: rim finishes vs everything else."""
+    return "rim" if shot_type in RIM_TYPES else "shot"
+
+
 def _metric(shot: dict, name: str):
     return ((shot.get("game") or {}).get("metrics") or {}).get(name)
 
@@ -146,8 +153,17 @@ def summarize(clips: list[ClipResult]) -> dict:
     }
 
     typed = [m for m in paired if m.label.shot_type]
-    summary["shot_type"] = {"accuracy": _pct(sum(_type_correct(m.label.shot_type, m.shot.get("shot_type") or "")
-                                                 for m in typed), len(typed))}
+    groups: dict[str, dict[str, int]] = {}
+    for m in typed:
+        row = groups.setdefault(_type_group(m.label.shot_type), {})
+        predicted_group = _type_group(m.shot.get("shot_type") or "")
+        row[predicted_group] = row.get(predicted_group, 0) + 1
+    summary["shot_type"] = {
+        "accuracy": _pct(sum(_type_correct(m.label.shot_type, m.shot.get("shot_type") or "") for m in typed),
+                         len(typed)),
+        "shot_vs_rim": _pct(sum(row.get(group, 0) for group, row in groups.items()), len(typed)),
+        "shot_vs_rim_labeled_vs_predicted": groups,
+    }
 
     distanced = [m for m in paired if m.label.distance_ft is not None]
     measured = [m for m in distanced if _metric(m.shot, "shot_distance_ft") is not None]

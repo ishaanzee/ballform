@@ -69,4 +69,5 @@ What the summary means:
 
 - **detection:** recall is labeled shots found; precision is predictions that were real shots. Shots match when their release times are within 0.75 s.
 - **outcome:** coverage is how often Ballform made a call instead of "unknown"; accuracy is scored only on those calls, and `likely made` counts as a make. `misses_called_made` is the number to watch.
+- **shot_type:** accuracy scores the five types exactly (`layup or dunk` counts for either). `shot_vs_rim` scores only the coarse split: rim finishes (layup, dunk, tip) against shots (jump shot, floater). Keep labeling the fine type; the coarse split is what is worth reading until each type has enough examples.
 - **distance_ft:** mean and median absolute error, and the bias (positive means Ballform measures too long), on shots where both a label and a measurement exist.
