@@ -1,235 +1,109 @@
 # ballform
 
-Ballform is a basketball video analyzer for people who want more than “nice shot.”
+A basketball video analyzer that runs on your machine. It looks at a single shooter's mechanics, or at the geometry of a game possession: who had the ball, who the primary defender was, how much space there was at release, and whether the shot went in.
 
-It looks at a single shooter’s mechanics, or at the little geometry of a game possession: who had the ball, who was the primary defender, how much space existed at release, whether the contest got tighter, and whether the shot got up cleanly. It runs on your machine. Your clips do not get uploaded to somebody else’s dashboard, and there is no subscription hiding behind the demo.
+The numbers are review signals, not a scouting department in a box. Compare clips from the same camera, watch the annotated video, and if the tracker is unsure the report says so.
 
-The numbers are useful review signals, not a scouting department in a box. Compare clips from the same camera. Watch the annotated video. If the tracker is unsure, the report should say so.
+## demo
 
-## see it [Full Demo](https://www.ishaanmehta.dev/projects/basketball)
+[Full demo](https://www.ishaanmehta.dev/projects/basketball)
 
 ![Ballform game review: tracked players, calibrated court lines and a detected make](docs/demo/cover.jpg)
-game review with court calibration
+*game review with court calibration*
 
-![Before shot details](docs/demo/shot-details-before.png)
-simple metrics
+| simple metrics | advanced metrics |
+|---|---|
+| ![Before shot details](docs/demo/shot-details-before.png) | ![After shot details](docs/demo/shot-details-after.png) |
 
-![After shot details](docs/demo/shot-details-after.png)
-advanced metrics
+## what it does
 
-## get it running
+- **Tracks players and the ball** with multi-person pose, a basketball-trained RF-DETR detector, motion and jersey appearance.
+- **Finds the rim by itself**, follows it through pans, zooms and cuts, and calls makes from the rim crossing plus net motion.
+- **Picks the shooter and the nearest contesting defender**, then scores the shot with a transparent formula: 65% separation + 35% contest clearance.
+- **Labels shot types**: jump shot, floater, layup, dunk, tip.
+- **Court calibration (optional)** maps the floor so distances, zones and spacing come out in feet.
+- **Form mode** reports 2D release timing, launch angle, elbow angle and upper-arm elevation for comparing your own reps.
+- **Annotated review video** with tracking, court lines and a pulse on makes.
 
-You need Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv):
+Everything runs locally. Clips and reports stay in `data/jobs/`.
+
+## run it
+
+Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv):
 
 ```bash
 uv sync --extra dev --python 3.12
 uv run uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000>. Thats it. `ffmpeg` is worth installing if you want clean H.264 review videos in the browser; on a Mac it uses the hardware encoder.
+Open <http://127.0.0.1:8000>. The first run downloads the pose and detection weights into `models/`. `ffmpeg` is worth installing for clean H.264 review videos; on a Mac it uses the hardware encoder.
 
-The first run downloads the pose and detection weights into `models/`. They are cached after that. Uploads, reports, observations, and rendered videos live in `data/jobs/`. Stop the server with `Ctrl+C`.
+### faster on Apple silicon (optional)
 
-### optional speedups on Apple silicon
+Both speedups are optional. Without them everything still runs, just slower, and the results page says which one is missing.
 
-Both are optional. Without them everything still runs, just slower, and the results page says which one is missing.
-
-1. **Faster ball detector** (an MLX + Metal port of the same model, about 1.7x faster per call, same results):
-   ```bash
-   uv pip install --python .venv/bin/python "fast-rfdetr @ git+https://github.com/ishaanzee/kernelopt"
-   ```
-2. **Pose on the Neural Engine** (a one-time export, about 1.5x faster per frame, with small fp16 differences):
-   ```bash
-   YOLO_AUTOINSTALL=False uv run --with onnx --with onnxslim --with onnxconverter-common \
-       python scripts/export_pose_coreml.py yolo26s-pose yolo26m-pose
-   ```
-
-A plain `uv sync` removes the detector package again. Use `uv sync --inexact`, or rerun the install.
-
-## sending a report to someone
-
-The results page is for you: it shows model names, timings and raw evidence. **Client report** opens the page meant for a player, parent or coach instead. It has plain-language metrics, a release snapshot for every shot, a consistency table when a form clip has more than one shot, a table of every shot in game mode, and the limitations. It leaves out model internals. Type a name next to "Prepared for" and your notes in the notes box, then use **Save as PDF**. An empty notes box is left off the PDF. Send the PDF with the annotated video.
-
-The same page can be written from the command line for any finished job:
-
-```bash
-uv run --inexact ballform-report <job-id> --for "Player name"   # writes data/jobs/<job-id>/client-report.html
-```
-
-## getting a clip that does not sabotage the model
-
-For form work, keep the shooting arm, ball, feet, rim, and net visible. A side view is best for release and arc; a rear-oblique view is better for alignment. 60 fps and 1080p are a good target. A phone three to six feet high is usually enough. Do not digitally zoom halfway through the possession.
-
-For game footage, short continuous half-court possessions are the sweet spot. NBA skycam and elevated pickup clips are supported, but replays, cuts, graphics, extreme zooms, and a rim that disappears behind the broadcast edit are still hard problems. A five-on-five clip is fine even when the UI says 1-on-1; the analyzer still tries to identify the ball carrier and the primary contesting defender.
-
-Moving-broadcast game footage needs no court marking. The basketball detector labels players, referees and everyone else, and each detected player or referee box can vouch for only one pose. A spectator or duplicate pose overlapping a real player therefore cannot pass as a player. A playing-area polygon is optional and only offered for fixed cameras (elevated or courtside). If you draw one, keep it convex and cover the playable area, not the benches. A foot within about a body width of the edge still counts, so a player standing on the line is kept. Moving-camera analyses ignore a polygon: it is fixed in image coordinates, so it cannot follow a pan, and on test clips it cut a player standing on the sideline in roughly 10% of player detections. People standing just off the court can still pass as players when the detector calls them players, for example a bench player in warmups on the baseline.
-
-## camera choices
-
-There are three camera profiles. `Stationary courtside` is the default.
-
-`Stationary courtside` is the cleanest choice when you want make/miss.
-
-The rim no longer needs marking. In game mode, the basketball detector's rim class finds a snug box around the hoop ring on every frame, whatever the camera profile. The frames are linked into one hoop per camera segment, one-off false detections are dropped, and jitter is smoothed with a local line fit. It restarts after camera cuts. On four test clips it found the rim on every game frame. It called all four shots made, which close-ups of the ball passing through the net confirm; three of them previously had no outcome at all. Form mode samples about 15 frames and uses the median box. Dragging a box in the preview still overrides the detection: it is fixed on stationary cameras and tracked from that frame on a moving one. Reports say whether the rim was `detected` or `marked` under `diagnostics.rim_source`. Two limits: if both hoops are visible, the one detected more strongly is used, so mark the rim if the wrong hoop is chosen; and the form-mode sampling has not yet been tested on a stationary single-shooter clip.
-
-`Pickup / elevated wide view` is for a fixed, wide, elevated camera. It tracks players and the ball, and reports make/miss when the rim is detected or marked.
-
-`Moving broadcast + tracked rim` is the profile for NBA and other broadcast footage, meaning a continuous pan or moderate zoom. The detected rim follows the hoop through pans, zooms and cuts. It can score the rim crossing, use net motion as supporting evidence, and place the green make pulse over the moving hoop. If you mark the rim instead, a local CSRT tracker follows your box forward and backward from that frame; a hard cut, a lost track or an implausible jump then ends outcome scoring rather than producing a confident-looking lie.
-
-The make classifier wants a visible downward crossing through the rim. If the ball vanishes at the hoop, it can call a **likely make** only when the descending path projects through the rim and localized net motion arrives afterward. Net movement by itself never turns an airball into a make. Green animation means the analyzer found a verified or likely make; it is not a broadcast replay graphic.
-
-## what game mode actually measures
-
-The game pass uses multi-person pose detection, a basketball-trained detector, motion and jersey appearance to keep track of people. It chooses a shooter from recent hand/ball contact and release evidence, then chooses the nearest plausible opposing contest. Persistent IDs make the pre-release comparison less random, but crowded frames, similar jerseys, tiny players, officials, and occlusion can still break identity.
-
-The shot-space score is deliberately transparent:
-
-```text
-65% separation score + 35% contest-clearance score
-```
-
-Separation is projected hip-to-hip distance in shooter torso lengths. Contest clearance is projected ball-to-defender-wrist distance in the same units. Separation change is reported as context, not secretly folded into the grade. It compares the release separation with the median over 0.3–0.7s before release. It relies on persistent player identities, so it needs both players tracked on at least half the frames through release. Each earlier frame is rescaled by the camera's zoom, estimated from every player seen in both frames. Frames zoomed by more than about 20% are skipped. One player crouching or turning no longer voids it, and neither does a camera pan. Each defender hand is measured on the frame nearest release, within 0.1s, where both that hand and the ball are visible. A hand briefly hidden on the release frame therefore no longer turns the contest into a range, and the confidence drops with the time offset. Only a hand unseen for that whole window leaves the score as a range with "other hand unknown". The score is a 0–100 review heuristic, not make probability, expected points, or a professional player grade. Missing evidence stays missing; it does not become a zero.
-
-### which shots game mode finds
-
-Each game shot is labelled jump shot, floater, layup, dunk, "layup or dunk" or tip, and its evidence says why (`app/shots.py`).
-
-- **Jump shots** still need a ball arc, raised-hand ball contact at release and a flight well above the release shoulders. When the release itself is hidden, the basketball detector's jump-shot class plus a supported arc also counts. The release time is then the last visible hand contact, and the evidence says so.
-- **Floaters** are arc shots where the detector's layup-dunk class is at least as confident as its jump-shot class around release.
-- **Arc shots that reach the basket within 0.4 s of release are rim finishes**, not jump shots or floaters. From broadcast height a layup off the glass still draws a small arc, so the arc path finds it. On the labeled clips, jump shots took 1.05–1.38 s to reach the basket and floaters 0.50–0.65 s. Such a finish is a tip when it comes within 1 s of the previous shot reaching the basket, and otherwise "layup or dunk": the contacts around the rim are too noisy on broadcast footage to tell the two apart.
-- **Layups, dunks, tips and putbacks** need a player's hand on the ball, then the ball reaching the basket within 1.2 s. "Reaching the basket" means a confident ball-in-basket detection, or the ball entering the rim's area when a rim exists. A dunk's last contact is at or above the basket. A tip is a raised-hand touch at the rim after the previous attempt got there. Without a rim or a basket detection, the detector's layup-dunk class plus the ball leaving the hands upward, above the head, gives "layup or dunk".
-- **One attempt is one hand contact followed by the ball reaching the basket.** A ball rattling on the rim, or a rebound, has no new contact, so it belongs to the previous shot. A dribble has to leave the hands upward without bouncing. A pass that never reaches the basket is not a shot. A shot in flight claims its own arrival at the basket, so a hand touching it on the way (a contest, or a fan's hand the ball passes over in 2D) does not start a new attempt. A contact where the ball stays on one parabola through the "touch" is ignored for the same reason.
-- **The shooter** for these attempts is the last player in unambiguous hand contact. It is checked against the decoded ball handler, and withheld when the two disagree (except for tips).
-- **Ball-in-basket detections are never a make on their own.** Lone low-confidence detections also fired on an empty net. With a rim, the outcome uses the same rim-plane crossing and net-motion rules as jump shots. A ball-in-basket detection plus net motion can raise an otherwise-unknown rim attempt to "likely made".
-
-**Scoring rim attempts.** Separation at the finish says little about a dunk, so layups, dunks and tips get a contest-only score: 100 × the contest-clearance component, measured at the last hand contact. Separation at the gather (the median over 0.3–0.7 s before that contact) is reported but not scored. These scores are labelled in the report and kept out of the mean shot-space score. Hidden-release jump shots use the normal score.
-
-**Validation so far.** On the four one-jump-shot test clips, each still gives exactly its one jump shot, with the same release, shooter, defender, score and outcome. The new paths are covered by unit tests on synthetic tracks: layup, dunk, tip, putback, rim rattle, rebound, dribble, pass, mid-flight contest and hidden release. With the automatically detected rim, the rim-area path first found two false attempts on `2fcb`: a "dunk" and then a "tip". Both were the made jump shot falling past raised hands of fans behind the baseline. The flight and parabola rules above remove them. The labeled test set (`eval/`) now has 15 matched rim attempts and a few floaters from broadcast footage; on it, typing arc shots by flight time moved shot-vs-rim agreement from 10/26 to 21/26. That is still few examples per type, so treat the thresholds as lightly tuned. The parabola tolerance (2.5 ball radii) rests on only three real releases and two pass-overs.
-
-Form mode reports 2D image-plane estimates such as release timing, launch angle, elbow angle, and upper-arm elevation. These are good for comparing your own reps from the same setup. They are not calibrated 3D biomechanics.
-
-## court calibration (optional, for feet)
-
-Game analyses can report real floor distances. In the preview, choose **Calibrate court**, pick the court standard (NBA, FIBA, NCAA or high school), scrub to a frame where the floor lines are clear, then pair landmarks: pick one on the half-court diagram and click the same spot on the video, where the painted lines meet. Or let **Auto-detect court** propose them (below). The page draws the fitted court over the frame so you can check it before analyzing.
-
-Mark five or more landmarks spread over the floor. Four always fit exactly, so their error cannot be checked; from five, the page also shows how far each point moves when it is left out. Include one far from the basket when you can, such as where the half-court line meets a sideline. On a test broadcast, six clicks bunched around the lane agreed within 2 px but put half court about 2.5 ft away from where a fit including a half-court click did. Spots inside the arc moved by under 1 ft. Reports say when a shot was taken outside the marked area, because its position is then extrapolated.
-
-The floor mapping is a homography, so it is valid only for points on the floor. The ball and the rim are never mapped through it. On moving cameras it follows pans and zooms from floor features only: the court under the current mapping plus a 6 ft apron, minus every player (and their floor reflection) and minus static broadcast graphics. The chain runs forward and backward from the marked frame and stops at camera cuts or when too few floor features survive. Frames it cannot map are marked unreliable and get no measurements in feet. Fixed cameras (courtside and elevated) keep the marked mapping. The review video draws the court lines on every reliably mapped frame.
-
-What it adds next to the torso-length metrics, which are unchanged:
-
-- **Shot distance** from the shooter's floor spot to the floor point under the rim, which comes from the court template. Shooters are usually airborne at release, and airborne feet map to a point beyond the player, so the spot comes from the ankles on the last grounded frames before take-off. The report says which frames were used.
-- **Shot zone** (paint, midrange, corner three, above-the-break three), the shooter's court position, and how far the spot is behind or inside the three-point line.
-- **Floor separation** from the shooter's take-off spot to the defender's feet.
-- **Contest clearance in feet**, which is approximate. It assumes the defender's hand and the ball are at the shooter's depth, and uses the camera recovered from the floor mapping.
-
-Player positions use the midpoint of the visible ankles, or the bottom of the pose box when both are hidden (reported as such). What was checked, on four broadcast clips with hand-placed landmarks:
-
-- **Fit:** 1.4–3.5 px RMS error on the clicked points. Unclicked landmarks, such as the 28 ft coaching-box line, reprojected within 3 px.
-- **Drift:** projected lane lines stayed within 2 px of the paint through the shot on every clip, and within about 7 px to the end of each clip. The worst case was one clip's baseline, about 16 px off at the end.
-- **Known distances:** lane width mapped to 15.6 ft (true 16) and the baseline-to-free-throw distance to 18.8 ft (true 19), on the anchor frame and 140 frames later alike.
-- **Consistency:** two different broadcast edits of the same shot, calibrated separately, gave 24.9 and 24.8 ft.
-
-Single-frame floor positions jitter. On the three calibrated test clips (seven calibrated analyses), 2.4–4.6% of raw frame-to-frame steps were faster than 30 ft/s (about 20 mph), from ankle jitter, lifted feet and ankles that land on another player. Each player's positions are now also smoothed into a floor trajectory (`app/trajectory.py`): a constant-velocity Kalman filter run forward and back, with measurement noise set by how the point was found (both ankles, one ankle, pose box) and converted to feet at the player's distance from the camera. A frame where the lower foot is well above its level just before and after is skipped as airborne, outliers are down-weighted, and a trajectory stops at a camera cut, at a frame without a reliable court mapping, or after a half-second gap. Shorter gaps, including joins between stitched track fragments, are bridged. The noise settings maximise the filter's likelihood on the three clips (`uv run python scripts/measure_floor_trajectories.py --tune`).
-
-Measured with `uv run python scripts/measure_floor_trajectories.py`, which rebuilds each calibrated job from its saved `court.json` and `observations.json`:
-
-- Smoothed steps over 30 ft/s fell to 0–0.17% per analysis. The remaining case is a player whose ankle keypoints slid onto the player in front of him, which smoothing cannot tell from running. Median smoothed speeds were 3.4–4.7 ft/s and the 99th percentile 18–21 ft/s.
-- Leaving out every third floor point and predicting it from the rest missed by 0.10–0.15 ft at the median and 0.35–0.46 ft at the 90th percentile.
-- Separate calibrations of the same observations (three pairs, all from one clip) gave per-frame speeds within 0.1 ft/s of each other at the median (0.5 ft/s at the 95th percentile) and positions within 0.15–0.5 ft.
-- On a synthetic 20 ft/s sprint that stops dead, the smoothed speed starts dropping 0.1 s early and takes 0.2 s to fall from 90% to 10%. A sharp 90° cut at 15 ft/s briefly reads as 10 ft/s.
-
-One camera cannot tell a lifted foot from a quick step away from it and back, so some of those steps are skipped as airborne and bridged, which underestimates them. On these clips the pose box bottom sat a median 13% of the player's height below the ankles; trajectories correct for that, while shot metrics still use the box bottom as before when both ankles are hidden. The trajectories are saved in `court.json` under `trajectories`. Shot metrics do not use them, so shot distance, zone and floor separation are unchanged.
-
-A per-shot speed (the shooter's speed and the defender's closing speed over the 0.5 s before release) was tried and left out of reports. That half second holds the gather and the jump. Across reasonable smoother settings, one shooter's speed moved between 3.3 and 5.3 ft/s and one defender's closing speed between −0.1 and −3.4 ft/s, and the defender's value was missing on two of the three shots. There are still no hand-labelled ground-truth positions, distances or speeds.
-
-### auto-detect
-
-**Auto-detect court** proposes the landmarks for the frame you are on, so you check and fix them instead of clicking from scratch. The frame goes to the local server and nowhere else, and no model is downloaded. `app/court_detect.py` finds painted lines of any colour, plus the edges of painted areas, and ignores crowded, busy parts of the picture. It pairs straight lines running the two ways across the floor with template lines such as the baseline, lane sides and sidelines. It discards views no real camera could take, keeps the court whose lines land best on the paint, and refines it. The landmarks inside the frame are filled in and the court is drawn as usual. They sit exactly on that fitted court, so the page shows no click error for them: judge the fit by whether the drawn lines follow the paint. Drag a point that is off, or select it on the diagram and press **Remove selected point**; clicking works as before. If nothing fits well enough, the page says why and leaves your marks alone. Reports record `court_calibration.landmark_source` as `manual`, `auto` or `auto, adjusted`.
-
-What was checked, against the seven hand calibrations there are (three NBA broadcast clips, 1920×1080; five of the calibrations are of the same Knicks frame, one is a Lakers clip, one a Rockets clip):
-
-- **Marked frames:** proposals on the Knicks and Lakers frames put the template lines 4.0–10.1 px (median) from each hand fit, 6.5–28.7 px at the 90th percentile. On the floor that is 0.06–0.47 ft at the free-throw line centre, 0.07–0.59 ft at the top of the arc and 0.23–0.67 ft at the recorded shooter spot. The five hand calibrations of the Knicks frame disagree with each other by 4.5–10.0 px median, 0.07–0.58 ft at the free-throw centre and 0.16–1.02 ft at the top of the arc, so at this level the comparison cannot say which fit is closer to the paint.
-- **Later frames:** on four later frames per clip, compared with the hand fit followed through camera motion, the Knicks and Lakers proposals were 3.1–10.6 px median. At the release frame the shooter spot was 0.30–1.04 ft from the reported one.
-- **Rockets clip:** red lines on light wood, the free-throw line behind a player and half court out of view. There was no proposal on the marked frame; it declined 3 of 4 later frames and proposed on one, 3.5 px median from the followed hand fit.
-- **No court:** it declined blank and noise frames and three broadcast graphics frames. Two of those graphics scored as well as some real courts but showed only two straight lines, and a proposal needs at least four template lines found.
-
-Limits: all of this is NBA broadcast footage from three arenas. Courtside, elevated and pickup cameras have not been tried; FIBA floors only in a synthetic test, NCAA and high-school floors not at all. The accept threshold rests on few frames (on real frames, correct fits scored 0.48–0.72 and wrong ones up to 0.43). The fit needs two straight lines one way across the floor and at least one the other way, and players are not masked out. Landmarks hidden behind a player or a score bug are proposed where the fitted court puts them. To repeat the comparison on your own calibrated jobs, run `uv run python scripts/court_detect_accuracy.py`.
-
-## phone upload, still local
-
-If the clip is on an iPhone, install [Tailscale for macOS](https://tailscale.com/download/mac) and [Tailscale for iOS](https://tailscale.com/download/ios), sign into the same account, then run:
-
-```bash
-uv run ballform-share --network tailscale
-```
-
-Scan the QR code in the terminal with the iPhone camera. Safari opens a private pairing link to the Mac. The video still runs on the Mac and stays on the Mac; Tailscale is only the encrypted pipe. Keep the terminal and Tailscale open while uploading. `--network lan` is available if both devices are on the same Wi-Fi. The older `ballform-lan` command remains available.
-
-## models, memory, and reality
-
-Game mode defaults to YOLO26s-pose and offers YOLO26m-pose in the model selector. YOLO26s was about 11% faster on the current 10-second sample, with similar shot detection; compare more clips before treating that as a general result. Only one analysis runs at a time. Game analysis also uses overlapping wide-view crops and a basketball-trained RF-DETR Medium detector. The full-frame pose view and both side crops retain their original input sizes; no frames or crop views are skipped. When side-crop ball detection is needed, it runs alongside pose inference. The app is intended for Apple silicon with 36 GB RAM (16 GB should work with smaller clips). The downloaded JSON report now breaks out pose, ball, rim tracking, frame processing, and review-video times. Pose and ball times are subsets of frame processing and can overlap, so do not add them to the total. Wide-view analysis is offline processing, not real-time playback.
-
-On Apple-silicon Macs, the basketball detector now uses ONNX Runtime's Core ML provider by default, running it on CPU + GPU (`MLComputeUnits=CPUAndGPU`) without INT8 quantization or changing the input size. This transformer ran about 2.6x faster per call on the GPU than on the Neural Engine (46 ms vs 119 ms on an M3 Pro). On the 10-second moving-broadcast sample, the whole analysis took 80.1s versus 98.5s with CPU + Neural Engine, with an identical shot result; frame processing fell from 56.9s to 45.8s. `ALL` processed frames about as fast but took 46s instead of 25s to load. Set `BALLFORM_COREML_UNITS` to `ALL`, `CPUAndNeuralEngine` or `CPUOnly` to compare; each setting keeps its own cache. Other systems use CPU, and an automatic Core ML initialization or inference failure falls back to CPU. To force the previous path, start the app with `BALLFORM_BALL_BACKEND=cpu uv run uvicorn app.main:app --reload`; `BALLFORM_BALL_BACKEND=coreml` explicitly requests Core ML and fails rather than falling back. The report records the requested and actual backend. The first run compiles a cache under `models/coreml-cache/` and can take longer to start; later runs reuse it. Core ML may still leave some operations on CPU. The detector can be compared on every frame and crop with `uv run python scripts/benchmark_ball_backends.py /path/to/clip.mp4`. On the current 10-second sample, the cached Core ML run took 101.82s versus 172.68s with CPU, with identical shot and diagnostic report fields; compare more clips before generalizing that result.
-
-The fastest basketball detector is an optional MLX + Metal port of the same RF-DETR model: `fast_rfdetr`, from the companion [kernelopt](https://github.com/ishaanzee/kernelopt) project. Install it into this environment with:
+**Faster ball detector.** An MLX + Metal port of the same model from [kernelopt](https://github.com/ishaanzee/kernelopt), 28.5 ms per call versus 48.4 ms, with identical detections.
 
 ```bash
 uv pip install --python .venv/bin/python "fast-rfdetr @ git+https://github.com/ishaanzee/kernelopt"
 ```
 
-If you work on `kernelopt` yourself, install your checkout instead with `-e ../kernelopt`.
-
-When it is installed, `BALLFORM_BALL_BACKEND=auto` (the default) uses it on Apple silicon. The two side crops of a frame run as one batched GPU call. Set `BALLFORM_BALL_BACKEND=coreml` to use ONNX Runtime + Core ML instead, or `mlx` to require the port. If the package is missing or fails, `auto` falls back to Core ML and records why in `vision.ball_backend_fallback`.
-
-The port is a pure speedup. On four test clips, its ball detections, possession boxes, players, ball handler and shot results were identical to the Core ML path. It matched all 1082 confident objects on 120 other frames. Per call it takes 28.5 ms versus 48.4 ms, and the two side crops take 54.5 ms together versus 96.8 ms. End to end, analyses were 13–29% faster, and waits on side-crop detection fell from 5–9 s per clip to under 0.6 s.
-
-Two caveats:
-- A plain `uv sync` removes packages that are not in the lockfile. Use `uv sync --inexact`, or rerun the install command above. Otherwise analyses quietly fall back to Core ML.
-- The port reproduces this environment's `cv2.resize` bit for bit (OpenCV 4.14 with KleidiCV on arm64). Changing the OpenCV build changes the golden preprocessing.
-
-On a Mac using MPS pose and the Core ML basketball detector, game mode now keeps one additional frame in flight. A second detector session examines the next frame while the current frame's pose, tracking, and annotation finish; tracking and scoring still consume frames in source order. This preserves the full input resolution and analyzed frame rate. Set `BALLFORM_FRAME_PIPELINE=1` when starting the server to disable the overlap, or `BALLFORM_FRAME_PIPELINE=2` to request it explicitly. The report records the actual pipeline depth and any fallback. On the same 10-second moving-broadcast clip, the two-frame pipeline took 83.50s versus 102.48s with one frame; both runs produced identical observation files and shot results. More in-flight frames are not automatically faster because detector calls can contend for the same compute hardware.
-
-The server loads the game pose model and both detector sessions once and reuses them for every job, instead of reloading them per analysis; Core ML otherwise spends about 12s preparing each detector session on every load. On startup it preloads and warms the default models in the background (about 10s); a job submitted during that time waits until preloading finishes. On the 10-second sample this cut a job from 80.1s to about 55s with identical observations. Set `BALLFORM_PRELOAD=0` to load models on the first job instead. Each report lists any models loaded during that job under `vision.models_loaded_this_job`.
-
-Game pose can run on the Neural Engine while the basketball detector uses the GPU. Export the pose weights once:
+**Pose on the Neural Engine.** A one-time export, about 1.5x faster per frame, with small fp16 differences.
 
 ```bash
 YOLO_AUTOINSTALL=False uv run --with onnx --with onnxslim --with onnxconverter-common \
     python scripts/export_pose_coreml.py yolo26s-pose yolo26m-pose
 ```
 
-This writes fixed-shape fp16 ONNX files to `models/`, which the app then uses automatically. fp16 matters: the Neural Engine only runs fp16 programs, and an fp32 model silently runs on the CPU at about the same speed as CPU-only. The exports fit 16:9 footage. Other aspect ratios keep using PyTorch pose call by call, so every input matches the original preprocessing. On the 10-second sample, frame processing fell from 45.0s to 30.0s and the job from 54.0s to 38.9s. The shot, make frame, shooter and defender were unchanged. fp16 keypoints moved the shot-space score from 97.9 to 97.4 (separation 2.997 vs 2.977 torso lengths) and changed which track ID labelled the same ball handler on 18 end-of-clip frames. Set `BALLFORM_POSE_BACKEND=torch` to use PyTorch/MPS pose, or `coreml` to fail rather than fall back. Reports record `vision.pose_backend` and any fallback.
+A plain `uv sync` removes the detector package again. Use `uv sync --inexact`, or rerun the install.
 
-Pose on the Neural Engine is now the slowest part of a frame, so one side crop also runs on the GPU. While the Neural Engine does the full view and the left crop, the GPU does the right crop with the same fp16 weights (about 16 ms instead of 20 ms). It only does this on frames where the GPU is not also running side-crop ball detection. Putting both side crops on the GPU, or using it on every frame, made the GPU the bottleneck, because the ball detector runs there too; on the four test clips that was no faster than before. With the split, frame processing fell by 9–14%. GPU and Neural Engine fp16 differ slightly: keypoints moved by 1 px at the 95th percentile and 2–3 px at the 99th. Ball handlers, shots, shooters, defenders and outcomes were unchanged. One shot-space score moved from 91.3 to 89.8 (separation 2.714 vs 2.680 torso lengths). Set `BALLFORM_SIDE_POSE_UNITS=CPUAndNeuralEngine` to keep all three passes on the Neural Engine. Reports record `vision.side_crop_pose_units` and `diagnostics.parallel_pose_frames`.
+### upload from an iPhone
 
-The review video is decoded, drawn and encoded once, after analysis. It used to be encoded three times: an MPEG-4 file during the frame loop, a second one with the review overlays, and a final H.264 copy. The overlays are now drawn on freshly decoded source frames and piped straight into ffmpeg's VideoToolbox hardware encoder (`h264_videotoolbox`, constant quality 65). If that fails, it falls back to libx264, and without ffmpeg to OpenCV's MPEG-4 writer. The report records `performance.review_video_encoder`. VideoToolbox at that setting matched libx264 CRF 22 closely (SSIM 0.985 vs 0.988 against the source), with larger files (14 MB vs 11 MB on the reference clip). The video step fell from about 4.4 s to 1.5 s, and frame processing lost the per-frame MPEG-4 write. Observations, shots and the drawn overlays were identical.
-
-Together, on the four 7.5–10 s broadcast test clips with a detected rim, a job fell from 28.4, 19.0, 22.1 and 27.6 s to 20.5, 14.2, 16.7 and 21.3 s. On the reference clip with a marked rim it fell from 32.8 s to 25.0 s (two runs each).
-
-The ball-handler highlight is decoded after all frames are analyzed rather than frame by frame. Each tracked player, plus "nobody", is scored on every frame from wrist contact with the ball, a low ball beside the body (mid-dribble), and the basketball detector's player-in-possession class. The most consistent sequence over the whole clip wins (`app/possession.py`). Keeping a handler is free. Picking up a loose ball is cheap, so a catch-and-shoot still registers. Taking the ball from another player costs more, so a few frames of a defender's hand near the ball do not relabel the dribbler. Future frames also let passes switch on the catch, and the handler ends while a shot or pass is in flight. `observations.json` keeps the previous frame-by-frame result as `handler_online`, and `BALLFORM_HANDLER=online` restores it for the review video.
-
-Wrist contact counts in full only when the ball is within about 0.4 torso lengths of a wrist, and fades to nothing at 0.9. A loose ball bouncing past a player's hand in the image, such as after a make, therefore no longer reads as possession. When two hands are near the ball, the clearly closer one takes the credit. Players the detector sees but pose estimation misses, usually because a teammate or defender hides them, also compete for the ball. When one of them is holding it, the highlight shows nobody rather than moving to the visible neighbour.
-
-After all frames are analyzed, player tracks are stitched within each camera segment. The frame-by-frame tracker can split one player into several IDs when the ball or arms hide the jersey colour it matches on, or when the player crouches. Two fragments join when they never appear on the same frame and every switch between them is a short, plausible continuation: at most 0.5s, a small jump and a similar body scale. Stitching is deliberately conservative. A missed join leaves a duplicate label, but a wrong one would swap two players. Player labels in the review video are drawn after stitching, and reports record the count under `diagnostics.tracks_stitched`. A camera cut is confirmed one sampled frame late, so the cut's first frame is now re-tracked with fresh IDs instead of carrying the previous shot's.
-
-You can experiment with other local Ultralytics checkpoints:
+Install Tailscale on the Mac and the iPhone, sign into the same account, then:
 
 ```bash
-export BALLFORM_YOLO_MODEL=/path/to/model.pt
+uv run ballform-share --network tailscale
 ```
 
-The replacement ball model needs COCO class 32 (`sports ball`). A bigger generic checkpoint is not automatically better on NBA broadcasts or pickup footage, so compare its annotated output before trusting it.
+Scan the QR code with the iPhone camera. The video still runs on the Mac; Tailscale is only the encrypted pipe. Use `--network lan` if both devices are on the same Wi-Fi.
 
-## limits worth knowing before you trust a number
+## picking a camera profile
 
-Camera movement changes apparent distances. Jerseys can look alike. Players overlap. A ball can be hidden for exactly the frames that matter. Passes and slow-motion edits can resemble shots. Cuts reset tracking. The analyzer reports evidence and confidence, but this project has not been calibrated against a labeled NBA shot-outcome dataset. Treat it like a sharp review assistant, not an oracle.
+| profile | use it for |
+|---|---|
+| `Stationary courtside` (default) | fixed camera at court level, cleanest make/miss |
+| `Pickup / elevated wide view` | fixed, wide, elevated camera |
+| `Moving broadcast + tracked rim` | NBA and other broadcast footage with pans and zooms |
+
+Tips for a good clip: keep the shooter, ball and rim visible, shoot at 60 fps and 1080p, and don't digitally zoom mid-possession. Short continuous half-court possessions work best. More in [docs/cameras-and-clips.md](docs/cameras-and-clips.md).
+
+## how it works
+
+Deeper write-ups, with the measurements behind them:
+
+- [Game mode](docs/game-mode.md): the shot-space score, shot-type rules, validation
+- [Court calibration](docs/court-calibration.md): homography fit, auto-detect, floor trajectories, accuracy checks
+- [Performance](docs/performance.md): model backends, pipelining, review video encoding, timings
+- [Cameras and clips](docs/cameras-and-clips.md): profiles, rim detection, make classifier
+
+## limits
+
+Camera movement changes apparent distances. Jerseys can look alike. Players overlap. The ball can be hidden for exactly the frames that matter. Passes and slow-motion edits can resemble shots. Cuts reset tracking. The analyzer reports evidence and confidence, but it has not been calibrated against a labeled NBA shot-outcome dataset. Treat it as a review assistant, not an oracle.
 
 ## code map
 
-`app/analyzer.py` handles decoding, inference, tracking, net flow, and annotated video. `app/scoring.py` segments arcs and computes form/outcome evidence. `app/shots.py` adds hidden-release jump shots and rim attempts and labels shot types. `app/game.py` handles shooter/defender association and the shot-space score. `app/court.py` holds the court templates, the landmark fit and floor geometry; `app/court_detect.py` proposes landmarks from the painted lines of one frame; `app/camera_motion.py` follows the floor mapping through camera motion; `app/trajectory.py` smooths each player's floor positions into trajectories. `app/tracking.py` owns multi-player IDs and jersey descriptors. `app/vision.py` handles wide-view detection, crops, court filtering, and cuts. `app/main.py` is the local upload/job API. `app/lan.py` handles the tokenized LAN/Tailscale link.
+| file | job |
+|---|---|
+| `app/analyzer.py` | decoding, inference, tracking, net flow, annotated video |
+| `app/scoring.py` | arc segmentation, form and outcome evidence |
+| `app/shots.py` | hidden-release jump shots, rim attempts, shot types |
+| `app/game.py` | shooter/defender association, shot-space score |
+| `app/court.py`, `court_detect.py`, `camera_motion.py`, `trajectory.py` | court templates and fit, auto-detect, camera motion, floor trajectories |
+| `app/tracking.py` | multi-player IDs and jersey descriptors |
+| `app/vision.py` | wide-view detection, crops, court filtering, cuts |
+| `app/main.py` | local upload/job API |
 
-Run the checks with:
+## tests
 
 ```bash
 uv run pytest -q
@@ -237,4 +111,6 @@ node --check web/app.js
 node --check web/court.js
 ```
 
-Ballform is AGPL-3.0-only because it integrates the AGPL-licensed Ultralytics package and model. MediaPipe is Apache-2.0. See `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md`, and `SECURITY.md` before distributing a modified service.
+## license
+
+AGPL-3.0-only, because it integrates the AGPL-licensed Ultralytics package and model. MediaPipe is Apache-2.0. See `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md` and `SECURITY.md` before distributing a modified service.
