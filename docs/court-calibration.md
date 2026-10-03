@@ -1,0 +1,48 @@
+# court calibration
+
+Game analyses can report real floor distances. In the preview, choose **Calibrate court**, pick the court standard (NBA, FIBA, NCAA or high school), scrub to a frame where the floor lines are clear, then pair landmarks: pick one on the half-court diagram and click the same spot on the video, where the painted lines meet. Or let **Auto-detect court** propose them (below). The page draws the fitted court over the frame so you can check it before analyzing.
+
+Mark five or more landmarks spread over the floor. Four always fit exactly, so their error cannot be checked; from five, the page also shows how far each point moves when it is left out. Include one far from the basket when you can, such as where the half-court line meets a sideline. On a test broadcast, six clicks bunched around the lane agreed within 2 px but put half court about 2.5 ft away from where a fit including a half-court click did. Spots inside the arc moved by under 1 ft. Reports say when a shot was taken outside the marked area, because its position is then extrapolated.
+
+The floor mapping is a homography, so it is valid only for points on the floor. The ball and the rim are never mapped through it. On moving cameras it follows pans and zooms from floor features only: the court under the current mapping plus a 6 ft apron, minus every player (and their floor reflection) and minus static broadcast graphics. The chain runs forward and backward from the marked frame and stops at camera cuts or when too few floor features survive. Frames it cannot map are marked unreliable and get no measurements in feet. Fixed cameras (courtside and elevated) keep the marked mapping. The review video draws the court lines on every reliably mapped frame.
+
+What it adds next to the torso-length metrics, which are unchanged:
+
+- **Shot distance** from the shooter's floor spot to the floor point under the rim, which comes from the court template. Shooters are usually airborne at release, and airborne feet map to a point beyond the player, so the spot comes from the ankles on the last grounded frames before take-off. The report says which frames were used.
+- **Shot zone** (paint, midrange, corner three, above-the-break three), the shooter's court position, and how far the spot is behind or inside the three-point line.
+- **Floor separation** from the shooter's take-off spot to the defender's feet.
+- **Contest clearance in feet**, which is approximate. It assumes the defender's hand and the ball are at the shooter's depth, and uses the camera recovered from the floor mapping.
+
+Player positions use the midpoint of the visible ankles, or the bottom of the pose box when both are hidden (reported as such). What was checked, on four broadcast clips with hand-placed landmarks:
+
+- **Fit:** 1.4–3.5 px RMS error on the clicked points. Unclicked landmarks, such as the 28 ft coaching-box line, reprojected within 3 px.
+- **Drift:** projected lane lines stayed within 2 px of the paint through the shot on every clip, and within about 7 px to the end of each clip. The worst case was one clip's baseline, about 16 px off at the end.
+- **Known distances:** lane width mapped to 15.6 ft (true 16) and the baseline-to-free-throw distance to 18.8 ft (true 19), on the anchor frame and 140 frames later alike.
+- **Consistency:** two different broadcast edits of the same shot, calibrated separately, gave 24.9 and 24.8 ft.
+
+Single-frame floor positions jitter. On the three calibrated test clips (seven calibrated analyses), 2.4–4.6% of raw frame-to-frame steps were faster than 30 ft/s (about 20 mph), from ankle jitter, lifted feet and ankles that land on another player. Each player's positions are now also smoothed into a floor trajectory (`app/trajectory.py`): a constant-velocity Kalman filter run forward and back, with measurement noise set by how the point was found (both ankles, one ankle, pose box) and converted to feet at the player's distance from the camera. A frame where the lower foot is well above its level just before and after is skipped as airborne, outliers are down-weighted, and a trajectory stops at a camera cut, at a frame without a reliable court mapping, or after a half-second gap. Shorter gaps, including joins between stitched track fragments, are bridged. The noise settings maximise the filter's likelihood on the three clips (`uv run python scripts/measure_floor_trajectories.py --tune`).
+
+Measured with `uv run python scripts/measure_floor_trajectories.py`, which rebuilds each calibrated job from its saved `court.json` and `observations.json`:
+
+- Smoothed steps over 30 ft/s fell to 0–0.17% per analysis. The remaining case is a player whose ankle keypoints slid onto the player in front of him, which smoothing cannot tell from running. Median smoothed speeds were 3.4–4.7 ft/s and the 99th percentile 18–21 ft/s.
+- Leaving out every third floor point and predicting it from the rest missed by 0.10–0.15 ft at the median and 0.35–0.46 ft at the 90th percentile.
+- Separate calibrations of the same observations (three pairs, all from one clip) gave per-frame speeds within 0.1 ft/s of each other at the median (0.5 ft/s at the 95th percentile) and positions within 0.15–0.5 ft.
+- On a synthetic 20 ft/s sprint that stops dead, the smoothed speed starts dropping 0.1 s early and takes 0.2 s to fall from 90% to 10%. A sharp 90° cut at 15 ft/s briefly reads as 10 ft/s.
+
+One camera cannot tell a lifted foot from a quick step away from it and back, so some of those steps are skipped as airborne and bridged, which underestimates them. On these clips the pose box bottom sat a median 13% of the player's height below the ankles; trajectories correct for that, while shot metrics still use the box bottom as before when both ankles are hidden. The trajectories are saved in `court.json` under `trajectories`. Shot metrics do not use them, so shot distance, zone and floor separation are unchanged.
+
+A per-shot speed (the shooter's speed and the defender's closing speed over the 0.5 s before release) was tried and left out of reports. That half second holds the gather and the jump. Across reasonable smoother settings, one shooter's speed moved between 3.3 and 5.3 ft/s and one defender's closing speed between −0.1 and −3.4 ft/s, and the defender's value was missing on two of the three shots. There are still no hand-labelled ground-truth positions, distances or speeds.
+
+### auto-detect
+
+**Auto-detect court** proposes the landmarks for the frame you are on, so you check and fix them instead of clicking from scratch. The frame goes to the local server and nowhere else, and no model is downloaded. `app/court_detect.py` finds painted lines of any colour, plus the edges of painted areas, and ignores crowded, busy parts of the picture. It pairs straight lines running the two ways across the floor with template lines such as the baseline, lane sides and sidelines. It discards views no real camera could take, keeps the court whose lines land best on the paint, and refines it. The landmarks inside the frame are filled in and the court is drawn as usual. They sit exactly on that fitted court, so the page shows no click error for them: judge the fit by whether the drawn lines follow the paint. Drag a point that is off, or select it on the diagram and press **Remove selected point**; clicking works as before. If nothing fits well enough, the page says why and leaves your marks alone. Reports record `court_calibration.landmark_source` as `manual`, `auto` or `auto, adjusted`.
+
+What was checked, against the seven hand calibrations there are (three NBA broadcast clips, 1920×1080; five of the calibrations are of the same Knicks frame, one is a Lakers clip, one a Rockets clip):
+
+- **Marked frames:** proposals on the Knicks and Lakers frames put the template lines 4.0–10.1 px (median) from each hand fit, 6.5–28.7 px at the 90th percentile. On the floor that is 0.06–0.47 ft at the free-throw line centre, 0.07–0.59 ft at the top of the arc and 0.23–0.67 ft at the recorded shooter spot. The five hand calibrations of the Knicks frame disagree with each other by 4.5–10.0 px median, 0.07–0.58 ft at the free-throw centre and 0.16–1.02 ft at the top of the arc, so at this level the comparison cannot say which fit is closer to the paint.
+- **Later frames:** on four later frames per clip, compared with the hand fit followed through camera motion, the Knicks and Lakers proposals were 3.1–10.6 px median. At the release frame the shooter spot was 0.30–1.04 ft from the reported one.
+- **Rockets clip:** red lines on light wood, the free-throw line behind a player and half court out of view. There was no proposal on the marked frame; it declined 3 of 4 later frames and proposed on one, 3.5 px median from the followed hand fit.
+- **No court:** it declined blank and noise frames and three broadcast graphics frames. Two of those graphics scored as well as some real courts but showed only two straight lines, and a proposal needs at least four template lines found.
+
+Limits: all of this is NBA broadcast footage from three arenas. Courtside, elevated and pickup cameras have not been tried; FIBA floors only in a synthetic test, NCAA and high-school floors not at all. The accept threshold rests on few frames (on real frames, correct fits scored 0.48–0.72 and wrong ones up to 0.43). The fit needs two straight lines one way across the floor and at least one the other way, and players are not masked out. Landmarks hidden behind a player or a score bug are proposed where the fitted court puts them. To repeat the comparison on your own calibrated jobs, run `uv run python scripts/court_detect_accuracy.py`.
+
