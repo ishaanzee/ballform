@@ -18,3 +18,4 @@ eval/runs/
 eval/report.json
 eval/clips/
 .claude/worktrees/
+eval/draft-frames/
