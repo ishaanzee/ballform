@@ -260,7 +260,7 @@ def free_flight(balls: list[Detection], frame: int, fps: float, aspect: float) -
 
 def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps: float,
                    reach: int | None = None) -> bool:
-    """True when the ball fell back below the rim, away from it, after the arc's apex
+    """True when the ball was below the rim, away from it, from the arc's apex on
     and before reaching the basket (frame ``reach``, if it ever did): a pass, not a shot.
 
     A shot's ball gets to the basket before it comes back down. A ball lost
