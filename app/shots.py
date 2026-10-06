@@ -36,6 +36,10 @@ from app.tracking import body_geometry
 # second hand within the margin makes the contact ambiguous.
 CONTACT_REACH = .65
 CONTACT_MARGIN = .2
+# A ball above a raised hand sits on the fingertips, a hand's length past the
+# wrist: tippers' wrists were 0.7-0.97 torso lengths from the ball (3b4f,
+# 699d, ec07).
+FINGERTIP_REACH = .9
 # A layup, dunk or tip reaches the basket this soon after the last touch.
 CONTACT_TO_BASKET_S = 1.2
 # A single low-confidence ball-in-basket frame fires on an empty net (3074e
@@ -161,19 +165,21 @@ def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> 
                 wrist = min(wrists, key=lambda w: math.dist(w, point))
                 ranked.append((math.dist(wrist, point) / geometry[1], pose, geometry[1], wrist))
         ranked.sort(key=lambda item: item[0])
-        if not ranked or ranked[0][0] > CONTACT_REACH:
+        if not ranked or ranked[0][0] > FINGERTIP_REACH:
             continue
         if len(ranked) > 1 and ranked[1][0] - ranked[0][0] < CONTACT_MARGIN:
             continue
         # A detector player without a pose holding the ball is a hidden rival.
         if any(_unposed_reach(ball, box) < math.inf for _, box in frame.get("unposed", [])):
             continue
-        _, pose, torso, wrist = ranked[0]
+        reach, pose, torso, wrist = ranked[0]
         shoulders = [p for name in ("left_shoulder", "right_shoulder")
                      if (p := pose.landmarks.get(name)) is not None and p[2] >= .5]
         if pose.track_id is None or len(shoulders) < 2:
             continue
         raised = wrist[1] <= (shoulders[0][1] + shoulders[1][1]) / 2 + .15 * torso
+        if reach > CONTACT_REACH and not (raised and ball.y < wrist[1]):
+            continue
         contacts.append(Contact(frame["frame"], pose.track_id, pose, torso, ball, raised))
     return contacts
 

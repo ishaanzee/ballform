@@ -366,3 +366,16 @@ def test_ball_caught_after_a_shot_ends_its_flight():
     shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
     assert [shot.attempt and shot.attempt["path"] for shot in shots] == [None, "rim_attempt"]
     assert shots[1].release_s == round(16 / FPS, 2)
+
+
+@pytest.mark.parametrize("wrist, found", [((.55, .30), True), ((.55, -.02), False)])
+def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
+    # 3b4f, 699d: the tipper's wrist is a hand's length below the ball. The
+    # same distance with the ball below the hand is not a touch.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, 40)})
+    events = [(20, *basket_box(.8)), (30, *basket_box(.8))]
+    balls, frames = scene(path, {26: (2, wrist)}, events, n=40)
+    shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
