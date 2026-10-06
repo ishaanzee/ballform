@@ -26,5 +26,15 @@ Each game shot is labelled jump shot, floater, layup, dunk, "layup or dunk" or t
 
 **Validation so far.** On the four one-jump-shot test clips, each still gives exactly its one jump shot, with the same release, shooter, defender, score and outcome. The new paths are covered by unit tests on synthetic tracks: layup, dunk, tip, putback, rim rattle, rebound, dribble, pass, mid-flight contest and hidden release. With the automatically detected rim, the rim-area path first found two false attempts on `2fcb`: a "dunk" and then a "tip". Both were the made jump shot falling past raised hands of fans behind the baseline. The flight and parabola rules above remove them. The labeled test set (`eval/`) now has 15 matched rim attempts and a few floaters from broadcast footage; on it, typing arc shots by flight time moved shot-vs-rim agreement from 10/26 to 21/26. That is still few examples per type, so treat the thresholds as lightly tuned. The parabola tolerance (2.5 ball radii) rests on only three real releases and two pass-overs.
 
+### how make/miss is called
+
+The outcome comes from the ball's path at the rim (`rim_outcome` in `app/scoring.py`); net motion only adds confidence. On broadcast angles a ball passing in front of or behind the rim, a rim-out and a back-rim bounce all cross the rim's plane inside the rim in the image, so a crossing alone is no longer a make:
+
+- **Made** needs the ball centre to cross the rim plane downward within 1 s of the arc's apex (labeled makes took 0.08–0.78 s), at least a quarter of the rim width in from either edge (a ball through the hoop is a ball radius, 0.26 rim widths, inside it; labeled makes crossed at 0.34–0.69), and no bounce back above the rim in the next 0.6 s.
+- **Missed** is a crossing outside the rim; a crossing that comes back above the rim (two confident detections over the rim box within 0.6 s); a ball that comes down to the rim without crossing it and rises two rim-box heights, back above the rim; or, after no crossing on arrival, a later drop outside the rim.
+- **Unknown** is a crossing over the rim's edge that is not seen bouncing out, and a clean drop through the rim more than 1 s after the apex: that is a rattle-in, a rebound or a putback, and the putback is its own attempt. Before this, a miss that was put back took the putback's crossing as its make.
+
+On the dev labels (`eval/labels.csv`, 76 matched shots) this moved misses called made from 13 to 0 and misses called missed from 10 to 25, with makes called made unchanged at 39 of 45; outcome coverage went from 82% to 84%. The six makes left unknown have the ball hidden at the rim or no rim found. The 0.25 edge margin is physically set but sits close to one labeled miss (crossing at 0.23), so treat it as lightly tuned.
+
 Form mode reports 2D image-plane estimates such as release timing, launch angle, elbow angle, and upper-arm elevation. These are good for comparing your own reps from the same setup. They are not calibrated 3D biomechanics.
 

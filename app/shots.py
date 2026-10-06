@@ -261,7 +261,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
                             "lone detections also fire on an empty net, so it is not treated as a make without a rim.")
         return "unknown", 0., evidence, None
-    outcome, confidence, evidence, frame = rim_outcome(segment, apex_frame, rim, net_motion, fps)
+    outcome, confidence, evidence, frame = rim_outcome(segment, apex_frame, rim, net_motion, fps, balls)
     if event is not None and "ball_in_basket" in event.sources:
         motion = _net_motion_peak(net_motion, event.frame, round(event.frame + .5 * fps))
         evidence.append(f"Detector ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}")

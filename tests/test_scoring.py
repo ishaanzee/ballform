@@ -34,6 +34,84 @@ def test_made_shot_uses_rim_track_during_camera_pan():
     assert shots[0].outcome_frame == 7
 
 
+def test_ball_back_above_rim_after_crossing_is_a_rim_out():
+    # Same descent through the rim as the made shot, but the ball then pops
+    # back up over the rim: a rim-out, or a ball passing in front of it in 2D.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .58, .33), ball(9, .61, .28), ball(10, .64, .30),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert shots[0].outcome_frame == 7
+
+
+def test_one_stray_detection_above_rim_does_not_undo_a_make():
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .60, .30), ball(9, .55, .55), ball(10, .55, .65),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert shots[0].outcome == "made"
+
+
+def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
+    # The ball reaches the rim at frame 7 without crossing its plane, bounces
+    # up off it, and only drops through 1.2 s after the apex (rebound or putback).
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .56, .30), ball(9, .56, .25), ball(10, .56, .23), ball(11, .55, .26),
+        ball(12, .55, .30), ball(13, .55, .34), ball(14, .55, .36), ball(15, .55, .38),
+        ball(16, .55, .45), ball(17, .55, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "unknown"
+
+
+def test_late_drop_outside_rim_after_hitting_it_is_a_miss():
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .58, .30), ball(9, .61, .25), ball(10, .64, .23), ball(11, .66, .26),
+        ball(12, .68, .30), ball(13, .70, .34), ball(14, .71, .36), ball(15, .72, .38),
+        ball(16, .73, .45), ball(17, .74, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+
+
+def test_crossing_over_the_rim_edge_is_not_called_made():
+    # Descends through the rim plane at x=.495, 11% of the rim width in from
+    # its left edge: the ball hit the rim there.
+    track = [
+        ball(0, .24, .70), ball(1, .30, .56), ball(2, .36, .40), ball(3, .42, .25),
+        ball(4, .47, .18), ball(5, .48, .23), ball(6, .49, .32), ball(7, .50, .43),
+        ball(8, .50, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "unknown"
+
+
+def test_ball_bouncing_off_the_rim_without_crossing_it_is_a_miss():
+    # Comes down onto the rim (y .35, just above its plane) and bounces high.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .25), ball(6, .54, .31), ball(7, .55, .35),
+        ball(8, .57, .26), ball(9, .59, .17), ball(10, .61, .14),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert shots[0].outcome_frame == 7
+
+
 def test_net_only_motion_cannot_turn_an_airball_into_a_make():
     # The ball is lost before it has a descending path through the rim. This
     # represents an airball that brushes the net from the side or below.
