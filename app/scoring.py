@@ -52,6 +52,16 @@ def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
     amount = (frame - left) / (right - left)
     return tuple(rim[left][i] + amount * (rim[right][i] - rim[left][i]) for i in range(4))  # type: ignore[return-value]
 
+
+def rim_by_arrival(rim: RimInput, apex_frame: int, fps: float) -> bool:
+    """True when a rim is known at the apex or before the ball can arrive (ARRIVAL_S).
+
+    A camera following the ball can bring the rim into view, or the rim
+    detector find it, only as the ball comes down to it.
+    """
+    return any(_rim_at(rim, frame) is not None for frame in range(apex_frame, round(apex_frame + ARRIVAL_S * fps) + 1))
+
+
 def _point(pose: PoseFrame, name: str, aspect_ratio: float = 1.0) -> tuple[float, float] | None:
     value = pose.landmarks.get(name)
     if value is None or value[2] < 0.35:
@@ -268,7 +278,7 @@ def rim_bounce(track: Sequence[Detection], start: int, end: float, rim: RimInput
 def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
                 net_motion: dict[int, float | dict[str, float]] | None, fps: float,
                 track: Sequence[Detection] | None = None) -> tuple[str, float, list[str], int | None]:
-    """Made/missed from the descent after ``apex_frame``; the caller checks a rim exists there.
+    """Made/missed from the descent after ``apex_frame``; the caller checks a rim is known by arrival.
 
     ``track`` is the ball track to follow after a crossing when it runs past ``segment``.
     """
@@ -460,8 +470,7 @@ def analyze_shots(
             if release_contact else
             "Release contact unavailable: timestamp uses the start of the visible arc and may precede or follow actual release"
         )
-        segment_rim = _rim_at(rim, apex_frame)
-        if segment_rim:
+        if rim_by_arrival(rim, apex_frame, fps):
             outcome, confidence, rim_evidence, outcome_frame = rim_outcome(
                 segment, apex_frame, rim, net_motion, fps, ordered)
             evidence += rim_evidence

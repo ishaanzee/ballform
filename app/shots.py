@@ -29,7 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
-from app.scoring import RimInput, _rim_at, arc_apexes, rim_outcome
+from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -324,7 +324,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
     # A dunk or a layup carried up crosses the rim plane before the hold ends
     # (``start``), so the descent is followed from the top of the ball's path.
     segment = [b for b in balls if min(start, apex_frame) <= b.frame <= apex_frame + 1.5 * fps]
-    if _rim_at(rim, apex_frame) is None or not segment:
+    if not rim_by_arrival(rim, apex_frame, fps) or not segment:
         evidence = ["Outcome unavailable because the rim was not marked"]
         if event is not None and "ball_in_basket" in event.sources:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "

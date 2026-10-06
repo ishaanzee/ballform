@@ -58,6 +58,19 @@ def test_one_stray_detection_above_rim_does_not_undo_a_make():
     assert shots[0].outcome == "made"
 
 
+def test_rim_found_only_as_the_ball_comes_down_still_scores_the_shot():
+    # 8e57: the camera brings the rim into view after the apex.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .55, .55),
+    ]
+    rims = {frame: (.48, .36, .14, .08) for frame in range(6, 9)}
+    shots = analyze_shots(track, [], 10, rims, {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "made"
+
+
 def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
     # The ball reaches the rim at frame 7 without crossing its plane, bounces
     # up off it, and only drops through 1.2 s after the apex (rebound or putback).
