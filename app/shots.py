@@ -91,6 +91,10 @@ AWAY_RIM_WIDTHS = 1.
 # A blocked shot never reaches the basket either: a confident shot-block class
 # between release and apex keeps such an arc (76d9, Durant's block).
 BLOCK_CONFIDENCE = .8
+# An arc's rise must be seen: confident ball detections for this long between
+# release and apex. Labeled shots had 0.15 s or more; arcs drawn through a
+# lost ball from one or two stray detections had 0.03-0.05 s (cd04, c467, 567b).
+ARC_SEEN_S = .1
 
 
 @dataclass
@@ -429,6 +433,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                                  f"frame {late[-1].frame}")
             release = late[-1].frame
             shot.release_s = round(release / fps, 2)
+        if apex is not None and sum(release <= b.frame <= apex and b.confidence >= .45 for b in balls) < ARC_SEEN_S * fps:
+            # The rise rests on a stray detection or two bridged by interpolation:
+            # no ball was seen going up.
+            continue
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)

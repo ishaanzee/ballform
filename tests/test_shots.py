@@ -440,3 +440,15 @@ def test_follow_up_that_did_not_go_in_says_nothing():
     first, tip = attempt(10, 20, "unknown"), attempt(36, None, "missed", 45)
     missed_before_follow_up([first, tip], FPS)
     assert first.shot.outcome == "unknown"
+
+
+def test_arc_whose_rise_was_not_seen_is_not_a_shot():
+    # cd04: the ball was lost after a rebound; one stray detection near the rim,
+    # bridged by interpolation, drew an arc nobody threw.
+    balls, frames = scene(arc((.42, .02), (.5, .12)), {})
+    for ball in balls:
+        if 1 <= ball.frame < 15:
+            ball.confidence = .3
+    assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
+    balls, frames = scene(arc((.42, .02), (.5, .12)), {})
+    assert len(find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)) == 1
