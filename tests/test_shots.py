@@ -1,11 +1,20 @@
 import pytest
 
+from app import shots as shots_module
 from app.models import Detection, PoseFrame, ShotResult
 from app.shots import Anchor, find_attempts, missed_before_follow_up
 from app.tracking import HandlerDecision
 
 FPS = 30
 BASKET = (.5, .1)
+FLOATER_FLIGHT_S = shots_module.FLOATER_FLIGHT_S
+
+
+@pytest.fixture(autouse=True)
+def short_synthetic_flights(monkeypatch):
+    """The synthetic jump shots below reach the basket in 0.67 s, a floater's flight time
+    on broadcast footage; the flight rule is tested on its own and left out elsewhere."""
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", (9., 9.))
 
 
 def pose(frame, x, track_id, wrist=None):
@@ -511,3 +520,71 @@ def test_one_frame_basket_detection_with_the_ball_elsewhere_around_it_is_ignored
     balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9))])
     balls[5].confidence = .3
     assert basket_events(frames, balls, None, FPS) == []
+
+
+@pytest.mark.parametrize("reach, expected", [
+    (25, "jump shot"),  # 0.50 s: mostly an early basket event, says nothing
+    (31, "floater"),    # 0.70 s: short and high, as dev floaters (0.67-0.83 s)
+    (40, "jump shot"),  # 1.00 s: as long as a jump shot's flight
+])
+def test_arc_shot_flight_time_separates_floater_from_jump_shot(reach, expected, monkeypatch):
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", FLOATER_FLIGHT_S)
+    shot, = arc_shots_reaching([(10, reach)])
+    assert shot.shot_type == expected
+
+
+def court_shot(shot_type, distance):
+    return ShotResult(1, 0., 1., 2., "unknown", 0., [], {}, shot_type=shot_type,
+                      game={"metrics": {"shot_distance_ft": distance}})
+
+
+@pytest.mark.parametrize("shot_type, distance, expected", [
+    ("jump shot", 7., "floater"),      # 6566, 380c: runners from 7 ft
+    ("jump shot", 12., "jump shot"),
+    ("floater", 12., "floater"),
+    ("floater", 20., "jump shot"),
+    ("layup or dunk", 7., "layup or dunk"),  # rim finishes keep their type
+    ("tip", 20., "tip"),
+    ("jump shot", None, "jump shot"),  # uncalibrated
+])
+def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance, expected):
+    from app.shots import type_by_distance
+    shot = court_shot(shot_type, distance)
+    type_by_distance([shot])
+    assert shot.shot_type == expected
+    assert bool(shot.evidence) == (expected != shot_type)
+
+
+def test_single_touch_lofted_back_up_soon_after_the_previous_shot_is_a_tip():
+    # fffe: the tip took 0.47 s to get back to the basket, longer than a finish at the rim.
+    first, tip = arc_shots_reaching([(0, 20), (36, 51)])
+    assert (first.shot_type, tip.shot_type) == ("jump shot", "tip")
+
+
+@pytest.mark.parametrize("hold_from, expected", [(38, "tip"), (28, "layup or dunk")])
+def test_gathered_putback_is_not_a_tip(hold_from, expected):
+    # bba1: Barnes caught the rebound, came down with it and went back up; a tipper only touches it.
+    path = {f: (.45, .3) for f in range(60)}
+    path.update({20: BASKET, 44: BASKET})
+    path.update({f: (.55, .3) for f in range(hold_from, 41)})
+    holders = {f: (2, (.55, .3)) for f in range(hold_from, 41)}
+    balls, frames = scene(path, holders, [(20, *basket_box(.8)), (44, *basket_box(.8))])
+    shots = [ShotResult(i + 1, 0., release / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
+             for i, release in enumerate((0, 40))]
+    first, putback = find_attempts(shots, balls, frames, FPS, None, 1.)
+    assert putback.shot_type == expected
+    assert any(item.startswith("Putback, not a tip") for item in putback.evidence) == (expected != "tip")
+
+
+@pytest.mark.parametrize("reach, expected", [(16, "layup or dunk"), (31, "floater")])
+def test_contact_that_looks_at_the_rim_but_takes_a_floaters_time_is_a_floater(reach, expected, monkeypatch):
+    # 699d: in 2D the runner was let go in front of the rim, one torso length below it, and took 0.70 s.
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", FLOATER_FLIGHT_S)
+    path = {f: (.5, .3) for f in range(11)}
+    path.update({f: lerp((.5, .3), (.5, .02), (f - 10) / ((reach - 10) / 2)) for f in range(11, (reach + 10) // 2)})
+    path.update({f: lerp((.5, .02), BASKET, (f - (reach + 10) // 2) / (reach - (reach + 10) // 2))
+                 for f in range((reach + 10) // 2, reach + 1)})
+    holders = {f: (1, (.5, .3)) for f in range(11)}
+    balls, frames = scene(path, holders, [(reach, *basket_box(.8))], {f: 1 for f in range(11)}, n=reach + 20)
+    shot, = find_attempts([], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == expected
