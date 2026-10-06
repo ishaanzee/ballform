@@ -440,3 +440,74 @@ def test_follow_up_that_did_not_go_in_says_nothing():
     first, tip = attempt(10, 20, "unknown"), attempt(36, None, "missed", 45)
     missed_before_follow_up([first, tip], FPS)
     assert first.shot.outcome == "unknown"
+
+
+def test_arc_whose_rise_was_not_seen_is_not_a_shot():
+    # cd04: the ball was lost after a rebound; one stray detection near the rim,
+    # bridged by interpolation, drew an arc nobody threw.
+    balls, frames = scene(arc((.42, .02), (.5, .12)), {})
+    for ball in balls:
+        if 1 <= ball.frame < 15:
+            ball.confidence = .3
+    assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
+    balls, frames = scene(arc((.42, .02), (.5, .12)), {})
+    assert len(find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)) == 1
+
+
+def test_hand_on_the_ball_falling_through_the_net_is_not_a_new_attempt():
+    # 25e9: after the dunk the ball dropped through the net into a player's hands,
+    # and a stray detection at the rim read as a putback.
+    made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=20)
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.5, .4), (f - 20) / 8) for f in range(21, 29)})
+    path.update({f: lerp((.5, .4), BASKET, (f - 28) / 3) for f in range(29, 40)})
+    holders = {f: (2, (.5, .4)) for f in range(26, 29)}
+    events = [(20, *basket_box(.8)), (31, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, n=40)
+    assert [shot.number for shot in find_attempts([made], balls, frames, FPS, None, 1.)] == [1]
+    made = ShotResult(1, 0., 0., 1., "missed", .9, ["Ball arc detected"], {}, outcome_frame=20)
+    assert len(find_attempts([made], balls, frames, FPS, None, 1.)) == 2
+
+
+def test_shooter_still_holding_the_ball_on_the_rim_is_not_a_new_attempt():
+    # 1b06: the blocked dunker kept his hands on the ball as it sat on the rim
+    # and came down with it; a later basket detection read as a putback.
+    path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
+    path.update({f: (.5, .1) for f in range(25, 45)})
+    holders = {f: (1, path[f]) for f in range(45)}
+    events = [(40, *basket_box(.8)), (41, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(45)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["basket_frame"] < 24
+    from app.shots import _held_since, hand_contacts
+    contacts = hand_contacts(frames, balls, 1.)
+    assert _held_since(contacts, contacts[-1], shot.attempt["contact_frame"], FPS)
+
+
+def test_hand_at_the_rim_as_the_shot_arrives_is_not_a_tip():
+    # 20f2: a hand next to the rim as the jump shot hit it; the ball bounced off.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, 40)})
+    events = [(20, *basket_box(.8)), (30, *basket_box(.8))]
+    balls, frames = scene(path, {22: (2, path[22])}, events, n=40)
+    assert [shot.shot_type for shot in find_attempts([arc_shot()], balls, frames, FPS, None, 1.)] == ["jump shot"]
+
+
+@pytest.mark.parametrize("conf, found", [(.7, True), (.6, False)])
+def test_layup_dunk_class_without_a_rim_must_be_confident(conf, found):
+    # 8e57, dd76: a rebound tipped out upward under a weak layup-dunk class (0.51-0.57).
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(f, "layup_dunk", conf, (.35, .3, .45, .7)) for f in range(5, 11)]
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.45, .05), (f - 10) / 10) for f in range(11, 30)})
+    balls, frames = scene(path, holders, events)
+    assert len(find_attempts([], balls, frames, FPS, None, 1.)) == (1 if found else 0)
+
+
+def test_one_frame_basket_detection_with_the_ball_elsewhere_around_it_is_ignored():
+    # 76d9: the ball was blurred on the detection's frame and confidently mid-court around it.
+    from app.shots import basket_events
+    balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9))])
+    balls[5].confidence = .3
+    assert basket_events(frames, balls, None, FPS) == []

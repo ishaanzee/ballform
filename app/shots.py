@@ -45,6 +45,12 @@ CONTACT_TO_BASKET_S = 1.2
 # A single low-confidence ball-in-basket frame fires on an empty net (3074e
 # frames 54 and 136); a lone detection must be this confident.
 BASKET_CONFIDENCE = .5
+# A ball-in-basket run is an empty net when the ball was seen confidently
+# elsewhere, and never at the box, on its frames; when it was not seen
+# confidently on them, on the frames this close to them, as the ball cannot get
+# to the basket faster (76d9: a one-frame detection while the ball, blurred on
+# that frame, was mid-court on the frames around it).
+EMPTY_NET_S = .1
 # Detector class runs this close to an existing shot's release belong to it.
 SHOT_WINDOW_S = .7
 # A shot's flight can claim basket events for this long after release.
@@ -91,6 +97,25 @@ AWAY_RIM_WIDTHS = 1.
 # A blocked shot never reaches the basket either: a confident shot-block class
 # between release and apex keeps such an arc (76d9, Durant's block).
 BLOCK_CONFIDENCE = .8
+# An arc's rise must be seen: the ball going up this many of its radii between
+# confident detections at most 0.1 s apart, from release to apex. Labeled shots
+# were seen rising 2.5 radii or more; arcs drawn from stray detections across a
+# lost ball 0-0.03 (cd04, c467, 567b, d3d6: a net read as the ball).
+ARC_RISE_RADII = 1.
+# No attempt is released this soon after a make. On the dev labels the next
+# real attempt came 1.28 s or more after a "made" call (25e9, after a false
+# make); hands on the ball falling through the net came 0.15-0.32 s after (b212, 25e9).
+DEAD_BALL_S = 1.
+# With no rim or basket detection to check the ball against, a layup-dunk
+# class run must be this confident. On the dev labels the path found no real
+# attempt; its two finds were one rebound tip-out seen in two overlapping clips
+# (8e57, dd76), at peaks 0.51 and 0.57.
+LAYUP_CLASS_PEAK = .7
+# A touch this soon after a shot reaches the basket is part of its arrival (a
+# contest, a hand behind the rim in 2D: 20f2 0.07 s), not a follow-up; the
+# ball has to come off the rim first. The earliest labeled follow-up touched
+# it 0.25 s after (883b, a miss caught short of the rim).
+SETTLE_S = .15
 
 
 @dataclass
@@ -209,9 +234,12 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
     by_frame = {ball.frame: ball for ball in balls}
     for run in event_runs(frames, "ball_in_basket", fps):
         # An empty net fires too: drop the run when the ball was seen confidently
-        # elsewhere on its frames, and never at the box.
+        # elsewhere on its frames (or, unseen there, just around them), and never at the box.
         seen = [ball for frame in range(run.start, run.end + 1)
                 if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
+        if not seen:
+            seen = [ball for frame in range(round(run.start - EMPTY_NET_S * fps), round(run.end + EMPTY_NET_S * fps) + 1)
+                    if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
         if seen and not any(_near_box(ball, run.box) for ball in seen):
             continue
         if run.peak >= BASKET_CONFIDENCE or run.count >= 2:
@@ -305,6 +333,28 @@ def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps:
                 and abs(ball.x - box[0] - box[2] / 2) > AWAY_RIM_WIDTHS * box[2]):
             return True
     return False
+
+
+def _seen_rising(balls: list[Detection], start: int, end: int, fps: float) -> float:
+    """How far the ball was seen going up between two frames, in ball radii: upward steps
+    between confident detections at most 0.1 s apart (a radius of 0.01 frame heights when
+    the detector gave none)."""
+    seen = [b for b in balls if start <= b.frame <= end and b.confidence >= .45]
+    rise = sum(max(0., a.y - b.y) for a, b in zip(seen, seen[1:]) if b.frame - a.frame <= .1 * fps)
+    radius = float(np.mean([b.radius for b in seen])) if seen else 0.
+    return rise / (radius or .01)
+
+
+def _held_since(contacts: list[Contact], contact: Contact, frame: int, fps: float) -> bool:
+    """The contact's player has had the ball since ``frame``, with gaps of at most HOLD_GAP_S."""
+    held = contact.frame
+    for earlier in reversed(contacts):
+        if earlier.frame >= held or earlier.track_id != contact.track_id:
+            continue
+        if held - earlier.frame > HOLD_GAP_S * fps or earlier.frame < frame:
+            break
+        held = earlier.frame
+    return held <= frame
 
 
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
@@ -429,6 +479,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                                  f"frame {late[-1].frame}")
             release = late[-1].frame
             shot.release_s = round(release / fps, 2)
+        if apex is not None and _seen_rising(balls, release, apex, fps) < ARC_RISE_RADII:
+            # The rise rests on stray detections bridged by interpolation or a gap
+            # (a net read as the ball after the ball was lost): nobody saw it go up.
+            continue
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
@@ -469,7 +523,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         apex = next((f for f in apexes if run.start <= f <= run.end + 1.5 * fps), None)
         prior = [c for c in contacts if apex is not None and apex - 1.25 * fps <= c.frame < apex
                  and c.frame >= run.start - .5 * fps]
-        if apex is None or not prior or not _flight_supported(prior[-1], by_frame[apex]):
+        if (apex is None or not prior or not _flight_supported(prior[-1], by_frame[apex])
+                or _seen_rising(balls, prior[-1].frame, apex, fps) < ARC_RISE_RADII):
             continue
         contact = prior[-1]
         reach = next((e.frame for e in events if contact.frame <= e.frame <= contact.frame + FLIGHT_S * fps), None)
@@ -514,7 +569,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                     "it does not change the outcome, which needs the rim")
             continue
         if current is not None and current.reached is not None:
-            recent = [c for c in recent if c.frame > current.reached]
+            recent = [c for c in recent if c.frame > current.reached + SETTLE_S * fps]
         if not recent:
             continue
         # No free-flight test here: a ball carried up to the rim, or tipped, moves
@@ -522,6 +577,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # of 32 missed rim attempts and floaters; the pass-overs it was added for
         # are claimed by the shot in flight or dropped as empty-net detections.
         contact = recent[-1]
+        if current is not None and current.shot.attempt is not None and _held_since(contacts, contact, current.release, fps):
+            # The previous rim attempt's shooter never let go (1b06: the blocked
+            # dunker held the ball on the rim, then came down with it).
+            continue
         dx, dy = _torso_distance(contact, event.location, aspect)
         at_rim = math.hypot(dx, dy) <= AT_RIM
         path = [b for b in balls if contact.frame <= b.frame <= event.frame]
@@ -601,7 +660,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
 
     # Layup-dunk class without a basket event (no rim, ball-in-basket missed).
     for run in c7:
-        if (run.count < 2 or run.peak < .5
+        if (run.count < 2 or run.peak < LAYUP_CLASS_PEAK
                 or any(run.start - window <= a.release <= run.end + CONTACT_TO_BASKET_S * fps for a in anchors)
                 or any(run.start <= e.frame <= run.end + CONTACT_TO_BASKET_S * fps for e in events)):
             continue
@@ -631,8 +690,16 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
         anchors.append(Anchor(contact.frame, None, shot))
 
-    missed_before_follow_up(anchors, fps)
-    ordered = sorted((a.shot for a in anchors), key=lambda s: s.release_s)
+    kept = []
+    for anchor in sorted(anchors, key=lambda a: a.release):
+        # A make ends the possession: the ball drops through the net and has to be
+        # inbounded, so a "release" right after it is a hand on the falling ball.
+        if any(made.shot.outcome == "made" and made.shot.outcome_frame is not None
+               and 0 <= anchor.release - made.shot.outcome_frame <= DEAD_BALL_S * fps for made in kept):
+            continue
+        kept.append(anchor)
+    missed_before_follow_up(kept, fps)
+    ordered = sorted((a.shot for a in kept), key=lambda s: s.release_s)
     for number, shot in enumerate(ordered, 1):
         shot.number = number
     return ordered
