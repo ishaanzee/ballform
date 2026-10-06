@@ -553,3 +553,38 @@ def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance
     type_by_distance([shot])
     assert shot.shot_type == expected
     assert bool(shot.evidence) == (expected != shot_type)
+
+
+def test_single_touch_lofted_back_up_soon_after_the_previous_shot_is_a_tip():
+    # fffe: the tip took 0.47 s to get back to the basket, longer than a finish at the rim.
+    first, tip = arc_shots_reaching([(0, 20), (36, 51)])
+    assert (first.shot_type, tip.shot_type) == ("jump shot", "tip")
+
+
+@pytest.mark.parametrize("hold_from, expected", [(38, "tip"), (28, "layup or dunk")])
+def test_gathered_putback_is_not_a_tip(hold_from, expected):
+    # bba1: Barnes caught the rebound, came down with it and went back up; a tipper only touches it.
+    path = {f: (.45, .3) for f in range(60)}
+    path.update({20: BASKET, 44: BASKET})
+    path.update({f: (.55, .3) for f in range(hold_from, 41)})
+    holders = {f: (2, (.55, .3)) for f in range(hold_from, 41)}
+    balls, frames = scene(path, holders, [(20, *basket_box(.8)), (44, *basket_box(.8))])
+    shots = [ShotResult(i + 1, 0., release / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
+             for i, release in enumerate((0, 40))]
+    first, putback = find_attempts(shots, balls, frames, FPS, None, 1.)
+    assert putback.shot_type == expected
+    assert any(item.startswith("Putback, not a tip") for item in putback.evidence) == (expected != "tip")
+
+
+@pytest.mark.parametrize("reach, expected", [(16, "layup or dunk"), (31, "floater")])
+def test_contact_that_looks_at_the_rim_but_takes_a_floaters_time_is_a_floater(reach, expected, monkeypatch):
+    # 699d: in 2D the runner was let go in front of the rim, one torso length below it, and took 0.70 s.
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", FLOATER_FLIGHT_S)
+    path = {f: (.5, .3) for f in range(11)}
+    path.update({f: lerp((.5, .3), (.5, .02), (f - 10) / ((reach - 10) / 2)) for f in range(11, (reach + 10) // 2)})
+    path.update({f: lerp((.5, .02), BASKET, (f - (reach + 10) // 2) / (reach - (reach + 10) // 2))
+                 for f in range((reach + 10) // 2, reach + 1)})
+    holders = {f: (1, (.5, .3)) for f in range(11)}
+    balls, frames = scene(path, holders, [(reach, *basket_box(.8))], {f: 1 for f in range(11)}, n=reach + 20)
+    shot, = find_attempts([], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == expected
