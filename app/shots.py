@@ -91,10 +91,11 @@ AWAY_RIM_WIDTHS = 1.
 # A blocked shot never reaches the basket either: a confident shot-block class
 # between release and apex keeps such an arc (76d9, Durant's block).
 BLOCK_CONFIDENCE = .8
-# An arc's rise must be seen: confident ball detections for this long between
-# release and apex. Labeled shots had 0.15 s or more; arcs drawn through a
-# lost ball from one or two stray detections had 0.03-0.05 s (cd04, c467, 567b).
-ARC_SEEN_S = .1
+# An arc's rise must be seen: the ball going up this many of its radii between
+# confident detections at most 0.1 s apart, from release to apex. Labeled shots
+# were seen rising 2.5 radii or more; arcs drawn from stray detections across a
+# lost ball 0-0.03 (cd04, c467, 567b, d3d6: a net read as the ball).
+ARC_RISE_RADII = 1.
 # No attempt is released this soon after a make. On the dev labels the next
 # real attempt came 1.28 s or more after a "made" call (25e9, after a false
 # make); hands on the ball falling through the net came 0.15-0.32 s after (b212, 25e9).
@@ -320,6 +321,16 @@ def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps:
     return False
 
 
+def _seen_rising(balls: list[Detection], start: int, end: int, fps: float) -> float:
+    """How far the ball was seen going up between two frames, in ball radii: upward steps
+    between confident detections at most 0.1 s apart (a radius of 0.01 frame heights when
+    the detector gave none)."""
+    seen = [b for b in balls if start <= b.frame <= end and b.confidence >= .45]
+    rise = sum(max(0., a.y - b.y) for a, b in zip(seen, seen[1:]) if b.frame - a.frame <= .1 * fps)
+    radius = float(np.mean([b.radius for b in seen])) if seen else 0.
+    return rise / (radius or .01)
+
+
 def _held_since(contacts: list[Contact], contact: Contact, frame: int, fps: float) -> bool:
     """The contact's player has had the ball since ``frame``, with gaps of at most HOLD_GAP_S."""
     held = contact.frame
@@ -454,9 +465,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                                  f"frame {late[-1].frame}")
             release = late[-1].frame
             shot.release_s = round(release / fps, 2)
-        if apex is not None and sum(release <= b.frame <= apex and b.confidence >= .45 for b in balls) < ARC_SEEN_S * fps:
-            # The rise rests on a stray detection or two bridged by interpolation:
-            # no ball was seen going up.
+        if apex is not None and _seen_rising(balls, release, apex, fps) < ARC_RISE_RADII:
+            # The rise rests on stray detections bridged by interpolation or a gap
+            # (a net read as the ball after the ball was lost): nobody saw it go up.
             continue
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
@@ -498,7 +509,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         apex = next((f for f in apexes if run.start <= f <= run.end + 1.5 * fps), None)
         prior = [c for c in contacts if apex is not None and apex - 1.25 * fps <= c.frame < apex
                  and c.frame >= run.start - .5 * fps]
-        if apex is None or not prior or not _flight_supported(prior[-1], by_frame[apex]):
+        if (apex is None or not prior or not _flight_supported(prior[-1], by_frame[apex])
+                or _seen_rising(balls, prior[-1].frame, apex, fps) < ARC_RISE_RADII):
             continue
         contact = prior[-1]
         reach = next((e.frame for e in events if contact.frame <= e.frame <= contact.frame + FLIGHT_S * fps), None)
