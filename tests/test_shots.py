@@ -196,6 +196,7 @@ def test_floater_needs_layup_dunk_class_at_least_as_confident_as_jump_shot(layup
 def arc_shots_reaching(releases_and_reaches):
     """Arc shots released at the given frames, each reaching the basket at its paired frame."""
     path = {f: (.45, .3) for f in range(max(r for _, r in releases_and_reaches) + 10)}
+    path.update({reach: BASKET for _, reach in releases_and_reaches})
     events = [(reach, *basket_box(.8)) for _, reach in releases_and_reaches]
     balls, frames = scene(path, {}, events)
     shots = [ShotResult(i + 1, 0., release / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
@@ -260,3 +261,60 @@ def test_rim_area_entry_survives_a_low_confidence_frame():
     from app.shots import basket_events
     # A hand contact between the two frames (2fcb) would stop the entries merging.
     assert len(basket_events(frames, balls, (.47, .08, .06, .04), FPS, [12])) == 1
+
+
+RIM = (.47, .08, .06, .04)
+
+
+def arc(apex, end):
+    """An arc released at frame 0 from (.2, .5), peaking at ``apex`` on frame 15 and ending at ``end`` on frame 30."""
+    path = {f: lerp((.2, .5), apex, f / 15) for f in range(16)}
+    path.update({f: lerp(apex, end, (f - 15) / 15) for f in range(16, 31)})
+    return path
+
+
+def test_pass_coming_down_beside_the_rim_is_not_a_shot():
+    # The ball peaks at rim height and comes down in a teammate's hands, far from the basket.
+    balls, frames = scene(arc((.35, .2), (.5, .5)), {})
+    assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
+    # Without a rim nothing says where the basket is, so the arc stays a shot.
+    assert len(find_attempts([arc_shot()], balls, frames, FPS, None, 1.)) == 1
+    # A shot gets to the basket before it comes down.
+    balls, frames = scene(arc((.42, .02), (.5, .12)), {})
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert shot.shot_type == "jump shot"
+
+
+def test_ball_in_basket_with_the_ball_seen_elsewhere_is_ignored():
+    # 5adf: the empty net fired while the tracked ball was mid-pass across the court.
+    from app.shots import basket_events
+    balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9)), (6, *basket_box(.9))])
+    assert basket_events(frames, balls, None, FPS) == []
+    balls, frames = scene({f: BASKET if f in (5, 6) else (.2, .4) for f in range(10)}, {},
+                          [(5, *basket_box(.9)), (6, *basket_box(.9))])
+    assert len(basket_events(frames, balls, None, FPS)) == 1
+
+
+def test_hand_on_the_ball_after_the_release_estimate_moves_the_release():
+    # The arc path timed the release at the gather (frame 0); P1 held the ball overhead to frame 8.
+    path = {f: (.4, .3) for f in range(9)}
+    path.update({f: lerp((.4, .3), (.45, .05), (f - 8) / 12) for f in range(9, 21)})
+    path.update({f: lerp((.45, .05), BASKET, (f - 20) / 8) for f in range(21, 35)})
+    holders = {f: (1, (.4, .3)) for f in range(9)}
+    balls, frames = scene(path, holders, [(28, *basket_box(.8)), (29, *basket_box(.8))])
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert shot.release_s == round(8 / FPS, 2) and shot.shot_type == "jump shot"
+    assert any(item.startswith("Release moved from frame 0") for item in shot.evidence)
+
+
+def test_blocked_shot_coming_down_away_stays_a_shot():
+    events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
+    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert any(item.startswith("Blocked") for item in shot.evidence)
+
+
+def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
+    # 8628: a tip-dunk's catch above the rim and its slam read as two arcs.
+    shot, = arc_shots_reaching([(10, 16), (18, 16)])
+    assert shot.release_s == pytest.approx(10 / FPS)

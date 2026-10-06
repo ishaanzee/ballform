@@ -62,6 +62,15 @@ TIP_AFTER_REACH_S = 1.
 # frame height; ball radius about 0.016).
 FREE_FLIGHT_RADII = 2.5
 RIM_TYPES = {"layup", "dunk", "layup or dunk", "tip"}
+# An arc's apex comes within this long of release, and its descent within as
+# long again of the apex.
+ARC_APEX_S = 1.5
+# A ball coming down this many rim widths to the side of the rim's centre is
+# beside the basket, not at it.
+AWAY_RIM_WIDTHS = 1.
+# A blocked shot never reaches the basket either: a confident shot-block class
+# between release and apex keeps such an arc (76d9, Durant's block).
+BLOCK_CONFIDENCE = .8
 
 
 @dataclass
@@ -153,6 +162,13 @@ def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> 
     return contacts
 
 
+def _near_box(ball: Detection, box: tuple[float, float, float, float]) -> bool:
+    """The ball is within one box size of a detector box (x1, y1, x2, y2)."""
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    return x1 - w <= ball.x <= x2 + w and y1 - h <= ball.y <= y2 + h
+
+
 def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps: float,
                   contact_frames: list[int] = ()) -> list[BasketEvent]:
     """Moments the ball reaches the basket: ball-in-basket detections and rim-area entries.
@@ -162,7 +178,14 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
     0.5 s merge into one event unless a hand touched the ball in between (a tip).
     """
     events = []
+    by_frame = {ball.frame: ball for ball in balls}
     for run in event_runs(frames, "ball_in_basket", fps):
+        # An empty net fires too: drop the run when the ball was seen confidently
+        # elsewhere on its frames, and never at the box.
+        seen = [ball for frame in range(run.start, run.end + 1)
+                if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
+        if seen and not any(_near_box(ball, run.box) for ball in seen):
+            continue
         if run.peak >= BASKET_CONFIDENCE or run.count >= 2:
             x1, y1, x2, y2 = run.box
             events.append(BasketEvent(run.start, ["ball_in_basket"], run.peak, ((x1 + x2) / 2, (y1 + y2) / 2)))
@@ -233,6 +256,28 @@ def free_flight(balls: list[Detection], frame: int, fps: float, aspect: float) -
     residual = np.hypot(x - np.polyval(np.polyfit(t, x, 1), t), y - np.polyval(np.polyfit(t, y, 2), t))
     radius = float(np.mean([b.radius for b in points])) * aspect
     return float(residual.max()) < max(.01, FREE_FLIGHT_RADII * radius)
+
+
+def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps: float,
+                   reach: int | None = None) -> bool:
+    """True when the ball was below the rim, away from it, from the arc's apex on
+    and before reaching the basket (frame ``reach``, if it ever did): a pass, not a shot.
+
+    A shot's ball gets to the basket before it comes back down. A ball lost
+    before it came back down (occlusion, blur, no rim known) proves nothing.
+    """
+    if apex is None:
+        return False
+    for ball in balls:
+        if ball.frame < apex or ball.confidence < .45:
+            continue
+        if ball.frame > apex + ARC_APEX_S * fps or (reach is not None and ball.frame >= reach):
+            break
+        box = _rim_at(rim, ball.frame)
+        if (box is not None and ball.y > box[1] + .45 * box[3]
+                and abs(ball.x - box[0] - box[2] / 2) > AWAY_RIM_WIDTHS * box[2]):
+            return True
+    return False
 
 
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
@@ -313,14 +358,40 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     events = basket_events(frames, balls, rim, fps, [c.frame for c in contacts])
     c6, c7, c8 = (event_runs(frames, name, fps) for name in ("jump_shot", "layup_dunk", "shot_block"))
     window = round(SHOT_WINDOW_S * fps)
+    by_frame = {b.frame: b for b in balls}
+    apexes = arc_apexes(balls, [], fps, game_mode=True)
 
     anchors = []
-    previous_reach = None
+    previous_reach = kept_reach = None
     for shot in sorted(shots, key=lambda s: s.release_s):
         release = round(shot.release_s * fps)
+        apex = next((f for f in apexes if release <= f <= release + ARC_APEX_S * fps), None)
+        # The ball flies free from release to apex. A hand still bending its path
+        # later means the release estimate caught the gather or a pump fake.
+        late = [c for c in contacts if apex is not None and release < c.frame < apex - .1 * fps
+                and not free_flight(balls, c.frame, fps, aspect)]
+        if late:
+            shot.evidence.append(f"Release moved from frame {release} to the last hand contact before the arc apex, "
+                                 f"frame {late[-1].frame}")
+            release = late[-1].frame
+            shot.release_s = round(release / fps, 2)
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
+        if came_down_away(balls, apex, rim, fps, reach):
+            block = _overlapping(c8, release, apex or release)
+            if block is None or block.peak < BLOCK_CONFIDENCE:
+                # A pass. The ball still reached the basket later (some other
+                # attempt), which a tip right after it is measured from.
+                previous_reach = reach if reach is not None else previous_reach
+                continue
+            shot.evidence += ["Blocked: the ball came down away from the rim, with the detector's shot-block class "
+                              "firing between release and apex", *_class_note(block, "shot-block")]
+        if reach is not None and reach == kept_reach:
+            # One attempt reaching the basket once: the previous arc (e.g. a
+            # dunk's gather and its slam read as two arcs).
+            continue
+        kept_reach = reach
         if reach is not None and reach - release <= RIM_FLIGHT_S * fps:
             flight = f"the ball reached the basket {max(0, reach - release) / fps:.2f} s after release"
             if (previous_reach is not None and previous_reach < reach
@@ -338,8 +409,6 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         anchors.append(Anchor(release, None, shot))
 
     # Hidden-release jump shots: jump-shot class plus a supported arc, no known shot nearby.
-    by_frame = {b.frame: b for b in balls}
-    apexes = arc_apexes(balls, [], fps, game_mode=True)
     for run in c6:
         if run.count < 3 or run.peak < .7 or any(run.start - window <= a.release <= run.end + window for a in anchors):
             continue
@@ -349,6 +418,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         if apex is None or not prior or not _flight_supported(prior[-1], by_frame[apex]):
             continue
         contact = prior[-1]
+        reach = next((e.frame for e in events if contact.frame <= e.frame <= contact.frame + FLIGHT_S * fps), None)
+        if came_down_away(balls, apex, rim, fps, reach):
+            continue
         handler = _handler_before(frames, contact.frame, fps)
         shooter = contact.track_id if handler in (None, contact.track_id) else None
         shot_type, notes = _jump_type(contact.frame, c6, c7, fps)
@@ -443,7 +515,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         others = [c for c in contacts if contact.frame < c.frame <= contact.frame + .3 * fps]
         shoulders = sum(contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")) / 2
         # The ball leaves the hands upward, above the head, with no catch right after.
-        if not after or min(b.y for b in after) > shoulders - .5 * contact.torso or others:
+        if (not after or min(b.y for b in after) > shoulders - .5 * contact.torso or others
+                or came_down_away(balls, min(after, key=lambda b: b.y).frame, rim, fps)):
             continue
         handler = _handler_before(frames, contact.frame, fps)
         shooter = contact.track_id if handler in (None, contact.track_id) else None
