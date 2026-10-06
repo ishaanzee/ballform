@@ -57,6 +57,10 @@ HOLD_GAP_S = .2
 # (the arc caught the gather); labeled tips came at least 0.8 s after the
 # previous shot reached the basket.
 SAME_ATTEMPT_S = .5
+# A shot in flight stops claiming basket events once one player has this many
+# sampled contacts with the ball after it (caught, not brushed: the 2fcb fan
+# pass-overs touched it on two).
+CAUGHT_CONTACTS = 4
 # Labeled tips touched the ball 0.80-0.90 s after the previous attempt reached
 # the basket, so a rim attempt's make seen later than this may be a follow-up's.
 FOLLOW_UP_S = .8
@@ -457,10 +461,14 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
         recent = [c for c in contacts if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
                   and (current is None or c.frame > current.release + .15 * fps)]
-        if current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps:
+        caught = bool(recent) and sum(c.track_id == recent[-1].track_id for c in recent) >= CAUGHT_CONTACTS
+        if (current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps
+                and not caught):
             # A shot in flight claims its arrival at the basket. A hand touching it
             # on the way is usually a contest or, in 2D, a background hand the ball
-            # passes over (2fcb frame 320, a fan behind the baseline).
+            # passes over (2fcb frame 320, a fan behind the baseline). A ball the
+            # same player then held is no longer that shot's (cd04: a false arc
+            # claimed Dosunmu's layup after his offensive rebound).
             current.reached = event.frame
             if "ball_in_basket" in event.sources and not any("ball-in-basket" in e for e in current.shot.evidence):
                 current.shot.evidence.append(

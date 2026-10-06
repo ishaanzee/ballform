@@ -354,3 +354,15 @@ def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
     assert shot.outcome == "unknown"
     assert any("so the make is not credited" in item for item in shot.evidence)
+
+
+def test_ball_caught_after_a_shot_ends_its_flight():
+    # cd04: a false arc claimed the layup of the player who rebounded it.
+    path = {f: lerp((.3, .3), (.55, .25), f / 10) for f in range(11)}
+    path.update({f: (.55, .25) for f in range(11, 17)})
+    path.update({f: lerp((.55, .25), BASKET, (f - 16) / 4) for f in range(17, 30)})
+    holders = {f: (2, (.55, .25)) for f in range(10, 17)}
+    balls, frames = scene(path, holders, [(20, *basket_box(.8)), (21, *basket_box(.8))], {f: 2 for f in range(10, 17)})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert [shot.attempt and shot.attempt["path"] for shot in shots] == [None, "rim_attempt"]
+    assert shots[1].release_s == round(16 / FPS, 2)
