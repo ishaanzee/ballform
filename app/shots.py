@@ -315,6 +315,18 @@ def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps:
     return False
 
 
+def _held_since(contacts: list[Contact], contact: Contact, frame: int, fps: float) -> bool:
+    """The contact's player has had the ball since ``frame``, with gaps of at most HOLD_GAP_S."""
+    held = contact.frame
+    for earlier in reversed(contacts):
+        if earlier.frame >= held or earlier.track_id != contact.track_id:
+            continue
+        if held - earlier.frame > HOLD_GAP_S * fps or earlier.frame < frame:
+            break
+        held = earlier.frame
+    return held <= frame
+
+
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
     """The arc path's rule: apex 0.75 torso above the shoulders and 0.75 torso of rise."""
     shoulders = [contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")]
@@ -534,6 +546,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # of 32 missed rim attempts and floaters; the pass-overs it was added for
         # are claimed by the shot in flight or dropped as empty-net detections.
         contact = recent[-1]
+        if current is not None and current.shot.attempt is not None and _held_since(contacts, contact, current.release, fps):
+            # The previous rim attempt's shooter never let go (1b06: the blocked
+            # dunker held the ball on the rim, then came down with it).
+            continue
         dx, dy = _torso_distance(contact, event.location, aspect)
         at_rim = math.hypot(dx, dy) <= AT_RIM
         path = [b for b in balls if contact.frame <= b.frame <= event.frame]
