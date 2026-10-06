@@ -221,7 +221,15 @@ def _settings(job_dir: Path) -> dict:
             "handedness": result.get("handedness", "right")}
 
 
-def rerun(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
+def _court_landmarks(job_id: str, settings: dict, court_landmarks: Path | None) -> dict | None:
+    """The job's own landmarks, else an accepted automatic calibration from ``court_landmarks``
+    (written by scripts/auto_court_landmarks.py), else None."""
+    if settings.get("court_landmarks") or court_landmarks is None or not court_landmarks.exists():
+        return settings.get("court_landmarks")
+    return (json.loads(court_landmarks.read_text()).get(job_id) or {}).get("court_landmarks")
+
+
+def rerun(job_id: str, jobs_dir: Path, runs_dir: Path, court_landmarks: Path | None = None) -> dict:
     from app.analyzer import analyze_video
 
     # Keep the frame loop's measurements so --replay can rescore without inference.
@@ -239,20 +247,20 @@ def rerun(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
                          handedness=settings.get("handedness", "right"), camera=settings.get("camera", "courtside"),
                          court=settings.get("court"), rim_frame=settings.get("rim_frame"),
                          rim_time_s=settings.get("rim_time_s"), pose_model=settings.get("pose_model", "yolo26s-pose"),
-                         court_landmarks=settings.get("court_landmarks"))
+                         court_landmarks=_court_landmarks(job_id, settings, court_landmarks))
 
 
-def replay(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
+def replay(job_id: str, jobs_dir: Path, runs_dir: Path, court_landmarks: Path | None = None) -> dict:
     """Rescore a rerun's saved measurements with the current scoring code (no inference).
 
-    Court landmarks in the job's settings.json are refit each time, so a calibration
-    added after the rerun is used too.
+    Court landmarks in the job's settings.json (or, failing that, in ``court_landmarks``)
+    are refit each time, so a calibration added after the rerun is used too.
     """
     from app.analyzer import SCORING_INPUTS, fit_calibration, load_scoring_inputs, score_clip
 
     job_dir = jobs_dir / job_id
     inputs = load_scoring_inputs(runs_dir / job_id / SCORING_INPUTS)
-    landmarks = _settings(job_dir).get("court_landmarks")
+    landmarks = _court_landmarks(job_id, _settings(job_dir), court_landmarks)
     if landmarks and inputs["game_mode"]:
         inputs["court_landmarks"], inputs["calibration"] = fit_calibration(landmarks, inputs["width"], inputs["height"])
     source = next(iter(sorted(job_dir.glob("input.*"))), None)
@@ -260,20 +268,21 @@ def replay(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
     return {"shots": [shot.to_dict() for shot in scored["shots"]]}
 
 
-def _load(job_id: str, jobs_dir: Path, how: str, runs_dir: Path) -> dict:
+def _load(job_id: str, jobs_dir: Path, how: str, runs_dir: Path, court_landmarks: Path | None = None) -> dict:
     if how == "rerun":
         print(f"  analyzing {job_id} ...", file=sys.stderr)
-        return rerun(job_id, jobs_dir, runs_dir)
+        return rerun(job_id, jobs_dir, runs_dir, court_landmarks)
     if how == "replay":
-        return replay(job_id, jobs_dir, runs_dir)
+        return replay(job_id, jobs_dir, runs_dir, court_landmarks)
     return json.loads((jobs_dir / job_id / "result.json").read_text())
 
 
 def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: Path | None = None,
-             how: str = "saved", workers: int = 1) -> list[ClipResult]:
+             how: str = "saved", workers: int = 1, court_landmarks: Path | None = None) -> list[ClipResult]:
     """Match each labeled job's shots. ``how`` is "saved" (the job's result.json),
     "rerun" (full re-analysis into ``runs_dir``) or "replay" (rescore ``runs_dir``'s
-    saved measurements)."""
+    saved measurements). Rerun and replay calibrate the court from ``court_landmarks``
+    for jobs whose settings have no landmarks."""
     by_job: dict[str, list[Label]] = {}
     for label in labels:
         by_job.setdefault(label.job_id, []).append(label)
@@ -281,12 +290,13 @@ def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: 
         if pool is None:
             pending = {job_id: None for job_id in by_job}
         else:
-            pending = {job_id: pool.submit(_load, job_id, jobs_dir, how, runs_dir) for job_id in by_job}
+            pending = {job_id: pool.submit(_load, job_id, jobs_dir, how, runs_dir, court_landmarks)
+                       for job_id in by_job}
         clips = []
         for job_id, job_labels in by_job.items():
             try:
                 future = pending[job_id]
-                result = future.result() if future else _load(job_id, jobs_dir, how, runs_dir)
+                result = future.result() if future else _load(job_id, jobs_dir, how, runs_dir, court_landmarks)
             except (OSError, ValueError, RuntimeError, EOFError, KeyError) as exc:
                 clips.append(ClipResult(job_id, error=f"{type(exc).__name__}: {exc}"))
                 continue
@@ -325,6 +335,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="where --rerun writes and --replay reads (default eval/runs)")
     parser.add_argument("--workers", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 2)),
                         help="parallel processes for --replay")
+    parser.add_argument("--court-landmarks", type=Path, default=EVAL_DIR / "court_landmarks.json",
+                        help="automatic court calibrations for jobs without landmarks in settings.json "
+                             "(scripts/auto_court_landmarks.py); used by --rerun and --replay")
     parser.add_argument("--tolerance", type=float, default=.75, help="max release-time gap to match a shot, seconds")
     parser.add_argument("--out", type=Path, default=EVAL_DIR / "report.json")
     args = parser.parse_args(argv)
@@ -337,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.rerun and args.replay:
         parser.error("choose --rerun or --replay")
     how = "rerun" if args.rerun else "replay" if args.replay else "saved"
-    clips = evaluate(labels, args.jobs, args.tolerance, args.runs, how, args.workers if args.replay else 1)
+    clips = evaluate(labels, args.jobs, args.tolerance, args.runs, how, args.workers if args.replay else 1,
+                     args.court_landmarks)
     summary, rows = summarize(clips), shot_rows(clips)
     _print(summary, rows)
     args.out.parent.mkdir(parents=True, exist_ok=True)

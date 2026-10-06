@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.evaluation import evaluate, match_shots, read_labels, summarize
+from app.evaluation import _court_landmarks, evaluate, match_shots, read_labels, summarize
 
 HEADER = "job_id,release_s,outcome,shot_type,distance_ft,zone,shooter,source,notes\n"
 
@@ -68,6 +68,18 @@ def test_shot_type_is_also_scored_as_shot_versus_rim(tmp_path):
     assert summary["accuracy"] == "0/4 (0%)"
     assert summary["shot_vs_rim"] == "3/4 (75%)"
     assert summary["shot_vs_rim_labeled_vs_predicted"] == {"shot": {"shot": 1}, "rim": {"rim": 2, "shot": 1}}
+
+
+def test_automatic_court_landmarks_fill_in_only_where_settings_have_none(tmp_path):
+    auto = {"standard": "nba", "frame": 30, "points": [], "source": "auto"}
+    path = tmp_path / "court_landmarks.json"
+    path.write_text(json.dumps({"a": {"court_landmarks": auto}, "b": {"rejected": "no frame agreed"}}))
+    own = {"standard": "nba", "time_s": 1.0, "points": []}
+    assert _court_landmarks("a", {}, path) == auto
+    assert _court_landmarks("a", {"court_landmarks": own}, path) == own
+    assert _court_landmarks("b", {}, path) is None
+    assert _court_landmarks("c", {}, path) is None
+    assert _court_landmarks("a", {}, tmp_path / "missing.json") is None
 
 
 def test_a_missing_job_is_reported_not_fatal(tmp_path):
