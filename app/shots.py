@@ -468,9 +468,11 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             recent = [c for c in recent if c.frame > current.reached]
         if not recent:
             continue
+        # No free-flight test here: a ball carried up to the rim, or tipped, moves
+        # as smoothly as one flying past a hand. On the dev labels it rejected 23
+        # of 32 missed rim attempts and floaters; the pass-overs it was added for
+        # are claimed by the shot in flight or dropped as empty-net detections.
         contact = recent[-1]
-        if free_flight(balls, contact.frame, fps, aspect):
-            continue
         dx, dy = _torso_distance(contact, event.location, aspect)
         at_rim = math.hypot(dx, dy) <= AT_RIM
         path = [b for b in balls if contact.frame <= b.frame <= event.frame]
