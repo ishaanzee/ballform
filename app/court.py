@@ -390,6 +390,17 @@ def vertical_plane_distance(camera: Camera, floor_point, image_a, image_b) -> fl
     return float(np.linalg.norm(hits[0] - hits[1]))
 
 
+def near_half(point, court: Template) -> tuple[float, float]:
+    """The point in the coordinates of the basket on its own half.
+
+    The template is symmetric under a half turn about centre court, so a calibration
+    (an automatic one especially) may put the shooting end at y = length; shots are
+    measured to the basket of the half the shooter stands in.
+    """
+    x, y = point
+    return (float(x), float(y)) if y <= court.dims["length"] / 2 else (-float(x), court.dims["length"] - float(y))
+
+
 def zone(point, court: Template) -> str | None:
     """Shot zone for a floor point on the calibrated half; None off the court or past half court."""
     x, y = point
