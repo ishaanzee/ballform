@@ -469,7 +469,7 @@ def test_hand_on_the_ball_falling_through_the_net_is_not_a_new_attempt():
     assert len(find_attempts([made], balls, frames, FPS, None, 1.)) == 2
 
 
-def test_shooter_still_holding_the_ball_on_the_rim_is_not_a_new_attempt(monkeypatch):
+def test_shooter_still_holding_the_ball_on_the_rim_is_not_a_new_attempt():
     # 1b06: the blocked dunker kept his hands on the ball as it sat on the rim
     # and came down with it; a later basket detection read as a putback.
     path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
@@ -479,9 +479,9 @@ def test_shooter_still_holding_the_ball_on_the_rim_is_not_a_new_attempt(monkeypa
     balls, frames = scene(path, holders, events, {f: 1 for f in range(45)})
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
     assert shot.attempt["basket_frame"] < 24
-    import app.shots
-    monkeypatch.setattr(app.shots, "_held_since", lambda *args: False)
-    assert len(find_attempts([], balls, frames, FPS, RIM, 1.)) == 2
+    from app.shots import _held_since, hand_contacts
+    contacts = hand_contacts(frames, balls, 1.)
+    assert _held_since(contacts, contacts[-1], shot.attempt["contact_frame"], FPS)
 
 
 def test_hand_at_the_rim_as_the_shot_arrives_is_not_a_tip():
