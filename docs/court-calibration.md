@@ -8,8 +8,8 @@ The floor mapping is a homography, so it is valid only for points on the floor. 
 
 What it adds next to the torso-length metrics, which are unchanged:
 
-- **Shot distance** from the shooter's floor spot to the floor point under the rim, which comes from the court template. Shooters are usually airborne at release, and airborne feet map to a point beyond the player, so the spot comes from the ankles on the last grounded frames before take-off. The report says which frames were used.
-- **Shot zone** (paint, midrange, corner three, above-the-break three), the shooter's court position, and how far the spot is behind or inside the three-point line.
+- **Shot distance** from the shooter's floor spot to the floor point under the rim, which comes from the court template. Shooters are usually airborne at release, and airborne feet map to a point beyond the player, so the spot comes from the ankles on the last grounded frames before take-off. The report says which frames were used. Even planted, an ankle is about 4 in off the floor, which maps over a foot beyond it from a broadcast camera 30 ft up and 120 ft away, so the spot is moved back under the ankles using the camera recovered from the mapping (`ANKLE_HEIGHT_FT`).
+- **Shot zone** (paint, midrange, corner three, above-the-break three), the shooter's court position, and how far the spot is behind or inside the three-point line. All are taken at the basket of the half the shooter stands in: the court looks the same turned half a turn, so a calibration may put the shooting end at the far baseline.
 - **Floor separation** from the shooter's take-off spot to the defender's feet.
 - **Contest clearance in feet**, which is approximate. It assumes the defender's hand and the ball are at the shooter's depth, and uses the camera recovered from the floor mapping.
 
@@ -31,7 +31,7 @@ Measured with `uv run python scripts/measure_floor_trajectories.py`, which rebui
 
 One camera cannot tell a lifted foot from a quick step away from it and back, so some of those steps are skipped as airborne and bridged, which underestimates them. On these clips the pose box bottom sat a median 13% of the player's height below the ankles; trajectories correct for that, while shot metrics still use the box bottom as before when both ankles are hidden. The trajectories are saved in `court.json` under `trajectories`. Shot metrics do not use them, so shot distance, zone and floor separation are unchanged.
 
-A per-shot speed (the shooter's speed and the defender's closing speed over the 0.5 s before release) was tried and left out of reports. That half second holds the gather and the jump. Across reasonable smoother settings, one shooter's speed moved between 3.3 and 5.3 ft/s and one defender's closing speed between −0.1 and −3.4 ft/s, and the defender's value was missing on two of the three shots. There are still no hand-labelled ground-truth positions, distances or speeds.
+A per-shot speed (the shooter's speed and the defender's closing speed over the 0.5 s before release) was tried and left out of reports. That half second holds the gather and the jump. Across reasonable smoother settings, one shooter's speed moved between 3.3 and 5.3 ft/s and one defender's closing speed between −0.1 and −3.4 ft/s, and the defender's value was missing on two of the three shots. There are still no hand-labelled ground-truth positions or speeds; shot distances are checked against play-by-play below.
 
 ### auto-detect
 
@@ -45,4 +45,19 @@ What was checked, against the seven hand calibrations there are (three NBA broad
 - **No court:** it declined blank and noise frames and three broadcast graphics frames. Two of those graphics scored as well as some real courts but showed only two straight lines, and a proposal needs at least four template lines found.
 
 Limits: all of this is NBA broadcast footage from three arenas. Courtside, elevated and pickup cameras have not been tried; FIBA floors only in a synthetic test, NCAA and high-school floors not at all. The accept threshold rests on few frames (on real frames, correct fits scored 0.48–0.72 and wrong ones up to 0.43). The fit needs two straight lines one way across the floor and at least one the other way, and players are not masked out. Landmarks hidden behind a player or a score bug are proposed where the fitted court puts them. To repeat the comparison on your own calibrated jobs, run `uv run python scripts/court_detect_accuracy.py`.
+
+If the best fit shows more of the far end of the court than the near end, it is turned half a turn before the landmarks are read off, since every landmark is on the near half; before, such a fit was declined for having fewer than 4 landmarks in view.
+
+### shot distance against play-by-play
+
+The labeled clips (`eval/labels.csv`, 101 NBA broadcast clips, 1080p and 720p) have NBA or ESPN play-by-play distances, rounded to the foot, and zones. None was calibrated by hand, so they were calibrated automatically: `scripts/auto_court_landmarks.py` runs auto-detect every 0.5 s of each clip and `pick_calibration` (`app/court_detect.py`) keeps one frame's proposal. A broadcast camera pans and zooms from one spot, so correct fits of different frames recover the same camera position (within about 10 ft; the cameras sat 70–130 ft from centre court and 25–40 ft up), while wrong fits scatter. A clip is accepted when at least 3 proposed frames, and a third of them, agree within 12 ft; the best-supported of those is the marked frame, never the clip's last sampled frame (seeking there can fail and lose the whole mapping). The results are in `eval/court_landmarks.json`, which `ballform-eval --rerun` and `--replay` use for jobs whose `settings.json` has no landmarks.
+
+- **Coverage:** 93 of 101 clips were calibrated. Six of the eight rejected are from one Houston broadcast (red lines on light wood, often zoomed in tight), where auto-detect proposed on at most 4 of 14 frames and they disagreed; one is a Portland clip, one a pre-tip arena shot. 42 of the 50 detected shots with a play-by-play distance got one; the rest had no identified shooter (7) or no reliable mapping at release (1, where camera tracking from the marked frame was lost).
+- **Distance:** mean absolute error 1.68 ft, median 1.15 ft, bias −0.09 ft (positive is too long), 36 of 42 within 3 ft. Threes: 28 shots, median 1.05 ft, bias −0.27 ft. Play-by-play rounds to the foot, so about 0.25 ft of the error is rounding.
+- **Zone:** 55 of 65 shots with a labeled zone right, two or three right on 61 of 65. Most misses are within about 2 ft of a zone boundary (corner against above the break, a long two against a three, one label whose own play-by-play spot is above the break though labeled corner); the rest are shots measured on the wrong feet (below).
+- **Ankle height:** without moving the spot back under the ankles, the same shots measured 2.02 ft mean and 1.65 ft median error, and two or three was right on 55 of 64. Heights from 0.33 to 0.6 ft gave about the same result; 0.2 and 0.9 ft were worse.
+- **Marked frame:** marking the agreeing frame nearest each shot instead changed its distance by 0.1 ft at the median and 0.4 ft at the 90th percentile, so drift through camera motion is small next to the other errors.
+- **Remaining errors over 3 ft** (6 of 42): feet taken from a player overlapping the shooter (2 shots, one 10 ft off), a 3.3 ft miss on the same NBA Cup floor with striped paint in the lane, a shooter at the bottom edge of the frame, one midrange shot where the play-by-play spot and the video disagree although the drawn lane fits the paint, and a layup. Layups and floaters are measured from the take-off spot, which can be a step or two farther out than where play-by-play puts the shot.
+
+To redo it: `uv run python scripts/auto_court_landmarks.py` (one to two CPU minutes per clip, several clips in parallel), then `uv run --inexact ballform-eval --replay`.
 

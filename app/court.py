@@ -57,7 +57,7 @@ LANDMARK_LABELS = {
 ZONES = ("paint", "midrange", "corner_three", "above_break_three")
 # Height of the ankle keypoint above the floor in a shoe, about 4 in. On the labeled
 # broadcast clips, shot distances against play-by-play were best and about equally good
-# for 0.33-0.6 ft (median error 1.1 ft, against 1.7 ft with no correction).
+# for 0.33-0.6 ft (median error 1.15 ft, against 1.65 ft with no correction).
 ANKLE_HEIGHT_FT = 1 / 3
 # How the landmarks were placed: clicked by hand, proposed by auto-detect and accepted
 # as proposed, or proposed and then moved, added to or removed by hand.
