@@ -55,6 +55,10 @@ LANDMARK_LABELS = {
     "center_right": "Centre circle / half-court line, right",
 }
 ZONES = ("paint", "midrange", "corner_three", "above_break_three")
+# Height of the ankle keypoint above the floor in a shoe, about 4 in. On the labeled
+# broadcast clips, shot distances against play-by-play were best and about equally good
+# for 0.33-0.6 ft (median error 1.1 ft, against 1.7 ft with no correction).
+ANKLE_HEIGHT_FT = 1 / 3
 # How the landmarks were placed: clicked by hand, proposed by auto-detect and accepted
 # as proposed, or proposed and then moved, added to or removed by hand.
 LANDMARK_SOURCES = ("manual", "auto", "auto, adjusted")
@@ -483,6 +487,20 @@ def floor_point(pose, width: int, height: int) -> tuple[tuple[float, float], str
     if box is not None and all(math.isfinite(v) for v in box):
         return ((box[0] + box[2]) / 2 * width, box[3] * height), "pose box"
     return None
+
+
+def under_raised_point(court_point, camera: Camera, height_ft: float) -> tuple[float, float]:
+    """Floor point under a point height_ft above the floor, from where its pixel maps through the floor homography.
+
+    The homography puts a raised point where its camera ray meets the floor, beyond the
+    point as seen from the camera, by height_ft / camera height of the camera's distance.
+    For an ankle (ANKLE_HEIGHT_FT) seen by a broadcast camera 30 ft up and 120 ft away,
+    that is over 1 ft.
+    """
+    centre = camera.center
+    scale = (centre[2] - height_ft) / centre[2]
+    return (float(centre[0] + (court_point[0] - centre[0]) * scale),
+            float(centre[1] + (court_point[1] - centre[1]) * scale))
 
 
 def lowest_foot_y(pose, height: int) -> float | None:

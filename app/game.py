@@ -561,7 +561,7 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
     An airborne foot maps through the floor homography to a point beyond the
     player, so for a jump the last grounded frames before take-off are used.
     """
-    from app.court import floor_point, lowest_foot_y, takeoff
+    from app.court import ANKLE_HEIGHT_FT, floor_point, lowest_foot_y, takeoff, under_raised_point
 
     width, height = court_map.width, court_map.height
     samples = sorted(((frame, pose) for frame in player_frames
@@ -588,6 +588,10 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
         frame, pose = samples[index]
         found = floor_point(pose, width, height)
         court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
+        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
+        if camera is not None:
+            court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
         if court_point is not None:
             points.append(court_point)
             methods.add(found[1])
