@@ -531,6 +531,12 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             # contact's height against the basket did not separate them.
             shot_type = "layup or dunk"
             evidence.append("Layup or dunk: last contact at the basket, reaching it within 0.35 s")
+        elif not at_rim and event.frame - contact.frame > RIM_FLIGHT_S * fps:
+            # Let go away from the rim with as long a flight as an arc shot's: a
+            # floater or jump shot whose arc was not found (f267, 5adf).
+            shot_type, notes = _jump_type(contact.frame, c6, c7, fps)
+            evidence += [f"{shot_type.capitalize()}: let go away from the rim, reaching it "
+                         f"{(event.frame - contact.frame) / fps:.2f} s later", *notes]
         else:
             shot_type = "layup"
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:

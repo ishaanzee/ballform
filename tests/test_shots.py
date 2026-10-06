@@ -379,3 +379,14 @@ def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
     balls, frames = scene(path, {26: (2, wrist)}, events, n=40)
     shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
     assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
+
+
+def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
+    # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
+    path = {f: (.42, .35) for f in range(11)}
+    path.update({f: lerp((.42, .35), BASKET, (f - 10) / 15) for f in range(11, 26)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 25) / 10) for f in range(26, 36)})
+    holders = {f: (1, (.42, .35)) for f in range(11)}
+    balls, frames = scene(path, holders, [(25, *basket_box(.8)), (26, *basket_box(.8))], {f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == "jump shot"
