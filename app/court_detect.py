@@ -798,17 +798,18 @@ def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
 
 
 def pick_calibration(proposals: list[dict], width: int, height: int, standard: str = "nba",
-                     agree_ft: float = 12., min_agree: int = 3, min_share: float = .5) -> dict:
-    """Choose one frame's proposal from proposals on several frames of one camera shot.
+                     agree_ft: float = 12., min_agree: int = 3, min_share: float = .35) -> dict:
+    """Choose one frame's proposal from proposals on several frames of one clip.
 
     proposals are `Proposal.to_dict()` results with their "frame". A broadcast camera
     pans and zooms from one spot, so every correct fit recovers about the same camera
     position, while wrong fits land anywhere. The accepted proposals whose camera lies
     within agree_ft of the most others agree; at least min_agree of them, and min_share of
-    the accepted ones, must, or the clip is rejected. Of those, the best-supported is
-    returned as settings `court_landmarks`, with a "check" summary; else {"rejected": reason}.
-    On the labeled broadcast clips, correct fits of one clip put the camera within about
-    10 ft of each other (it sat 100-130 ft from centre court and 25-40 ft up).
+    the accepted ones, must, or the clip is rejected (min_share is low enough for a clip
+    cut between two cameras). Of those, the best-supported is returned as settings
+    `court_landmarks`, with a "check" summary; else {"rejected": reason}. On the labeled
+    broadcast clips, correct fits of one clip put the camera within about 10 ft of each
+    other (it sat 70-130 ft from centre court and 25-40 ft up).
     """
     from app.court import camera_from_homography
 
