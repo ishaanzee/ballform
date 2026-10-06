@@ -368,6 +368,20 @@ def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
     assert any("so the make is not credited" in item for item in shot.evidence)
 
 
+def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detection():
+    # 5adf: the ball-in-basket class fired on the net while the ball was still in flight.
+    path = {f: (.3, .35) for f in range(11)}
+    path.update({f: lerp((.3, .35), (.5, -.3), (f - 10) / 15) for f in range(11, 26)})
+    path.update({f: lerp((.5, -.3), (.5, .15), (f - 25) / 24) for f in range(26, 50)})
+    path.update({f: lerp((.5, .15), (.5, .35), (f - 49) / 10) for f in range(50, 60)})
+    holders = {f: (1, (.3, .35)) for f in range(11)}
+    events = [(f, *basket_box(.9)) for f in range(19, 50, 5)]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["basket_frame"] == 19
+    assert shot.outcome == "made"
+
+
 def test_ball_caught_after_a_shot_ends_its_flight():
     # cd04: a false arc claimed the layup of the player who rebounded it.
     path = {f: lerp((.3, .3), (.55, .25), f / 10) for f in range(11)}

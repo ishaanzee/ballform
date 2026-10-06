@@ -191,6 +191,12 @@ def _near_box(ball: Detection, box: tuple[float, float, float, float]) -> bool:
     return x1 - w <= ball.x <= x2 + w and y1 - h <= ball.y <= y2 + h
 
 
+def _in_rim_area(ball: Detection, box: tuple[float, float, float, float]) -> bool:
+    """The ball is at the basket: over or just beside the rim box (x, y, w, h), up to a net's length below."""
+    return (box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
+            and box[1] - 1.5 * box[3] <= ball.y <= box[1] + 1.2 * box[3])
+
+
 def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps: float,
                   contact_frames: list[int] = ()) -> list[BasketEvent]:
     """Moments the ball reaches the basket: ball-in-basket detections and rim-area entries.
@@ -219,8 +225,7 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
             box = _rim_at(rim, ball.frame)
             if box is None or ball.confidence < .45:
                 continue
-            inside = (box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
-                      and box[1] - 1.5 * box[3] <= ball.y <= box[1] + 1.2 * box[3])
+            inside = _in_rim_area(ball, box)
             if inside and not was_inside:
                 events.append(BasketEvent(ball.frame, ["rim_area"], 0., (box[0] + box[2] / 2, box[1] + .45 * box[3])))
             was_inside = inside
@@ -556,10 +561,14 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      _outcome(balls, contact.frame, event, top.frame, rim, net_motion, fps), shot_type, evidence,
                      {"path": "rim_attempt", "contact_frame": contact.frame, "basket_frame": event.frame,
                       "basket_sources": event.sources, "shooter_track_id": shooter})
-        if shot.outcome in {"made", "likely made"} and shot.outcome_frame - event.frame > FOLLOW_UP_S * fps:
+        # The ball-in-basket class can fire on the net while the ball is still in
+        # flight (5adf): time the make from the ball first seen at the rim.
+        arrived = next((b.frame for b in balls if b.frame >= event.frame and b.confidence >= .45
+                        and (box := _rim_at(rim, b.frame)) is not None and _in_rim_area(b, box)), event.frame)
+        if shot.outcome in {"made", "likely made"} and shot.outcome_frame - arrived > FOLLOW_UP_S * fps:
             # As late as a tip after it: the make may be an unseen follow-up touch's (f267, a tip left on
             # the rim and tipped in again).
-            shot.evidence.append(f"The ball went through {(shot.outcome_frame - event.frame) / fps:.2f} s after "
+            shot.evidence.append(f"The ball went through {(shot.outcome_frame - arrived) / fps:.2f} s after "
                                  "reaching the basket, as late as a follow-up tip, so the make is not credited")
             shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
         anchors.append(Anchor(contact.frame, event.frame, shot))
