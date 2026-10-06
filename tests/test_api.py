@@ -165,6 +165,51 @@ def test_run_saves_the_analysis_settings_for_reruns(client, monkeypatch, tmp_pat
     assert saved["rim"] == [.1, .1, .2, .2] and saved["court_landmarks"] == LANDMARKS
 
 
+@pytest.mark.parametrize("data, auto", [
+    ({"camera": "moving"}, True),                                             # default on for broadcast
+    ({"camera": "courtside"}, False),                                         # off for fixed cameras...
+    ({"camera": "elevated", "court_auto": "1"}, True),                        # ...unless asked for
+    ({"camera": "moving", "court_auto": "0"}, False),
+    ({"camera": "moving", "court_landmarks": json.dumps(LANDMARKS)}, False),  # marked landmarks win
+])
+def test_upload_chooses_whole_clip_court_calibration(client, monkeypatch, data, auto):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")},
+                           data={"mode": "one_on_one", "court_standard": "fiba", **data})
+    assert response.status_code == 202
+    assert calls[0][1]["auto_court"] is auto and calls[0][1]["court_standard"] == "fiba"
+
+
+@pytest.mark.parametrize("data, message", [
+    ({"mode": "form", "court_auto": "1"}, "game analysis"),
+    ({"mode": "one_on_one", "court_auto": "yes"}, "court_auto"),
+    ({"mode": "one_on_one", "court_standard": "wnba"}, "standard"),
+])
+def test_invalid_whole_clip_options_are_rejected(client, data, message):
+    response = client.post("/api/jobs", files={"video": ("game.mp4", b"video")}, data=data)
+    assert response.status_code == 422 and message in response.json()["detail"]
+    assert not list(main.JOBS_DIR.iterdir())
+
+
+def test_run_saves_landmarks_found_from_the_whole_clip(client, monkeypatch, tmp_path):
+    found = {**LANDMARKS, "time_s": None, "frame": 30, "source": "auto, whole clip"}
+    seen = {}
+
+    def fake_analyze(*args, **kwargs):
+        seen.update(kwargs)
+        return {"court_auto_calibration": {"status": "accepted", "court_landmarks": found}}
+
+    monkeypatch.setattr(main, "analyze_video", fake_analyze)
+    (tmp_path / "job").mkdir()
+    main._run("job", tmp_path / "job" / "input.mp4", None, "one_on_one", "right", "moving", auto_court=True)
+    assert seen["auto_court"] is True and seen["court_landmarks"] is None
+    saved = json.loads((tmp_path / "job" / "settings.json").read_text())
+    # Stored as the job's landmarks, as if sent from the page, so a rerun uses the same calibration.
+    assert saved["court_auto"] is True and saved["court_landmarks"] == found
+    main.STATE.pop("job", None)
+
+
 def test_court_detect_proposes_landmarks_for_a_frame(client):
     from app.court import parse_landmarks
     from tests_support_court import render_court, synthetic_camera

@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from app.court import apply, fit, near_half, parse_landmarks, template, zone
-from app.court_detect import (Line, _cameras, _near_end_in_view, _plausible, _template_lines, _two_one,
-                              pick_calibration, propose)
+from app.court_detect import (CLIP_MAX_FRAMES, ClipCalibration, Line, _cameras, _near_end_in_view, _plausible,
+                              _template_lines, _two_one, clip_frames, pick_calibration, propose)
 
 from tests_support_court import render_court, synthetic_camera
 
@@ -123,6 +123,8 @@ def test_the_calibration_is_picked_from_frames_that_agree_on_the_camera():
                               proposal(90, diagram_view(position=(90., 80., 30.)))], W, H)
     assert "court_landmarks" not in split and "agree" in split["rejected"]
     assert "none" in pick_calibration([proposal(0, pans[0], ok=False)], W, H)["rejected"]
+    few = pick_calibration([proposal(0, pans[0]), proposal(30, pans[1]), proposal(60, wrong, ok=False)], W, H)
+    assert few["rejected"] == "auto-detect proposed a court on only 2 of the 3 frames tried"
 
 
 def test_shots_are_measured_on_the_shooters_half():
@@ -143,3 +145,53 @@ def test_landmark_source_is_validated_and_reported():
     calibration = fit(parse_landmarks(base)["points"], W, H)
     calibration.source = "auto"
     assert calibration.summary()["landmark_source"] == "auto"
+    assert parse_landmarks({**base, "source": "auto, whole clip"})["source"] == "auto, whole clip"
+
+
+def test_clip_frames_are_on_the_analysis_stride_and_capped():
+    # 60 fps analyzed every 2nd frame: every half second is every 30th frame.
+    assert clip_frames(300, 60., stride=2) == list(range(0, 300, 30))
+    assert all(f % 4 == 0 for f in clip_frames(1000, 50., stride=4))
+    long = clip_frames(60 * 120, 60., stride=2)  # two minutes
+    assert len(long) == CLIP_MAX_FRAMES and long[0] == 0 and long[-1] >= 60 * 119
+    assert clip_frames(10, 30.) == [0]
+
+
+def write_clip(path, frames):
+    import cv2
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 30, frames[0].shape[1::-1])
+    for frame in frames:
+        writer.write(frame)
+    writer.release()
+    return path
+
+
+def test_the_whole_clip_calibration_runs_beside_the_frame_loop(tmp_path):
+    pans = [diagram_view(look_at=(x, 20., 0.), focal=f) for x, f in ((-10., 2600.), (0., 3000.), (8., 3400.))]
+    # Frame 1 is not sampled, so its blank picture does not count.
+    video = write_clip(tmp_path / "clip.avi", [render_court(pans[0], seed=0), np.zeros((H, W, 3), np.uint8),
+                                               render_court(pans[1], seed=1), render_court(pans[2], seed=2)])
+    clip = ClipCalibration(video, total=4, fps=30., width=W, height=H, workers=2, frames=[0, 2, 3])
+    try:
+        picked = clip.finish(wait_s=240)
+    finally:
+        clip.close()
+    assert picked["check"]["frames_sampled"] == 3 and picked["check"]["frames_unfinished"] == 0
+    assert picked["check"]["frames_agreeing"] == 3
+    landmarks = picked["court_landmarks"]
+    assert landmarks["source"] == "auto, whole clip" and landmarks["frame"] in (0, 2)  # never the last frame
+    parsed = parse_landmarks(landmarks)  # what the analysis fits, and saves as the job's landmarks
+    truth = pans[(0, 2).index(landmarks["frame"])]
+    assert np.median(landmark_errors(truth, fit(parsed["points"], W, H).court_to_image)) < 5
+
+
+def test_the_whole_clip_calibration_says_why_it_found_no_court(tmp_path):
+    video = write_clip(tmp_path / "blank.avi", [np.full((360, 640, 3), 90, np.uint8)] * 3)
+    clip = ClipCalibration(video, total=3, fps=30., width=640, height=360, workers=1, frames=[0, 1, 2])
+    try:
+        picked = clip.finish(wait_s=120)
+    finally:
+        clip.close()
+    assert "court_landmarks" not in picked and "none of the 3 frames" in picked["rejected"]
+    unreadable = ClipCalibration(tmp_path / "missing.mp4", total=90, fps=30., width=640, height=360, workers=1)
+    assert unreadable.finish(wait_s=5)["rejected"] == "no frames were read"

@@ -7,7 +7,9 @@ const [root, clicksJson, width = '1920', height = '1080', proposalJson = ''] = p
 const created = [], elements = {};
 function element(name) {
   const listeners = {};
-  return {name, value: name === '#analysisMode' ? 'one_on_one' : '', textContent: '', dataset: {}, children: [],
+  // BALLFORM_COURT_AUTO=1 ticks "Calibrate court automatically".
+  return {name, value: name === '#analysisMode' ? 'one_on_one' : '', checked: name === '#courtAutoClip' && process.env.BALLFORM_COURT_AUTO === '1',
+    textContent: '', dataset: {}, children: [],
     classList: {toggle() {}, add() {}, remove() {}}, setAttribute() {}, replaceChildren() { this.children = []; },
     append(...kids) { this.children.push(...kids); }, querySelectorAll: () => created.filter(e => e.dataset.id),
     addEventListener(type, fn) { (listeners[type] ||= []).push(fn); }, fire(type, event = {}) { (listeners[type] || []).forEach(fn => fn(event)); }};
@@ -45,5 +47,6 @@ setTimeout(() => {
   const form = {fields: {}, append(k, v) { this.fields[k] = v; }};
   calibration.append(form);
   console.log(JSON.stringify({status: elements['#courtStatus'].textContent, marking: context.marking, source: calibration.source(),
-    field: form.fields.court_landmarks ? JSON.parse(form.fields.court_landmarks) : null}));
+    field: form.fields.court_landmarks ? JSON.parse(form.fields.court_landmarks) : null,
+    court_auto: form.fields.court_auto ?? null, court_standard: form.fields.court_standard ?? null}));
 }, 0);

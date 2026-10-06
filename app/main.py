@@ -62,13 +62,15 @@ def _update(job_id: str, **values) -> None:
 def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] | None,
          mode: str = "form", handedness: str = "right", camera: str = "courtside", court=None,
          rim_frame: int | None = None, rim_time_s: float | None = None,
-         pose_model: str = "yolo26s-pose", court_landmarks: dict | None = None) -> None:
+         pose_model: str = "yolo26s-pose", court_landmarks: dict | None = None,
+         auto_court: bool = False, court_standard: str = "nba") -> None:
     try:
         # Kept so scripts/evaluate.py can rerun a labeled clip with the same options.
-        (input_path.parent / "settings.json").write_text(json.dumps({
-            "rim": rim, "mode": mode, "handedness": handedness, "camera": camera, "court": court,
-            "rim_frame": rim_frame, "rim_time_s": rim_time_s, "pose_model": pose_model,
-            "court_landmarks": court_landmarks}))
+        settings_path = input_path.parent / "settings.json"
+        settings = {"rim": rim, "mode": mode, "handedness": handedness, "camera": camera, "court": court,
+                    "rim_frame": rim_frame, "rim_time_s": rim_time_s, "pose_model": pose_model,
+                    "court_landmarks": court_landmarks, "court_auto": auto_court, "court_standard": court_standard}
+        settings_path.write_text(json.dumps(settings))
         _update(job_id, status="waiting", message="Waiting for the local analyzer")
         with ANALYSIS_LOCK:
             _update(job_id, status="running", message="Starting analysis")
@@ -84,7 +86,12 @@ def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] |
                                    progress,
                                    mode=mode, handedness=handedness, camera=camera, court=court,
                                    rim_frame=rim_frame, rim_time_s=rim_time_s, pose_model=pose_model,
-                                   court_landmarks=court_landmarks)
+                                   court_landmarks=court_landmarks, auto_court=auto_court,
+                                   court_standard=court_standard)
+        found = (result.get("court_auto_calibration") or {}).get("court_landmarks")
+        if found:
+            # Stored like landmarks sent from the page (source "auto, whole clip"), so a rerun reuses them.
+            settings_path.write_text(json.dumps({**settings, "court_landmarks": found}))
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
         _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
@@ -113,7 +120,8 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                      mode: str = Form("form"), handedness: str = Form("right"),
                      camera: str = Form("courtside"), court: str | None = Form(None),
                      rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
-                     pose_model: str = Form("yolo26s-pose"), court_landmarks: str | None = Form(None)) -> dict:
+                     pose_model: str = Form("yolo26s-pose"), court_landmarks: str | None = Form(None),
+                     court_auto: str | None = Form(None), court_standard: str = Form("nba")) -> dict:
     if mode not in {"form", "one_on_one"}:
         raise HTTPException(422, "Mode must be form or one_on_one.")
     if handedness not in {"right", "left"}:
@@ -138,6 +146,19 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
             parse_landmarks(landmarks)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+    # Whole-clip court calibration when no landmarks are sent. Unset, it is on for game analysis
+    # of moving (broadcast) footage, the footage it was checked on.
+    if court_auto is None:
+        auto_court = mode == "one_on_one" and camera == "moving"
+    elif court_auto in {"1", "true", "0", "false"}:
+        auto_court = court_auto in {"1", "true"}
+        if auto_court and mode != "one_on_one":
+            raise HTTPException(422, "Court calibration is only used in game analysis.")
+    else:
+        raise HTTPException(422, "court_auto must be 1 or 0.")
+    auto_court = auto_court and landmarks is None
+    if court_standard not in STANDARDS:
+        raise HTTPException(422, f"Court standard must be one of: {', '.join(STANDARDS)}.")
     suffix = Path(video.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(415, f"Use one of: {', '.join(sorted(ALLOWED))}")
@@ -186,11 +207,12 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
             pose_model_requested=pose_model if mode == "one_on_one" else None)
     if anchor_frame is None and anchor_time is None:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
-                            pose_model=pose_model, court_landmarks=landmarks)
+                            pose_model=pose_model, court_landmarks=landmarks, auto_court=auto_court,
+                            court_standard=court_standard)
     else:
         background.add_task(_run, job_id, input_path, rim_box, mode, handedness, camera, court_polygon,
                             rim_frame=anchor_frame, rim_time_s=anchor_time, pose_model=pose_model,
-                            court_landmarks=landmarks)
+                            court_landmarks=landmarks, auto_court=auto_court, court_standard=court_standard)
     return {"job_id": job_id, "pose_model_requested": pose_model if mode == "one_on_one" else None}
 
 

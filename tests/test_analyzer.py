@@ -141,6 +141,31 @@ def test_court_polygon_only_applies_to_fixed_game_cameras():
     assert _applied_court(None, "one_on_one", "moving") == (None, None)
 
 
+def test_whole_clip_calibration_is_fitted_or_explained():
+    from app.analyzer import _clip_court
+
+    class Finished:
+        def __init__(self, picked):
+            self.picked = picked
+
+        def finish(self):
+            return self.picked
+
+    points = [{"id": "lane_base_left", "image": [.1, .7]}, {"id": "lane_base_right", "image": [.2, .5]},
+              {"id": "ft_left", "image": [.45, .72]}, {"id": "ft_right", "image": [.5, .55]}]
+    check = {"frames_tried": 12, "frames_proposed": 10, "frames_agreeing": 9, "seconds": 20.5}
+    found = {"standard": "nba", "frame": 30, "points": points, "source": "auto, whole clip"}
+    court_auto, landmarks, calibration = _clip_court(Finished({"court_landmarks": found, "check": check}), 1920, 1080)
+    assert court_auto["status"] == "accepted" and court_auto["frames_agreeing"] == 9
+    assert court_auto["court_landmarks"] == found and landmarks["frame"] == 30
+    assert calibration.summary()["landmark_source"] == "auto, whole clip"
+    rejected = {"rejected": "only 2 of 6 proposed frames agree on the camera position (12 frames tried)",
+                "check": check}
+    court_auto, landmarks, calibration = _clip_court(Finished(rejected), 1920, 1080)
+    assert court_auto["status"] == "rejected" and "only 2 of 6" in court_auto["reason"]
+    assert landmarks is None and calibration is None
+
+
 def _review_clip(tmp_path, frames=6):
     source = tmp_path / "clip.mp4"
     writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 48))

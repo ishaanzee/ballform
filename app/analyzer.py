@@ -27,7 +27,8 @@ from ultralytics import YOLO
 from app.models import Detection, PoseFrame
 from app.game import add_court_metrics, analyze_game_shots
 from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
-from app.court import fit as fit_court, parse_landmarks
+from app.court import STANDARDS, fit as fit_court, parse_landmarks
+from app.court_detect import ClipCalibration
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
@@ -613,6 +614,28 @@ def fit_calibration(court_landmarks: dict, width: int, height: int):
     return landmarks, calibration
 
 
+def _clip_court(clip_calibration: ClipCalibration, width: int, height: int):
+    """Finish the whole-clip calibration: (summary for the report, landmarks, calibration),
+    the last two None when no calibration passed the agreement check."""
+    picked = clip_calibration.finish()
+    court_auto = {"status": "rejected", "reason": picked.get("rejected"), **picked.get("check", {})}
+    if "court_landmarks" not in picked:
+        return court_auto, None, None
+    try:
+        landmarks, calibration = fit_calibration(picked["court_landmarks"], width, height)
+    except ValueError as exc:
+        return {**court_auto, "reason": f"the chosen landmarks could not be fitted ({exc})"}, None, None
+    # main._run saves these as the job's landmarks, so a rerun uses the same calibration.
+    return ({**court_auto, "status": "accepted", "reason": None, "court_landmarks": picked["court_landmarks"]},
+            landmarks, calibration)
+
+
+def _court_summary(court_map, court_landmarks: dict, fps: float) -> dict:
+    """The court map summary plus the landmarks used and their frame time, for the report."""
+    return {**court_map.summary(), "anchor_time_s": round(court_map.anchor_frame / fps, 3),
+            "landmarks": [{"id": key, "image": [round(x, 5), round(y, 5)]} for key, (x, y) in court_landmarks["points"]]}
+
+
 def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                report: Callable[[float, str], None] = lambda _value, _message: None) -> dict:
     """Everything after per-frame inference: identities, rims, shots, game and court metrics.
@@ -744,9 +767,12 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
                   rim_time_s: float | None = None, pose_model: str = "yolo26s-pose",
-                  court_landmarks: dict | None = None) -> dict:
+                  court_landmarks: dict | None = None, auto_court: bool = False,
+                  court_standard: str = "nba") -> dict:
     if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
+    if court_standard not in STANDARDS:
+        raise ValueError(f"Court standard must be one of: {', '.join(STANDARDS)}.")
     report = progress or (lambda _value, _message: None)
     profile = camera_profile(camera)
     court, court_ignored = _applied_court(validate_court(court), mode, profile)
@@ -803,6 +829,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     # Preserve more release/contest detail than the original 15 FPS pipeline.
     stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
+    # Without landmarks from the page, calibrate from frames across the clip, fitted in other
+    # processes while the frame loop runs (court_detect.ClipCalibration).
+    clip_calibration = (ClipCalibration(input_path, total, fps, width, height, court_standard, stride)
+                        if auto_court and game_mode and calibration is None else None)
+    court_auto = None
     stage_times["model_loading_and_setup"] = time.perf_counter() - stage_started
 
     options = None if game_mode else mp.tasks.vision.PoseLandmarkerOptions(
@@ -858,6 +889,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         resources.callback(capture.release)
         if court_vision:
             resources.callback(court_vision.close)
+        if clip_calibration:
+            resources.callback(clip_calibration.close)
         landmarker = None if game_mode else resources.enter_context(mp.tasks.vision.PoseLandmarker.create_from_options(options))
         prefetch_executor = (resources.enter_context(ThreadPoolExecutor(max_workers=1, thread_name_prefix="ballform-next-frame"))
                              if prefetch_detector else None)
@@ -923,7 +956,13 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             processed += 1
             if processed % 5 == 0:
                 report(min(.88, .08 + .78 * frame_no / max(1, total)), f"Analyzing frame {frame_no:,} of {total:,}")
-    stage_times["frame_processing"] = time.perf_counter() - stage_started
+        if clip_calibration:
+            waited = time.perf_counter()
+            report(.88, "Calibrating the court from frames across the clip")
+            court_auto, court_landmarks, calibration = _clip_court(clip_calibration, width, height)
+            stage_times["court_auto_calibration_wait"] = time.perf_counter() - waited
+    stage_times["frame_processing"] = (time.perf_counter() - stage_started
+                                       - stage_times.get("court_auto_calibration_wait", 0.))
     stage_started = time.perf_counter()
     inputs = {"fps": fps, "width": width, "height": height, "total": total, "frame_no": frame_no,
               "analyzed_fps": analyzed_fps, "stride": stride, "mode": mode, "handedness": handedness,
@@ -985,7 +1024,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         "camera_view": view, "camera_view_confidence": round(view_confidence, 2),
         "mode": mode, "handedness": handedness, "game_summary": game_summary,
         "camera_profile": profile, "court_polygon": court, "court_polygon_ignored": court_ignored,
-        "court_calibration": court_map.summary() if court_map else None,
+        "court_calibration": _court_summary(court_map, court_landmarks, fps) if court_map else None,
+        "court_auto_calibration": court_auto,
         "vision": {"pose_model": Path(game_pose_path).name if game_pose_path else pose_path.name,
                    "pose_model_requested": pose_model if game_mode else None,
                    "pose_model_choice": pose_model if game_mode else None,
@@ -1076,6 +1116,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         result["limitations"].append("Jump shots need raised-hand ball contact and an arc rising above the release shoulders, or the detector's jump-shot class with an arc when the release is hidden. Layups, dunks, tips and putbacks need a hand contact followed by the ball reaching the basket (a ball-in-basket detection or the rim's area), or the detector's layup-dunk class with the ball rising above the player's head. Shot types come from the detector classes, the ball's flight time and image-plane geometry, and on a calibrated court the shot distance separates floaters (under 10 ft) from jump shots; a finish at the rim is reported as 'layup or dunk' because the two look alike in 2D. On 101 labeled broadcast clips 59 of 67 layups, dunks, tips and floaters were found (release within 0.75 s), against 43 of 50 jump shots. Attempts whose ball is never seen near the basket, touches where the player has no visible pose (often a tip or putback in a crowd), fully occluded releases and flat arcs may be omitted. An arc whose ball comes back down beside the rim before reaching it is treated as a pass, unless the detector's shot-block class fires in flight; without a visible rim that check cannot run, so a pass can still be called a shot. A ball bouncing off the rim or a rebound at the rim can still read as a new attempt (on the labeled broadcast clips about 1 prediction in 18 was not a real shot, mostly a catch or scramble at the rim read as a tip), and slow-motion edits need manual review.")
         if court_map is not None:
             result["limitations"].append(court_map.limitation())
+        elif court_auto is not None:
+            result["limitations"].append(
+                f"Automatic court calibration found no court to use: {court_auto['reason']}. Distances, zones and "
+                "spacing are not reported in feet. To get them, return to the clip, open Calibrate court, mark the "
+                "landmarks (or press Auto-detect court) on a frame where the floor lines are clear, and analyze again.")
         result["limitations"].append("Ball-handler highlights are decoded over the whole clip from hand contact, dribble position and the detector's possession class; BALL? marks frames held without direct evidence. They are uncertain visual annotations, not measured possession; they only cross-check the shooter of layups, dunks, tips and hidden-release jump shots.")
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     report(1.0, "Complete")
@@ -1087,7 +1132,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
                   court: list[list[float]] | None = None, rim_frame: int | None = None,
                   rim_time_s: float | None = None, pose_model: str = "yolo26s-pose",
-                  court_landmarks: dict | None = None) -> dict:
+                  court_landmarks: dict | None = None, auto_court: bool = False,
+                  court_standard: str = "nba") -> dict:
     """Run analysis and append elapsed time plus sampled peak process memory."""
     process = psutil.Process()
     peak_rss = [process.memory_info().rss]
@@ -1105,7 +1151,8 @@ def analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, f
     sampler.start()
     try:
         result = _analyze_video(input_path, output_dir, rim, progress, mode, handedness, camera,
-                                court, rim_frame, rim_time_s, pose_model, court_landmarks)
+                                court, rim_frame, rim_time_s, pose_model, court_landmarks,
+                                auto_court, court_standard)
     finally:
         stop.set()
         sampler.join()

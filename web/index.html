@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>Ballform — Shot mechanics, frame by frame</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=game-models-shooter-overlay-2">
+  <link rel="stylesheet" href="/assets/styles.css?v=court-whole-clip-1">
 </head>
 <body>
   <header><a class="brand" id="homeLink" href="/"><span>BF</span> BALLFORM</a><div class="local" id="modeLabel">● RUNS LOCALLY</div></header>
@@ -23,6 +23,7 @@
         <label>Camera / footage<select id="cameraProfile"><option value="courtside" selected>Stationary courtside / side view</option><option value="moving">Moving broadcast + tracked rim</option><option value="elevated">Pickup / elevated wide view</option></select></label>
         <label>Shooting hand<select id="handedness"><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
         <label id="poseModelField">Game pose model<select id="poseModel" aria-describedby="poseModelHelp"><option value="yolo26s-pose">YOLO26s · speed-first default</option><option value="yolo26m-pose">YOLO26m · medium</option></select><small id="poseModelHelp">Used for Game / 1-on-1 / 5-on-5 analysis. Compare the same clip and settings; YOLO26s is faster on your sample, while quality depends on the footage.</small></label>
+        <label id="courtAutoField" class="check"><span><input id="courtAutoClip" type="checkbox" aria-describedby="courtAutoHelp"> Calibrate court automatically</span><small id="courtAutoHelp">Finds the floor lines on frames across the clip so distances, zones and spacing come out in feet. Adds some CPU time; court marks you place in the preview are used instead.</small></label>
         <p id="modeHelp">Keep the shooting arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.</p>
       </div>
       <label class="drop" id="drop">
@@ -75,7 +76,7 @@
       <div class="summary" id="summary"></div>
       <p id="visionSummary" class="report-note"></p>
       <p id="speedNote" class="report-note hidden"></p>
-      <p id="courtNote" class="report-note hidden"></p>
+      <div id="courtNote" class="report-note hidden"></div>
       <p id="gameHelp" class="report-note hidden">Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.</p>
       <video id="annotated" controls playsinline></video>
       <div id="shots"></div>
@@ -83,7 +84,7 @@
     </section>
   </main>
   <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
-  <script src="/assets/app.js?v=court-autodetect-1"></script>
-  <script src="/assets/court.js?v=court-autodetect-1"></script>
+  <script src="/assets/app.js?v=court-whole-clip-1"></script>
+  <script src="/assets/court.js?v=court-whole-clip-1"></script>
 </body>
 </html>

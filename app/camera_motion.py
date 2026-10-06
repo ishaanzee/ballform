@@ -98,11 +98,15 @@ class CourtMap:
 
     def limitation(self) -> str:
         summary = self.summary()
+        source = summary.get("landmark_source")
         placed = {"auto": "proposed automatically and accepted",
-                  "auto, adjusted": "proposed automatically and adjusted by hand"}.get(summary.get("landmark_source"))
+                  "auto, adjusted": "proposed automatically and adjusted by hand"}.get(source)
+        # Landmarks found from the whole clip lie exactly on one fitted court, so their error says nothing.
+        fit = ("found automatically from frames across the clip that agree on the camera position"
+               if source == "auto, whole clip" else
+               f"{summary['clicked_error_px']['rms']:.1f} px RMS error on the marked points")
         text = (f"Court calibration ({summary['standard'].upper()}, {summary['points']} landmarks"
-                f"{', ' + placed if placed else ''}, "
-                f"{summary['clicked_error_px']['rms']:.1f} px RMS error on the marked points) is reliable on "
+                f"{', ' + placed if placed else ''}, {fit}) is reliable on "
                 f"{summary['reliable_frames']} of {summary['frames']} analyzed frames")
         if summary["reliable_frames"] < summary["frames"]:
             text += (". Floor measurements are withheld on the rest: the mapping stops at camera cuts and where too "

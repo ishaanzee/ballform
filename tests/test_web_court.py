@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,11 +16,12 @@ PROPOSAL = {"ok": True, "reason": None, "confidence": .64, "standard": "nba",
             "points": [{"id": key, "image": [x / 1920, y / 1080]} for key, x, y in CLICKS]}
 
 
-def harness(clicks, proposal=None):
+def harness(clicks, proposal=None, court_auto=False):
     command = ["node", str(ROOT / "tests" / "court_js_harness.js"), str(ROOT), json.dumps(clicks)]
     if proposal is not None:
         command += ["1920", "1080", json.dumps(proposal)]
-    output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+    env = {**os.environ, "BALLFORM_COURT_AUTO": "1" if court_auto else "0"}
+    output = subprocess.run(command, capture_output=True, text=True, check=True, env=env).stdout
     return json.loads(output)
 
 
@@ -69,3 +71,18 @@ def test_a_failed_proposal_leaves_manual_marks_alone():
     # The failed proposal is applied first, then the manual clicks go ahead as before.
     assert result["source"] == "manual" and len(result["field"]["points"]) == 5
     assert "No lines." in result["status"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_without_marks_the_page_asks_for_the_whole_clip_calibration():
+    result = harness([], court_auto=True)
+    assert result["field"] is None and result["court_auto"] == "1" and result["court_standard"] == "nba"
+    assert "calibrates the court automatically" in result["status"]
+    assert harness([])["court_auto"] == "0"  # unticked
+    # Marks that define the floor are sent instead, and the page says so.
+    marked = harness(CLICKS, court_auto=True)
+    assert marked["court_auto"] is None and marked["field"]["source"] == "manual"
+    assert "used instead of the automatic whole-clip calibration" in marked["status"]
+    # Too few marks to use: the whole clip is calibrated.
+    few = harness(CLICKS[:2], court_auto=True)
+    assert few["court_auto"] == "1" and "Fewer than 4 marks are not used" in few["status"]

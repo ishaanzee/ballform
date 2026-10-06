@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import itertools
 import math
+import multiprocessing
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -797,8 +799,11 @@ def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
     return Proposal(True, None, support, standard, points, court_to_image, diagnostics)
 
 
+MIN_AGREE, MIN_SHARE = 3, .35  # pick_calibration's gate: frames agreeing, and their share of the proposed ones
+
+
 def pick_calibration(proposals: list[dict], width: int, height: int, standard: str = "nba",
-                     agree_ft: float = 12., min_agree: int = 3, min_share: float = .35) -> dict:
+                     agree_ft: float = 12., min_agree: int = MIN_AGREE, min_share: float = MIN_SHARE) -> dict:
     """Choose one frame's proposal from proposals on several frames of one clip.
 
     proposals are `Proposal.to_dict()` results with their "frame". A broadcast camera
@@ -834,6 +839,9 @@ def pick_calibration(proposals: list[dict], width: int, height: int, standard: s
     members = np.flatnonzero(agree[centre])
     check = {"frames_tried": tried, "frames_proposed": len(cameras), "frames_agreeing": int(len(members)),
              "camera_ft": [round(float(v), 1) for v in np.abs(centres[centre])]}
+    if len(cameras) < min_agree:
+        return {"rejected": f"auto-detect proposed a court on only {len(cameras)} of the {tried} frames tried",
+                "check": check}
     if len(members) < max(min_agree, min_share * len(cameras)):
         return {"rejected": f"only {len(members)} of {len(cameras)} proposed frames agree on the camera position "
                             f"({tried} frames tried)", "check": check}
@@ -844,3 +852,144 @@ def pick_calibration(proposals: list[dict], width: int, height: int, standard: s
     check["support"] = round(float(item["confidence"]), 3)
     return {"court_landmarks": {"standard": standard, "frame": int(item["frame"]), "points": item["points"],
                                 "source": "auto"}, "check": check}
+
+
+# --- whole clip, during analysis ---------------------------------------------------------------
+
+CLIP_STEP_S = .5         # seconds between the frames tried, as in scripts/auto_court_landmarks.py
+# Frames tried at most, spread over the clip. On 28 labeled clips (most 7 s long), picking
+# from at most 10 frames instead of every 0.5 s (14 on most) accepted the same 24 clips and
+# measured their 12 shots with a play-by-play distance as well (1.54 ft mean absolute error
+# both ways; 1.52 ft from at most 8 frames, which lost one shot's zone).
+CLIP_MAX_FRAMES = 10
+CLIP_WAIT_S = 30.        # seconds to wait for unfinished fits once the analysis frame loop is done
+CLIP_SOURCE = "auto, whole clip"
+
+
+def clip_frames(total: int, fps: float, stride: int = 1, step_s: float = CLIP_STEP_S,
+                max_frames: int = CLIP_MAX_FRAMES) -> list[int]:
+    """Frames to try: every step_s seconds on the analysis stride, at most max_frames spread over the clip."""
+    stride = max(1, stride)
+    step = max(1, round(step_s * fps / stride)) * stride
+    frames = list(range(0, max(total, 1), step))
+    if len(frames) > max_frames:
+        frames = [frames[i] for i in dict.fromkeys(np.linspace(0, len(frames) - 1, max_frames).round().astype(int))]
+    return frames
+
+
+def clip_workers() -> int:
+    """Processes for the fits: a third of the cores, at most 4, leaving the rest to the frame loop."""
+    return max(1, min(4, (os.cpu_count() or 2) // 3))
+
+
+def _worker_init() -> None:
+    cv2.setNumThreads(1)  # one fit per process; the pool is the parallelism
+    try:
+        os.nice(10)  # the analysis frame loop comes first
+    except OSError:
+        pass
+
+
+def _propose_frame(small: np.ndarray, standard: str, frame: int) -> dict:
+    proposal = propose(small, standard).to_dict()
+    proposal["frame"] = frame
+    return proposal
+
+
+class ClipCalibration:
+    """Calibrate the court from the whole clip while the analysis frame loop runs.
+
+    A thread reads the clip on its own (decoding is fast next to the analysis) and hands the
+    sampled frames, shrunk to the working width, to ``propose`` in low-priority processes: the
+    fit is CPU-bound Python, while the frame loop mostly waits on the GPU. ``finish`` waits up
+    to ``wait_s`` for fits still running and keeps one frame's proposal with
+    ``pick_calibration``. Landmarks are normalized image points, so the shrunk frame gives
+    what the full frame would (``propose`` shrinks to the same width itself).
+    """
+
+    def __init__(self, input_path, total: int, fps: float, width: int, height: int, standard: str = "nba",
+                 stride: int = 1, workers: int | None = None, frames: list[int] | None = None):
+        import threading
+
+        self.standard, self.started = standard, time.perf_counter()
+        self.scale = min(1., WORK_WIDTH / width)
+        self.size = (round(width * self.scale), round(height * self.scale))
+        self.frames = sorted(set(clip_frames(total, fps, stride) if frames is None else frames))
+        self.pending: dict[int, multiprocessing.pool.AsyncResult] = {}
+        self.error: str | None = None
+        self.stopped = threading.Event()
+        try:
+            # spawn, not fork: the analysis process holds GPU sessions and threads.
+            self.pool = multiprocessing.get_context("spawn").Pool(workers or clip_workers(), _worker_init)
+        except Exception as exc:  # noqa: BLE001 - calibration is optional; the analysis goes on without it
+            self.pool, self.error, self.reader = None, f"{type(exc).__name__}: {exc}", None
+            return
+        self.reader = threading.Thread(target=self._read, args=(str(input_path),), name="ballform-court-frames",
+                                       daemon=True)
+        self.reader.start()
+
+    def _read(self, path: str) -> None:
+        capture = cv2.VideoCapture(path)
+        wanted, frame_no = set(self.frames), -1
+        try:
+            while self.frames and frame_no < self.frames[-1] and not self.stopped.is_set():
+                if not capture.grab():
+                    break
+                frame_no += 1
+                if frame_no in wanted:
+                    ok, frame = capture.retrieve()
+                    if ok:
+                        small = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA) if self.scale < 1 else frame
+                        self.pending[frame_no] = self.pool.apply_async(_propose_frame, (small, self.standard, frame_no))
+        except Exception as exc:  # noqa: BLE001 - e.g. the pool was closed under it
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            capture.release()
+
+    def finish(self, wait_s: float = CLIP_WAIT_S) -> dict:
+        """pick_calibration's result, with source CLIP_SOURCE, plus timing and unfinished fits in "check"."""
+        deadline = time.perf_counter() + wait_s
+        done: dict[int, dict | None] = {}
+        while True:
+            for frame_no, result in list(self.pending.items()):
+                if frame_no not in done and result.ready():
+                    try:
+                        done[frame_no] = result.get()
+                    except Exception as exc:  # noqa: BLE001 - one failed frame does not end the clip
+                        done[frame_no], self.error = None, f"{type(exc).__name__}: {exc}"
+            proposals = [done[f] for f in sorted(done) if done[f] is not None]
+            reading = self.reader is not None and self.reader.is_alive()
+            if (not reading and len(done) == len(self.pending)) or time.perf_counter() >= deadline:
+                break
+            # Stop early once the frames still to come could not overturn the acceptance,
+            # even if none of them agreed.
+            if proposals and "court_landmarks" in (picked := pick_calibration(proposals, *self.size,
+                                                                               standard=self.standard)):
+                remaining = len(self.frames) - len(done)
+                if picked["check"]["frames_agreeing"] >= MIN_SHARE * (picked["check"]["frames_proposed"] + remaining):
+                    break
+            time.sleep(.1)
+        unfinished = len(self.pending) - len(done)
+        self.close()
+        if proposals:
+            picked = pick_calibration(proposals, *self.size, standard=self.standard)
+        elif self.error:
+            picked = {"rejected": f"the court fit could not run ({self.error})"}
+        else:
+            picked = {"rejected": f"no frame was fitted within {wait_s:.0f} s" if unfinished else "no frames were read"}
+        if "court_landmarks" in picked:
+            picked["court_landmarks"]["source"] = CLIP_SOURCE
+        picked.setdefault("check", {"frames_tried": len(proposals)}).update(
+            frames_sampled=len(self.pending), frames_unfinished=unfinished,
+            seconds=round(time.perf_counter() - self.started, 1))
+        return picked
+
+    def close(self) -> None:
+        """Stop reading and stop the pool, including fits still running past the deadline."""
+        self.stopped.set()
+        if self.reader is not None:
+            self.reader.join()
+        if self.pool is not None:
+            self.pool.terminate()
+            self.pool.join()
+            self.pool = None
