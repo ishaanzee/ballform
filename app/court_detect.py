@@ -851,7 +851,11 @@ def pick_calibration(proposals: list[dict], width: int, height: int, standard: s
 # --- whole clip, during analysis ---------------------------------------------------------------
 
 CLIP_STEP_S = .5         # seconds between the frames tried, as in scripts/auto_court_landmarks.py
-CLIP_MAX_FRAMES = 16     # frames tried at most; longer clips are sampled more sparsely
+# Frames tried at most, spread over the clip. On 28 labeled clips (most 7 s long), picking
+# from at most 10 frames instead of every 0.5 s (14 on most) accepted the same 24 clips and
+# measured their 12 shots with a play-by-play distance as well (1.54 ft mean absolute error
+# both ways; 1.52 ft from at most 8 frames, which lost one shot's zone).
+CLIP_MAX_FRAMES = 10
 CLIP_WAIT_S = 30.        # seconds to wait for unfinished fits once the analysis frame loop is done
 CLIP_SOURCE = "auto, whole clip"
 
@@ -874,6 +878,10 @@ def clip_workers() -> int:
 
 def _worker_init() -> None:
     cv2.setNumThreads(1)  # one fit per process; the pool is the parallelism
+    try:
+        os.nice(10)  # the analysis frame loop comes first
+    except OSError:
+        pass
 
 
 def _propose_frame(small: np.ndarray, standard: str, frame: int) -> dict:
@@ -885,38 +893,59 @@ def _propose_frame(small: np.ndarray, standard: str, frame: int) -> dict:
 class ClipCalibration:
     """Calibrate the court from the whole clip while the analysis frame loop runs.
 
-    The frame loop hands over each frame it reads (``offer``); the sampled ones are shrunk to
-    the working width and fitted by ``propose`` in separate processes, because the fit is
-    CPU-bound Python while the loop mostly waits on the GPU. ``finish`` waits up to ``wait_s``
-    for fits still running and keeps one frame's proposal with ``pick_calibration``. Landmarks
-    are normalized image points, so fitting the shrunk frame gives what the full frame would
-    (``propose`` shrinks to the same width itself).
+    A thread reads the clip on its own (decoding is fast next to the analysis) and hands the
+    sampled frames, shrunk to the working width, to ``propose`` in low-priority processes: the
+    fit is CPU-bound Python, while the frame loop mostly waits on the GPU. ``finish`` waits up
+    to ``wait_s`` for fits still running and keeps one frame's proposal with
+    ``pick_calibration``. Landmarks are normalized image points, so the shrunk frame gives
+    what the full frame would (``propose`` shrinks to the same width itself).
     """
 
-    def __init__(self, total: int, fps: float, width: int, height: int, standard: str = "nba",
+    def __init__(self, input_path, total: int, fps: float, width: int, height: int, standard: str = "nba",
                  stride: int = 1, workers: int | None = None, frames: list[int] | None = None):
+        import threading
+
         self.standard, self.started = standard, time.perf_counter()
         self.scale = min(1., WORK_WIDTH / width)
         self.size = (round(width * self.scale), round(height * self.scale))
-        self.frames = set(clip_frames(total, fps, stride) if frames is None else frames)
+        self.frames = sorted(set(clip_frames(total, fps, stride) if frames is None else frames))
         self.pending: dict[int, multiprocessing.pool.AsyncResult] = {}
         self.error: str | None = None
+        self.stopped = threading.Event()
         try:
             # spawn, not fork: the analysis process holds GPU sessions and threads.
             self.pool = multiprocessing.get_context("spawn").Pool(workers or clip_workers(), _worker_init)
         except Exception as exc:  # noqa: BLE001 - calibration is optional; the analysis goes on without it
-            self.pool, self.error = None, f"{type(exc).__name__}: {exc}"
-
-    def offer(self, frame_no: int, frame: np.ndarray) -> None:
-        if self.pool is None or frame_no not in self.frames or frame_no in self.pending:
+            self.pool, self.error, self.reader = None, f"{type(exc).__name__}: {exc}", None
             return
-        small = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA) if self.scale < 1 else frame.copy()
-        self.pending[frame_no] = self.pool.apply_async(_propose_frame, (small, self.standard, frame_no))
+        self.reader = threading.Thread(target=self._read, args=(str(input_path),), name="ballform-court-frames",
+                                       daemon=True)
+        self.reader.start()
+
+    def _read(self, path: str) -> None:
+        capture = cv2.VideoCapture(path)
+        wanted, frame_no = set(self.frames), -1
+        try:
+            while self.frames and frame_no < self.frames[-1] and not self.stopped.is_set():
+                if not capture.grab():
+                    break
+                frame_no += 1
+                if frame_no in wanted:
+                    ok, frame = capture.retrieve()
+                    if ok:
+                        small = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA) if self.scale < 1 else frame
+                        self.pending[frame_no] = self.pool.apply_async(_propose_frame, (small, self.standard, frame_no))
+        except Exception as exc:  # noqa: BLE001 - e.g. the pool was closed under it
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            capture.release()
 
     def finish(self, wait_s: float = CLIP_WAIT_S) -> dict:
         """pick_calibration's result, with source CLIP_SOURCE, plus timing and unfinished fits in "check"."""
         proposals, unfinished = [], 0
         deadline = time.perf_counter() + wait_s
+        if self.reader is not None:
+            self.reader.join(wait_s)
         for frame_no in sorted(self.pending):
             try:
                 proposals.append(self.pending[frame_no].get(max(0., deadline - time.perf_counter())))
@@ -939,7 +968,10 @@ class ClipCalibration:
         return picked
 
     def close(self) -> None:
-        """Stop the pool, including fits still running past the deadline."""
+        """Stop reading and stop the pool, including fits still running past the deadline."""
+        self.stopped.set()
+        if self.reader is not None:
+            self.reader.join()
         if self.pool is not None:
             self.pool.terminate()
             self.pool.join()

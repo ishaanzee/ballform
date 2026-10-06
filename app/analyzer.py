@@ -831,7 +831,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     analyzed_fps = fps / stride
     # Without landmarks from the page, calibrate from frames across the clip, fitted in other
     # processes while the frame loop runs (court_detect.ClipCalibration).
-    clip_calibration = (ClipCalibration(total, fps, width, height, court_standard, stride)
+    clip_calibration = (ClipCalibration(input_path, total, fps, width, height, court_standard, stride)
                         if auto_court and game_mode and calibration is None else None)
     court_auto = None
     stage_times["model_loading_and_setup"] = time.perf_counter() - stage_started
@@ -900,8 +900,6 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             if prefetched_objects is not None:
                 prefetched_frames += 1
                 prefetch_ball_seconds += prefetch_seconds
-            if clip_calibration:
-                clip_calibration.offer(frame_no, frame)
             time_s = frame_no / fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             cut_frame = cut_detector.observe(frame_no, gray) if cut_detector else None
