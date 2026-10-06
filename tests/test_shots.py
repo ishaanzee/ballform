@@ -1,11 +1,20 @@
 import pytest
 
+from app import shots as shots_module
 from app.models import Detection, PoseFrame, ShotResult
 from app.shots import Anchor, find_attempts, missed_before_follow_up
 from app.tracking import HandlerDecision
 
 FPS = 30
 BASKET = (.5, .1)
+FLOATER_FLIGHT_S = shots_module.FLOATER_FLIGHT_S
+
+
+@pytest.fixture(autouse=True)
+def short_synthetic_flights(monkeypatch):
+    """The synthetic jump shots below reach the basket in 0.67 s, a floater's flight time
+    on broadcast footage; the flight rule is tested on its own and left out elsewhere."""
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", (9., 9.))
 
 
 def pose(frame, x, track_id, wrist=None):
@@ -511,3 +520,36 @@ def test_one_frame_basket_detection_with_the_ball_elsewhere_around_it_is_ignored
     balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9))])
     balls[5].confidence = .3
     assert basket_events(frames, balls, None, FPS) == []
+
+
+@pytest.mark.parametrize("reach, expected", [
+    (25, "jump shot"),  # 0.50 s: mostly an early basket event, says nothing
+    (31, "floater"),    # 0.70 s: short and high, as dev floaters (0.67-0.83 s)
+    (40, "jump shot"),  # 1.00 s: as long as a jump shot's flight
+])
+def test_arc_shot_flight_time_separates_floater_from_jump_shot(reach, expected, monkeypatch):
+    monkeypatch.setattr(shots_module, "FLOATER_FLIGHT_S", FLOATER_FLIGHT_S)
+    shot, = arc_shots_reaching([(10, reach)])
+    assert shot.shot_type == expected
+
+
+def court_shot(shot_type, distance):
+    return ShotResult(1, 0., 1., 2., "unknown", 0., [], {}, shot_type=shot_type,
+                      game={"metrics": {"shot_distance_ft": distance}})
+
+
+@pytest.mark.parametrize("shot_type, distance, expected", [
+    ("jump shot", 7., "floater"),      # 6566, 380c: runners from 7 ft
+    ("jump shot", 12., "jump shot"),
+    ("floater", 12., "floater"),
+    ("floater", 20., "jump shot"),
+    ("layup or dunk", 7., "layup or dunk"),  # rim finishes keep their type
+    ("tip", 20., "tip"),
+    ("jump shot", None, "jump shot"),  # uncalibrated
+])
+def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance, expected):
+    from app.shots import type_by_distance
+    shot = court_shot(shot_type, distance)
+    type_by_distance([shot])
+    assert shot.shot_type == expected
+    assert bool(shot.evidence) == (expected != shot_type)

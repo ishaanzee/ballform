@@ -79,6 +79,20 @@ FOLLOW_UP_S = .8
 # floaters 0.50-0.65 s, and 11 of 14 rim finishes 0.30 s or less (the other
 # three had a release estimate 0.3-0.6 s early).
 RIM_FLIGHT_S = .4
+# A shot reaching the basket this long after release was let go close in, high
+# but short: a floater. On the dev labels jump shots took 0.83 s or more (the
+# shortest a 15 ft pull-up), floaters 0.67-1.1 s. Flights under 0.6 s are mostly
+# an early basket event (the ball-in-basket class firing on the net while the
+# ball is still in the air), so they say nothing. Court distance, when
+# calibrated, overrides this (type_by_distance).
+FLOATER_FLIGHT_S = (.6, .8)
+# On a calibrated court an arc shot from closer than this (take-off spot to the
+# point under the rim) is a floater, and a "floater" from farther than
+# FLOATER_MAX_FT a jump shot. Play-by-play put dev floaters at 4-12 ft and jump
+# shots at 10 ft or more; measured take-off spots were floaters 4.9-12.4 ft and
+# jump shots 7.0 ft (a 10 ft pull-up) and then 10.7 ft or more.
+JUMP_SHOT_MIN_FT = 10.
+FLOATER_MAX_FT = 16.
 # Such a finish within this long of the previous shot reaching the basket is a
 # tip: labeled tips came 0.80-0.90 s after, a gathered putback dunk 1.48 s.
 TIP_AFTER_REACH_S = 1.
@@ -396,15 +410,40 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
     return outcome, confidence, evidence, frame
 
 
-def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float) -> tuple[str, list[str]]:
-    """Floater only when the detector's layup-dunk class matches or beats jump-shot around release."""
+def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
+               flight_s: float | None = None) -> tuple[str, list[str]]:
+    """Floater when the detector's layup-dunk class matches or beats jump-shot around release,
+    or when the ball got to the basket sooner than any jump shot's (``flight_s``, release to basket)."""
     window = round(.4 * fps)
     jump = _overlapping(c6, shot_release - window, shot_release + window)
     rim = _overlapping(c7, shot_release - window, shot_release + window)
     if rim is not None and rim.peak >= .5 and rim.peak >= (jump.peak if jump else 0.):
         return "floater", ["Floater: arc shot with the detector's layup-dunk class at least as confident as jump-shot around release",
                            *_class_note(rim, "layup-dunk"), *_class_note(jump, "jump-shot")]
+    if flight_s is not None and FLOATER_FLIGHT_S[0] <= flight_s <= FLOATER_FLIGHT_S[1]:
+        return "floater", [f"Floater: the ball reached the basket {flight_s:.2f} s after release, sooner than a jump "
+                           f"shot's (more than {FLOATER_FLIGHT_S[1]} s) and later than a finish at the rim",
+                           *_class_note(jump, "jump-shot")]
     return "jump shot", _class_note(jump, "jump-shot")
+
+
+def type_by_distance(shots: list[ShotResult]) -> None:
+    """Retype jump shots and floaters by the calibrated shot distance (game metric
+    ``shot_distance_ft``, the take-off spot), which says more than the detector classes
+    or the flight time. Rim finishes are left alone: their distance is where the path
+    passes the basket, and changing them would change how that distance is measured."""
+    for shot in shots:
+        distance = ((shot.game or {}).get("metrics") or {}).get("shot_distance_ft")
+        if distance is None or shot.shot_type not in {"jump shot", "floater"}:
+            continue
+        if shot.shot_type == "jump shot" and distance < JUMP_SHOT_MIN_FT:
+            shot.shot_type = "floater"
+            shot.evidence.append(f"Floater: taken {distance:.1f} ft from the basket on the calibrated court; "
+                                 f"jump shots come from {JUMP_SHOT_MIN_FT} ft or more")
+        elif shot.shot_type == "floater" and distance > FLOATER_MAX_FT:
+            shot.shot_type = "jump shot"
+            shot.evidence.append(f"Jump shot: taken {distance:.1f} ft from the basket on the calibrated court, "
+                                 f"farther out than a floater (up to {FLOATER_MAX_FT} ft)")
 
 
 def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_type: str,
@@ -511,7 +550,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                 notes = [f"Rim finish: {flight}; a jump shot or floater takes longer",
                          *_class_note(_overlapping(c7, release - window, reach), "layup-dunk")]
         else:
-            shot.shot_type, notes = _jump_type(release, c6, c7, fps)
+            shot.shot_type, notes = _jump_type(release, c6, c7, fps, None if reach is None else (reach - release) / fps)
         shot.evidence += notes
         previous_reach = reach if reach is not None else previous_reach
         anchors.append(Anchor(release, None, shot))
@@ -532,7 +571,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             continue
         handler = _handler_before(frames, contact.frame, fps)
         shooter = contact.track_id if handler in (None, contact.track_id) else None
-        shot_type, notes = _jump_type(contact.frame, c6, c7, fps)
+        shot_type, notes = _jump_type(contact.frame, c6, c7, fps,
+                                      None if reach is None else (reach - contact.frame) / fps)
         evidence = ["Ball arc detected",
                     f"Release contact hidden: release time is the last visible hand contact (frame {contact.frame}), "
                     f"{(apex - contact.frame) / fps:.2f} s before the arc apex, and may precede the actual release",
@@ -625,7 +665,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         elif not at_rim and event.frame - contact.frame > RIM_FLIGHT_S * fps:
             # Let go away from the rim with as long a flight as an arc shot's: a
             # floater or jump shot whose arc was not found (f267, 5adf).
-            shot_type, notes = _jump_type(contact.frame, c6, c7, fps)
+            shot_type, notes = _jump_type(contact.frame, c6, c7, fps, (event.frame - contact.frame) / fps)
             evidence += [f"{shot_type.capitalize()}: let go away from the rim, reaching it "
                          f"{(event.frame - contact.frame) / fps:.2f} s later", *notes]
         else:

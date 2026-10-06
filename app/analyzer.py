@@ -29,7 +29,7 @@ from app.game import add_court_metrics, analyze_game_shots
 from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
 from app.court import fit as fit_court, parse_landmarks
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
-from app.shots import find_attempts
+from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
@@ -711,6 +711,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
         court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
                                     cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
         add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
+        type_by_distance(shots)
         # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
         trajectories = floor_trajectories(player_frames, court_map, cut_frames)
         if output_dir is not None:
