@@ -95,6 +95,10 @@ BLOCK_CONFIDENCE = .8
 # release and apex. Labeled shots had 0.15 s or more; arcs drawn through a
 # lost ball from one or two stray detections had 0.03-0.05 s (cd04, c467, 567b).
 ARC_SEEN_S = .1
+# No attempt is released this soon after a make. On the dev labels the next
+# real attempt came 1.28 s or more after a "made" call (25e9, after a false
+# make); hands on the ball falling through the net came 0.15-0.32 s after (b212, 25e9).
+DEAD_BALL_S = 1.
 
 
 @dataclass
@@ -639,8 +643,16 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
         anchors.append(Anchor(contact.frame, None, shot))
 
-    missed_before_follow_up(anchors, fps)
-    ordered = sorted((a.shot for a in anchors), key=lambda s: s.release_s)
+    kept = []
+    for anchor in sorted(anchors, key=lambda a: a.release):
+        # A make ends the possession: the ball drops through the net and has to be
+        # inbounded, so a "release" right after it is a hand on the falling ball.
+        if any(made.shot.outcome == "made" and made.shot.outcome_frame is not None
+               and 0 <= anchor.release - made.shot.outcome_frame <= DEAD_BALL_S * fps for made in kept):
+            continue
+        kept.append(anchor)
+    missed_before_follow_up(kept, fps)
+    ordered = sorted((a.shot for a in kept), key=lambda s: s.release_s)
     for number, shot in enumerate(ordered, 1):
         shot.number = number
     return ordered

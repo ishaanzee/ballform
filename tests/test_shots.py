@@ -452,3 +452,18 @@ def test_arc_whose_rise_was_not_seen_is_not_a_shot():
     assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
     balls, frames = scene(arc((.42, .02), (.5, .12)), {})
     assert len(find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)) == 1
+
+
+def test_hand_on_the_ball_falling_through_the_net_is_not_a_new_attempt():
+    # 25e9: after the dunk the ball dropped through the net into a player's hands,
+    # and a stray detection at the rim read as a putback.
+    made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=20)
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.5, .4), (f - 20) / 8) for f in range(21, 29)})
+    path.update({f: lerp((.5, .4), BASKET, (f - 28) / 3) for f in range(29, 40)})
+    holders = {f: (2, (.5, .4)) for f in range(26, 29)}
+    events = [(20, *basket_box(.8)), (31, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, n=40)
+    assert [shot.number for shot in find_attempts([made], balls, frames, FPS, None, 1.)] == [1]
+    made = ShotResult(1, 0., 0., 1., "missed", .9, ["Ball arc detected"], {}, outcome_frame=20)
+    assert len(find_attempts([made], balls, frames, FPS, None, 1.)) == 2
