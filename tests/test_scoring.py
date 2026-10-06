@@ -86,6 +86,19 @@ def test_late_drop_outside_rim_after_hitting_it_is_a_miss():
     assert shots[0].outcome == "missed"
 
 
+def test_crossing_over_the_rim_edge_is_not_called_made():
+    # Descends through the rim plane at x=.495, 11% of the rim width in from
+    # its left edge: the ball hit the rim there.
+    track = [
+        ball(0, .24, .70), ball(1, .30, .56), ball(2, .36, .40), ball(3, .42, .25),
+        ball(4, .47, .18), ball(5, .48, .23), ball(6, .49, .32), ball(7, .50, .43),
+        ball(8, .50, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "unknown"
+
+
 def test_net_only_motion_cannot_turn_an_airball_into_a_make():
     # The ball is lost before it has a descending path through the rim. This
     # represents an airball that brushes the net from the side or below.

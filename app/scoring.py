@@ -21,6 +21,10 @@ REBOUND_S = .6
 # 0.08-0.78 s). A later crossing is the ball dropping again after hitting the
 # rim or backboard, or a rebound or putback.
 ARRIVAL_S = 1.
+# A ball through the hoop has its centre at least a ball radius inside the
+# rim: 9.4 in ball / 18 in rim is 0.26 rim widths. A centre crossing closer to
+# either edge than this hit the rim (labeled makes crossed at 0.34-0.69).
+PASS_MARGIN = .25
 
 
 def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
@@ -266,7 +270,7 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
     arrival = apex_frame + ARRIVAL_S * fps
     late = [(f, is_inside) for f, _, _, is_inside in crossings if f > arrival]
     crossings = [c for c in crossings if c[0] <= arrival]
-    inside = [(f, x) for f, x, _, is_inside in crossings if is_inside]
+    inside = [(f, x, box) for f, x, box, is_inside in crossings if is_inside]
     flow = net_motion or {}
     def motion_event(start: int, end: int) -> tuple[float, int | None]:
         """Return net-specific motion, not camera/background motion.
@@ -289,6 +293,10 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
         confidence = .66
         evidence.append("Ball crossed the rim plane inside the rim, then came back up above the rim: a rim-out or "
                         "a ball passing in front of or behind the rim")
+    elif inside and not PASS_MARGIN <= (inside[0][1] - inside[0][2][0]) / inside[0][2][2] <= 1 - PASS_MARGIN:
+        # It may still have rolled in or out unseen, so this is not called.
+        evidence.append("Ball centre crossed the rim plane over the rim's edge, too close to it to pass through "
+                        "cleanly: it hit the rim, and whether it then dropped in was not seen")
     elif inside:
         crossing_frame = inside[0][0]
         motion_score, motion_frame = motion_event(crossing_frame, round(crossing_frame + .35 * fps))
