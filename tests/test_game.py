@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pytest
 
 from app.game import analyze_game_shots
@@ -309,8 +310,12 @@ def _court_map():
 
 
 def _standing(frame, track_id, spot, court_to_image, lift_px=0., wrist=None):
-    from app.court import apply
-    x, y = apply(court_to_image, [spot])[0] / (1920, 1080)
+    from app.court import ANKLE_HEIGHT_FT, apply
+    # The ankles are ANKLE_HEIGHT_FT above the spot: their pixel is where the camera ray
+    # through them (camera at the synthetic default, (-100, 40, 35)) meets the floor.
+    camera = np.array([-100., 40.])
+    beyond = camera + (np.asarray(spot) - camera) * 35. / (35. - ANKLE_HEIGHT_FT)
+    x, y = apply(court_to_image, [beyond])[0] / (1920, 1080)
     lift = lift_px / 1080
     landmarks = {"left_ankle": (x - .004, y - lift, .9), "right_ankle": (x + .004, y - lift, .9),
                  "left_hip": (x - .006, y - .08 - lift, .9), "right_hip": (x + .006, y - .08 - lift, .9),

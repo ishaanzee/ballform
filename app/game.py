@@ -561,7 +561,7 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
     An airborne foot maps through the floor homography to a point beyond the
     player, so for a jump the last grounded frames before take-off are used.
     """
-    from app.court import floor_point, lowest_foot_y, takeoff
+    from app.court import ANKLE_HEIGHT_FT, floor_point, lowest_foot_y, takeoff, under_raised_point
 
     width, height = court_map.width, court_map.height
     samples = sorted(((frame, pose) for frame in player_frames
@@ -588,6 +588,10 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
         frame, pose = samples[index]
         found = floor_point(pose, width, height)
         court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
+        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
+        if camera is not None:
+            court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
         if court_point is not None:
             points.append(court_point)
             methods.add(found[1])
@@ -626,7 +630,7 @@ def _contest_points(player_frames: list[dict], near: dict, defender_id: int, bal
 def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls: list[Detection], court_map,
                       summary: dict | None = None) -> None:
     """Add floor measurements in feet next to the torso-length metrics, which stay unchanged."""
-    from app.court import three_point_margin, vertical_plane_distance, zone
+    from app.court import near_half, three_point_margin, vertical_plane_distance, zone
 
     court = court_map.court
     if summary is not None:
@@ -651,10 +655,12 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
             evidence.append(f"Court: shot distance unavailable because {shooter}.")
             continue
         spot, detail = shooter
-        distance = math.dist(spot, court.rim)
-        shot_zone = zone(spot, court)
+        # Distance, zone and court position are taken at the basket of the shooter's half.
+        on_half = near_half(spot, court)
+        distance = math.dist(on_half, court.rim)
+        shot_zone = zone(on_half, court)
         metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
-                        "shooter_court_x_ft": round(spot[0], 1), "shooter_court_y_ft": round(spot[1], 1)})
+                        "shooter_court_x_ft": round(on_half[0], 1), "shooter_court_y_ft": round(on_half[1], 1)})
         if detail["jumped"]:
             where = (f"the shooter's feet ({detail['method']}) on the last grounded frame"
                      f"{'s' if len(detail['frames']) > 1 else ''} before take-off, "
@@ -663,7 +669,7 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
         else:
             where = (f"the shooter's feet ({detail['method']}) on the release frame; no take-off was detected, "
                      "so the shot was treated as taken from the floor")
-        margin = three_point_margin(spot, court)
+        margin = three_point_margin(on_half, court)
         evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from {where}. "
                         f"{court.dims['label']} {'zone ' + shot_zone.replace('_', ' ') if shot_zone else 'zone unavailable (off the calibrated half)'}"
                         f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.court import (STANDARDS, apply, camera_from_homography, fit, floor_point, general_position,
-                       parse_landmarks, template, template_json, three_point_margin, takeoff,
-                       vertical_plane_distance, zone)
+from app.court import (ANKLE_HEIGHT_FT, STANDARDS, apply, camera_from_homography, fit, floor_point,
+                       general_position, parse_landmarks, template, template_json, three_point_margin, takeoff,
+                       under_raised_point, vertical_plane_distance, zone)
 
 from tests_support_court import synthetic_camera
 
@@ -125,6 +125,19 @@ def test_vertical_plane_distance_measures_feet_at_the_players_depth():
         p = k @ (rotation @ (point - camera.center))
         return p[:2] / p[2]
     assert vertical_plane_distance(camera, spot[:2], project(a), project(b)) == pytest.approx(2.5, abs=1e-6)
+
+
+@pytest.mark.parametrize("standard", ["nba", "mirrored"])
+def test_a_raised_point_is_put_back_over_its_floor_spot(standard):
+    k, rotation, court_to_image = synthetic_camera()
+    flip = np.diag([-1., 1., 1.]) if standard == "mirrored" else np.eye(3)
+    camera = camera_from_homography(court_to_image @ flip, W, H)
+    ankle = np.array([12., 20., ANKLE_HEIGHT_FT])
+    p = k @ (rotation @ (ankle - (-100., 40., 35.)))
+    mapped = apply(np.linalg.inv(court_to_image @ flip), [p[:2] / p[2]])[0]
+    # The pixel maps beyond the ankle, away from the camera; the floor point under it is recovered.
+    assert mapped[0] * flip[0, 0] > 12.5
+    assert under_raised_point(mapped, camera, ANKLE_HEIGHT_FT) == pytest.approx((12. * flip[0, 0], 20.), abs=1e-6)
 
 
 def pose(ankles=None, box=None):

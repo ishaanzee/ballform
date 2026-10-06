@@ -719,6 +719,22 @@ def _coverage(h: np.ndarray, court: Template, ev: Evidence, step: float = .25) -
     return float(supported.sum() / inside.sum()), int(found), int(in_view)
 
 
+def _near_end_in_view(h: np.ndarray, court: Template, width: int, height: int) -> np.ndarray:
+    """The same court turned half a turn when its far end fills more of the view than its near end.
+
+    The court looks the same after a half turn about centre court, so a fit may land the
+    visible basket at y = length; the landmarks are all on the near half, so turn it there.
+    """
+    points, _ = _line_samples(court, 1.)
+    image = apply(h, points)
+    inside = np.all(np.isfinite(image), axis=1) & (image[:, 0] >= 0) & (image[:, 0] < width) \
+        & (image[:, 1] >= 0) & (image[:, 1] < height)
+    half = court.dims["length"] / 2
+    if np.sum(inside & (points[:, 1] > half)) <= np.sum(inside & (points[:, 1] < half)):
+        return h
+    return h @ np.array([[-1., 0., 0.], [0., -1., court.dims["length"]], [0., 0., 1.]])
+
+
 def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
     """Propose court landmarks for one BGR frame (any size).
 
@@ -763,6 +779,7 @@ def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
     diagnostics.update(method=label, support=round(support, 3), lines_found=found, lines_in_view=in_view)
     court_to_image = np.diag([1 / scale, 1 / scale, 1.]) @ h
     court_to_image /= np.linalg.norm(court_to_image)
+    court_to_image = _near_end_in_view(court_to_image, court, width, height)
     if support < MIN_SUPPORT or found < MIN_LINES:
         return fail(f"The best court fit only lands on {support:.0%} of the lines it expects in view "
                     f"({found} of {in_view} lines found), too little to propose. Mark the landmarks by hand, "
@@ -778,3 +795,52 @@ def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
                     "Mark the landmarks by hand.", support, court_to_image)
     diagnostics["seconds"] = round(time.perf_counter() - started, 2)
     return Proposal(True, None, support, standard, points, court_to_image, diagnostics)
+
+
+def pick_calibration(proposals: list[dict], width: int, height: int, standard: str = "nba",
+                     agree_ft: float = 12., min_agree: int = 3, min_share: float = .35) -> dict:
+    """Choose one frame's proposal from proposals on several frames of one clip.
+
+    proposals are `Proposal.to_dict()` results with their "frame". A broadcast camera
+    pans and zooms from one spot, so every correct fit recovers about the same camera
+    position, while wrong fits land anywhere. The accepted proposals whose camera lies
+    within agree_ft of the most others agree; at least min_agree of them, and min_share of
+    the accepted ones, must, or the clip is rejected (min_share is low enough for a clip
+    cut between two cameras). Of those, the best-supported is returned as settings
+    `court_landmarks`, with a "check" summary; else {"rejected": reason}. On the labeled
+    broadcast clips, correct fits of one clip put the camera within about 10 ft of each
+    other (it sat 70-130 ft from centre court and 25-40 ft up).
+    """
+    from app.court import camera_from_homography
+
+    court = template(standard)
+    cameras = []
+    for item in proposals:
+        if not item.get("ok") or item.get("court_to_image") is None:
+            continue
+        camera = camera_from_homography(np.asarray(item["court_to_image"]), width, height)
+        if camera is not None:
+            cameras.append((item, camera.center))
+    tried = len(proposals)
+    if not cameras:
+        return {"rejected": f"auto-detect proposed a court on none of the {tried} frames tried"}
+    # A fit and the same fit turned half a turn look the same; compare camera positions up to that turn.
+    centres = np.asarray([c for _, c in cameras])
+    turned = centres * (-1., -1., 1.) + (0., court.dims["length"], 0.)
+    distance = np.minimum(np.linalg.norm(centres[:, None] - centres[None], axis=2),
+                          np.linalg.norm(centres[:, None] - turned[None], axis=2))
+    agree = distance <= agree_ft
+    centre = int(np.argmax(agree.sum(axis=1)))
+    members = np.flatnonzero(agree[centre])
+    check = {"frames_tried": tried, "frames_proposed": len(cameras), "frames_agreeing": int(len(members)),
+             "camera_ft": [round(float(v), 1) for v in np.abs(centres[centre])]}
+    if len(members) < max(min_agree, min_share * len(cameras)):
+        return {"rejected": f"only {len(members)} of {len(cameras)} proposed frames agree on the camera position "
+                            f"({tried} frames tried)", "check": check}
+    # Seeking to the last frames of a file can fail, which would lose the whole mapping.
+    last = max(p["frame"] for p in proposals)
+    usable = [cameras[i][0] for i in members if cameras[i][0]["frame"] < last] or [cameras[i][0] for i in members]
+    item = max(usable, key=lambda p: p["confidence"])
+    check["support"] = round(float(item["confidence"]), 3)
+    return {"court_landmarks": {"standard": standard, "frame": int(item["frame"]), "points": item["points"],
+                                "source": "auto"}, "check": check}
