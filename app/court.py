@@ -521,7 +521,7 @@ class Takeoff:
 
 
 def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
-            min_rise: float = .2, keep: int = 3) -> Takeoff | None:
+            min_rise: float = .2, keep: int = 3, airborne: bool = False) -> Takeoff | None:
     """Find the last grounded samples before a jump.
 
     foot_y holds the lower foot's image y (larger is lower), with camera motion
@@ -532,6 +532,11 @@ def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
     `tolerance` torso lengths of the floor level are the take-off. A rise under
     `min_rise` torso lengths means no jump was seen (the shooter may have been
     on the floor at release).
+
+    With `airborne` (the feet were off the floor at release, see airborne_at),
+    the walk first goes back up to the top of the jump: a dunk is released at
+    the rim on the way down, after the feet's highest point. Reversing foot_y
+    (samples from the landing back to release) finds the landing the same way.
     """
     if not torso_px or torso_px <= 0:
         return None
@@ -539,10 +544,17 @@ def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
     indices = [i for i in range(len(foot_y) - 1, -1, -1) if foot_y[i] is not None and math.isfinite(foot_y[i])]
     if len(indices) < 2:
         return None
-    last = indices[0]
+    top = 0
+    if airborne:
+        for k in range(1, len(indices)):
+            if foot_y[indices[k]] > foot_y[indices[top]] + tol:
+                break
+            if foot_y[indices[k]] < foot_y[indices[top]]:
+                top = k
+    last = indices[top]
     floor = foot_y[last]
     walked = [last]
-    for i in indices[1:]:
+    for i in indices[top + 1:]:
         if foot_y[i] < floor - tol:
             break
         floor = max(floor, foot_y[i])
@@ -550,3 +562,18 @@ def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
     grounded = [i for i in walked if foot_y[i] >= floor - tol][:keep]
     rise = (floor - foot_y[last]) / torso_px
     return Takeoff(sorted(grounded), rise, rise >= min_rise)
+
+
+def airborne_at(foot_y: list[float | None], release: int, torso_px: float, min_rise: float = .2) -> bool:
+    """Whether the lower foot at sample `release` is clearly above where it was both before and after.
+
+    A foot that is lower in the image on both sides of release was off the floor
+    at release; a planted foot (a set shot, a player walking toward or away from
+    the camera) is not lower on both sides.
+    """
+    at = foot_y[release] if 0 <= release < len(foot_y) else None
+    if at is None or not math.isfinite(at) or not torso_px or torso_px <= 0:
+        return False
+    before = [y for y in foot_y[:release] if y is not None and math.isfinite(y)]
+    after = [y for y in foot_y[release + 1:] if y is not None and math.isfinite(y)]
+    return bool(before and after and min(max(before), max(after)) - at >= min_rise * torso_px)

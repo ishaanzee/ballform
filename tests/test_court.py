@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.court import (ANKLE_HEIGHT_FT, STANDARDS, apply, camera_from_homography, fit, floor_point,
+from app.court import (ANKLE_HEIGHT_FT, STANDARDS, airborne_at, apply, camera_from_homography, fit, floor_point,
                        general_position, parse_landmarks, template, template_json, three_point_margin, takeoff,
                        under_raised_point, vertical_plane_distance, zone)
 
@@ -170,6 +170,23 @@ def test_takeoff_finds_the_last_grounded_frames_before_the_jump():
 def test_takeoff_reports_no_jump_for_a_set_shot():
     jump = takeoff([500, 501, 499, 500], torso_px=100)
     assert not jump.jumped
+
+
+def test_takeoff_walks_back_over_the_top_of_a_jump_released_on_the_way_down():
+    # Plant, jump to the top (440), release on the way down (460) as a dunk at the rim.
+    ys = [480, 500, 500, 501, 490, 460, 440, 445, 460]
+    assert not takeoff(ys, torso_px=100).jumped
+    jump = takeoff(ys, torso_px=100, airborne=True)
+    assert jump.jumped and jump.grounded == [1, 2, 3]
+    # Reversed (landing back to release), the same walk finds the landing.
+    landing = [460, 470, 490, 505, 505, 504][::-1]
+    assert takeoff(landing, torso_px=100, airborne=True).grounded == [0, 1, 2]
+
+
+def test_airborne_needs_the_foot_lower_on_both_sides_of_release():
+    assert airborne_at([500, 470, 450, 470, 500], 2, torso_px=100)
+    assert not airborne_at([500, 500, 500, 520, 540], 2, torso_px=100)  # walking toward the camera
+    assert not airborne_at([500, 470, 450], 2, torso_px=100)  # nothing after release
 
 
 def test_takeoff_skips_missing_feet_and_needs_two_samples():

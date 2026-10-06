@@ -555,20 +555,46 @@ def _torso_px(pose: PoseFrame, width: int, height: int) -> float | None:
     return math.dist(shoulder, hip)
 
 
-def _grounded_position(player_frames: list[dict], track_id: int, near: dict, court_map, window: float = .8):
+def _floor_spot(samples: list, used: list[int], court_map):
+    """Median court position (feet) of the feet on the given samples, and how the feet were found."""
+    from app.court import ANKLE_HEIGHT_FT, floor_point, under_raised_point
+
+    points, methods = [], set()
+    for index in used:
+        frame, pose = samples[index]
+        found = floor_point(pose, court_map.width, court_map.height)
+        court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
+        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
+        if camera is not None:
+            court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
+        if court_point is not None:
+            points.append(court_point)
+            methods.add(found[1])
+    if not points:
+        return None
+    return tuple(float(v) for v in np.median(np.asarray(points), axis=0)), " / ".join(sorted(methods))
+
+
+def _grounded_position(player_frames: list[dict], track_id: int, near: dict, court_map, window: float = .8,
+                       after: float = 0.):
     """Court position (feet) of a player on the floor at or just before release, or a reason it is unavailable.
 
     An airborne foot maps through the floor homography to a point beyond the
     player, so for a jump the last grounded frames before take-off are used.
+    With `after` seconds of frames past release, a player whose feet were off
+    the floor at release is followed back over the top of the jump (a dunk is
+    released on the way down) and the landing spot is found too.
     """
-    from app.court import ANKLE_HEIGHT_FT, floor_point, lowest_foot_y, takeoff, under_raised_point
+    from app.court import airborne_at, floor_point, lowest_foot_y, takeoff
 
     width, height = court_map.width, court_map.height
     samples = sorted(((frame, pose) for frame in player_frames
-                      if 0 <= near["time_s"] - frame["time_s"] <= window
+                      if -after <= near["time_s"] - frame["time_s"] <= window
                       for pose in frame["players"] if pose.track_id == track_id),
                      key=lambda item: item[0]["time_s"])
-    if not samples or samples[-1][0] is not near:
+    release = next((i for i, (frame, _) in enumerate(samples) if frame is near), None)
+    if release is None:
         return "the player was not tracked on the release frame"
     if court_map.reliable(near["frame"]) is None:
         return "the court mapping was not reliable on the release frame"
@@ -579,29 +605,27 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
         foot_y.append(steady[1] if steady else None)
         if (length := _torso_px(pose, width, height)) is not None:
             torso.append(length)
-    jump = takeoff(foot_y, float(np.median(torso)) if torso else 0.)
+    torso_px = float(np.median(torso)) if torso else 0.
+    airborne = airborne_at(foot_y, release, torso_px)
+    jump = takeoff(foot_y[:release + 1], torso_px, airborne=airborne)
     if jump is None:
         return "the feet were not visible before release"
-    used = jump.grounded if jump.jumped else [len(samples) - 1]
-    points, methods = [], set()
-    for index in used:
-        frame, pose = samples[index]
-        found = floor_point(pose, width, height)
-        court_point = court_map.to_court(frame["frame"], found[0]) if found else None
-        # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
-        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
-        if camera is not None:
-            court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
-        if court_point is not None:
-            points.append(court_point)
-            methods.add(found[1])
-    if not points:
+    used = jump.grounded if jump.jumped else [release]
+    found = _floor_spot(samples, used, court_map)
+    if found is None:
         return "no grounded frame had a reliable court mapping"
     first = samples[used[0]][0]
-    return (tuple(float(v) for v in np.median(np.asarray(points), axis=0)),
-            {"jumped": jump.jumped, "rise_torso": jump.rise_torso, "frames": [samples[i][0]["frame"] for i in used],
-             "before_release_s": near["time_s"] - samples[used[-1]][0]["time_s"],
-             "first_frame": first["frame"], "method": " / ".join(sorted(methods))})
+    detail = {"jumped": jump.jumped, "rise_torso": jump.rise_torso, "frames": [samples[i][0]["frame"] for i in used],
+              "before_release_s": near["time_s"] - samples[used[-1]][0]["time_s"],
+              "first_frame": first["frame"], "method": found[1], "airborne": airborne, "landing": None}
+    land = takeoff(foot_y[release:][::-1], torso_px, airborne=airborne) if release < len(samples) - 1 else None
+    if land is not None and land.jumped:
+        landed = [len(samples) - 1 - i for i in land.grounded]
+        spot = _floor_spot(samples, landed, court_map)
+        if spot is not None:
+            detail["landing"] = {"spot": spot[0], "frames": sorted(samples[i][0]["frame"] for i in landed),
+                                 "after_release_s": samples[min(landed)][0]["time_s"] - near["time_s"]}
+    return found[0], detail
 
 
 def _contest_points(player_frames: list[dict], near: dict, defender_id: int, balls: list[Detection],
@@ -627,6 +651,20 @@ def _contest_points(player_frames: list[dict], near: dict, defender_id: int, bal
     return hands
 
 
+# Frames after release searched for a rim finish's landing (a dunker can hang on the rim).
+LANDING_WINDOW_S = 1.
+# A layup, dunk or tip taking off farther out than this is a mistyped shot: it keeps the take-off spot.
+RIM_FINISH_REACH_FT = 15.
+
+
+def _nearest_to_rim(start, end, rim) -> tuple[float, float]:
+    """The point of the floor segment from start to end that passes closest to the floor point under the rim."""
+    a, b, r = (np.asarray(p, dtype=float) for p in (start, end, rim))
+    length2 = float((b - a) @ (b - a))
+    t = 0. if length2 < 1e-9 else min(1., max(0., float((r - a) @ (b - a)) / length2))
+    return tuple(float(v) for v in a + (b - a) * t)
+
+
 def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls: list[Detection], court_map,
                       summary: dict | None = None) -> None:
     """Add floor measurements in feet next to the torso-length metrics, which stay unchanged."""
@@ -650,13 +688,21 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
         if near is None or shooter_id is None:
             evidence.append("Court: shot distance unavailable because the shooter was not identified at release.")
             continue
-        shooter = _grounded_position(player_frames, shooter_id, near, court_map)
+        rim_finish = shot.shot_type in RIM_TYPES
+        shooter = _grounded_position(player_frames, shooter_id, near, court_map,
+                                     after=LANDING_WINDOW_S if rim_finish else 0.)
         if isinstance(shooter, str):
             evidence.append(f"Court: shot distance unavailable because {shooter}.")
             continue
         spot, detail = shooter
         # Distance, zone and court position are taken at the basket of the shooter's half.
         on_half = near_half(spot, court)
+        take_off_ft, landing = math.dist(on_half, court.rim), detail["landing"]
+        # Play-by-play places a layup, dunk or tip where it is finished at the basket, not at the take-off:
+        # the shooter is in the air between take-off and landing and finishes as that path passes the rim.
+        finish = rim_finish and landing is not None and take_off_ft <= RIM_FINISH_REACH_FT
+        if finish:
+            on_half = _nearest_to_rim(on_half, near_half(landing["spot"], court), court.rim)
         distance = math.dist(on_half, court.rim)
         shot_zone = zone(on_half, court)
         metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
@@ -669,6 +715,10 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
         else:
             where = (f"the shooter's feet ({detail['method']}) on the release frame; no take-off was detected, "
                      "so the shot was treated as taken from the floor")
+        if finish:
+            where = (f"the point where the shooter's path on the floor passes closest to the basket, between the "
+                     f"take-off spot {take_off_ft:.1f} ft out ({where}) and the landing "
+                     f"{landing['after_release_s']:.2f} s after release (frame {landing['frames'][0]})")
         margin = three_point_margin(on_half, court)
         evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from {where}. "
                         f"{court.dims['label']} {'zone ' + shot_zone.replace('_', ' ') if shot_zone else 'zone unavailable (off the calibrated half)'}"

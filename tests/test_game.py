@@ -296,7 +296,7 @@ def test_rim_attempt_reports_separation_at_the_gather_not_the_change():
     assert shot.game["metrics"]["separation_change_torso"] is None
 
 
-def _court_map():
+def _court_map(length=30):
     from app.camera_motion import CourtMap, follow_court
     from app.court import apply, fit, template
     from tests_support_court import synthetic_camera
@@ -304,8 +304,8 @@ def _court_map():
     ids = ["lane_base_left", "lane_base_right", "ft_left", "ft_right", "three_top", "half_right", "half_left"]
     image = apply(court_to_image, [template("nba").landmarks[key] for key in ids])
     calibration = fit([(key, (x / 1920, y / 1080)) for key, (x, y) in zip(ids, image)], 1920, 1080)
-    frames = follow_court(None, list(range(30)), 0, calibration.image_to_court, template("nba"), {}, [],
-                          1920, 1080, 30, fixed=True)
+    frames = follow_court(None, list(range(length)), 0, calibration.image_to_court, template("nba"), {}, [],
+                          1920, 1080, length, fixed=True)
     return CourtMap(calibration, frames, 0, 1920, 1080), court_to_image
 
 
@@ -374,6 +374,47 @@ def test_set_shot_uses_the_release_frame_feet():
     game, _ = _court_shot(jump=False)
     assert game["metrics"]["shot_distance_ft"] == pytest.approx(24.3, abs=.15)
     assert "no take-off was detected" in " ".join(game["evidence"])
+
+
+def _rim_finish(shot_type="dunk", take_off=(0., 13.25), land=(0., 8.25), release=30):
+    from app.game import add_court_metrics
+    court_map, court_to_image = _court_map(60)
+    frames = []
+    for frame in range(60):
+        # Plant at take_off, in the air over frames 15-36 drifting toward the rim, then down at land.
+        share = min(1., max(0., (frame - 15) / 21))
+        spot = tuple(np.asarray(take_off) + (np.asarray(land) - np.asarray(take_off)) * share)
+        lift = 4 * 70. * share * (1 - share)
+        frames.append({"frame": frame, "time_s": frame / 30,
+                       "players": [_standing(frame, 1, spot, court_to_image, lift)]})
+    # A dunk is released at the rim on the way down, after the top of the jump (frame 25).
+    game = {"release_frame": release, "players": {"shooter_track_id": 1, "defender_track_id": None},
+            "metrics": {}, "evidence": [], "limitations": []}
+    shot = ShotResult(1, 0., 1., 1.5, "made", .9, [], {}, game=game, shot_type=shot_type)
+    add_court_metrics([shot], frames, [], court_map)
+    return game
+
+
+def test_dunk_distance_is_where_the_path_passes_the_basket_not_the_take_off():
+    game = _rim_finish()
+    # Take-off 8 ft out, landing 3 ft out: play-by-play would call it a 3-foot dunk.
+    assert game["metrics"]["shot_distance_ft"] == pytest.approx(3., abs=.2)
+    assert game["metrics"]["shot_zone"] == "paint"
+    assert "passes closest to the basket" in " ".join(game["evidence"])
+    assert "take-off spot 8.0 ft out" in " ".join(game["evidence"])
+
+
+def test_layup_passing_under_the_rim_is_measured_at_its_closest_point():
+    # A reverse layup: take-off on one side, landing on the other.
+    game = _rim_finish("layup or dunk", take_off=(-6., 9.25), land=(4., 4.25))
+    assert game["metrics"]["shot_distance_ft"] < 1.5
+
+
+def test_jump_shot_keeps_the_take_off_spot_and_mistyped_long_finishes_too():
+    jump = _rim_finish("jump shot", release=22)
+    assert jump["metrics"]["shot_distance_ft"] == pytest.approx(8., abs=.2)
+    far = _rim_finish("layup or dunk", take_off=(0., 25.25), land=(0., 20.25))
+    assert far["metrics"]["shot_distance_ft"] == pytest.approx(20., abs=.2)
 
 
 def test_court_metrics_withhold_when_the_shooter_is_unknown():
