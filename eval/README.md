@@ -61,9 +61,10 @@ Once thresholds are tuned against these clips, they stop being an honest test. P
 uv run --inexact ballform-eval                       # score the saved job results
 uv run --inexact ballform-eval --rerun               # re-analyze every labeled clip with the current code
 uv run --inexact ballform-eval --labels eval/holdout.csv
+uv run --inexact ballform-eval --replay               # rescore the last rerun's measurements (no inference)
 ```
 
-`--rerun` writes to `eval/runs/` and leaves the jobs untouched. Each run prints a summary and per-shot lines, and writes `eval/report.json`. Copy that report to `eval/baseline-<date>.json` before changing code, so you can compare afterwards. Jobs made before `settings.json` existed are rerun without their rim or court calibration, and the script says so.
+`--rerun` writes to `eval/runs/` and leaves the jobs untouched. It also saves each clip's frame-loop measurements (`scoring_inputs.pkl.gz`), and `--replay` rescores those with the current scoring code in seconds, in parallel, without running any model. Replay is valid for changes after inference (shots, outcomes, game and court metrics); rerun after changing detection, pose or tracking. Court landmarks in a job's `settings.json` are refit on every replay. Each run prints a summary and per-shot lines, and writes `eval/report.json`. Copy that report to `eval/baseline-<date>.json` before changing code, so you can compare afterwards. Jobs made before `settings.json` existed are rerun without their rim or court calibration, and the script says so.
 
 What the summary means:
 

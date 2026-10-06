@@ -10,8 +10,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import statistics
 import sys
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -221,6 +224,9 @@ def _settings(job_dir: Path) -> dict:
 def rerun(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
     from app.analyzer import analyze_video
 
+    # Keep the frame loop's measurements so --replay can rescore without inference.
+    os.environ["BALLFORM_SAVE_SCORING_INPUTS"] = "1"
+
     job_dir = jobs_dir / job_id
     source = next(iter(sorted(job_dir.glob("input.*"))), None)
     if source is None:
@@ -236,22 +242,55 @@ def rerun(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
                          court_landmarks=settings.get("court_landmarks"))
 
 
-def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: Path | None = None) -> list[ClipResult]:
+def replay(job_id: str, jobs_dir: Path, runs_dir: Path) -> dict:
+    """Rescore a rerun's saved measurements with the current scoring code (no inference).
+
+    Court landmarks in the job's settings.json are refit each time, so a calibration
+    added after the rerun is used too.
+    """
+    from app.analyzer import SCORING_INPUTS, fit_calibration, load_scoring_inputs, score_clip
+
+    job_dir = jobs_dir / job_id
+    inputs = load_scoring_inputs(runs_dir / job_id / SCORING_INPUTS)
+    landmarks = _settings(job_dir).get("court_landmarks")
+    if landmarks and inputs["game_mode"]:
+        inputs["court_landmarks"], inputs["calibration"] = fit_calibration(landmarks, inputs["width"], inputs["height"])
+    source = next(iter(sorted(job_dir.glob("input.*"))), None)
+    scored = score_clip(inputs, None, source)
+    return {"shots": [shot.to_dict() for shot in scored["shots"]]}
+
+
+def _load(job_id: str, jobs_dir: Path, how: str, runs_dir: Path) -> dict:
+    if how == "rerun":
+        print(f"  analyzing {job_id} ...", file=sys.stderr)
+        return rerun(job_id, jobs_dir, runs_dir)
+    if how == "replay":
+        return replay(job_id, jobs_dir, runs_dir)
+    return json.loads((jobs_dir / job_id / "result.json").read_text())
+
+
+def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: Path | None = None,
+             how: str = "saved", workers: int = 1) -> list[ClipResult]:
+    """Match each labeled job's shots. ``how`` is "saved" (the job's result.json),
+    "rerun" (full re-analysis into ``runs_dir``) or "replay" (rescore ``runs_dir``'s
+    saved measurements)."""
     by_job: dict[str, list[Label]] = {}
     for label in labels:
         by_job.setdefault(label.job_id, []).append(label)
-    clips = []
-    for job_id, job_labels in by_job.items():
-        try:
-            if runs_dir is not None:
-                print(f"  analyzing {job_id} ...", file=sys.stderr)
-                result = rerun(job_id, jobs_dir, runs_dir)
-            else:
-                result = json.loads((jobs_dir / job_id / "result.json").read_text())
-        except (OSError, ValueError, RuntimeError) as exc:
-            clips.append(ClipResult(job_id, error=f"{type(exc).__name__}: {exc}"))
-            continue
-        clips.append(ClipResult(job_id, match_shots(job_labels, result.get("shots") or [], tolerance_s)))
+    with ProcessPoolExecutor(workers) if workers > 1 else nullcontext() as pool:
+        if pool is None:
+            pending = {job_id: None for job_id in by_job}
+        else:
+            pending = {job_id: pool.submit(_load, job_id, jobs_dir, how, runs_dir) for job_id in by_job}
+        clips = []
+        for job_id, job_labels in by_job.items():
+            try:
+                future = pending[job_id]
+                result = future.result() if future else _load(job_id, jobs_dir, how, runs_dir)
+            except (OSError, ValueError, RuntimeError, EOFError, KeyError) as exc:
+                clips.append(ClipResult(job_id, error=f"{type(exc).__name__}: {exc}"))
+                continue
+            clips.append(ClipResult(job_id, match_shots(job_labels, result.get("shots") or [], tolerance_s)))
     return clips
 
 
@@ -279,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rerun", action="store_true",
                         help="re-analyze each labeled clip with its saved settings into eval/runs/ "
                              "(use after changing the code) instead of scoring the saved results")
+    parser.add_argument("--replay", action="store_true",
+                        help="rescore the measurements saved by the last --rerun with the current scoring code; "
+                             "seconds instead of minutes, valid while the frame loop (models, tracking) is unchanged")
+    parser.add_argument("--runs", type=Path, default=EVAL_DIR / "runs",
+                        help="where --rerun writes and --replay reads (default eval/runs)")
+    parser.add_argument("--workers", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 2)),
+                        help="parallel processes for --replay")
     parser.add_argument("--tolerance", type=float, default=.75, help="max release-time gap to match a shot, seconds")
     parser.add_argument("--out", type=Path, default=EVAL_DIR / "report.json")
     args = parser.parse_args(argv)
@@ -288,7 +334,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if not labels:
         parser.error(f"no labels in {args.labels}")
-    clips = evaluate(labels, args.jobs, args.tolerance, EVAL_DIR / "runs" if args.rerun else None)
+    if args.rerun and args.replay:
+        parser.error("choose --rerun or --replay")
+    how = "rerun" if args.rerun else "replay" if args.replay else "saved"
+    clips = evaluate(labels, args.jobs, args.tolerance, args.runs, how, args.workers if args.replay else 1)
     summary, rows = summarize(clips), shot_rows(clips)
     _print(summary, rows)
     args.out.parent.mkdir(parents=True, exist_ok=True)

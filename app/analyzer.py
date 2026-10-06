@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import gzip
 import json
 import hashlib
 import logging
 import os
+import pickle
 import shutil
 import subprocess
 import tempfile
@@ -54,6 +56,7 @@ SKELETON = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23),
             (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
 
 
+SCORING_INPUTS = "scoring_inputs.pkl.gz"
 _VERIFIED_MODELS: dict[Path, tuple[int, int]] = {}
 
 
@@ -602,6 +605,139 @@ def _scoring_rim(profile: str, rim_marked: bool, rim, tracked_rims: dict, detect
     return (detected_rims, "detected") if detected_rims else (None, None)
 
 
+def fit_calibration(court_landmarks: dict, width: int, height: int):
+    """Parse saved court landmarks and fit the court; returns (landmarks, calibration)."""
+    landmarks = parse_landmarks(court_landmarks)
+    calibration = fit_court(landmarks["points"], width, height, landmarks["standard"])
+    calibration.source = landmarks["source"]
+    return landmarks, calibration
+
+
+def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
+               report: Callable[[float, str], None] = lambda _value, _message: None) -> dict:
+    """Everything after per-frame inference: identities, rims, shots, game and court metrics.
+
+    ``inputs`` holds the frame loop's measurements, so a saved copy (``save_scoring_inputs``)
+    can be scored again with changed scoring code and no model inference. With
+    ``output_dir`` None nothing is written.
+    """
+    fps, width, height, total, frame_no = (inputs[k] for k in ("fps", "width", "height", "total", "frame_no"))
+    analyzed_fps, stride, mode, handedness, profile, game_mode = (
+        inputs[k] for k in ("analyzed_fps", "stride", "mode", "handedness", "profile", "game_mode"))
+    rim, rim_marked, auto_rim, tracked_rims = (inputs[k] for k in ("rim", "rim_marked", "auto_rim", "tracked_rims"))
+    cut_frames, balls, poses, player_frames, flows, flow_rims = (
+        inputs[k] for k in ("cut_frames", "balls", "poses", "player_frames", "flows", "flow_rims"))
+    calibration, court_landmarks = inputs["calibration"], inputs["court_landmarks"]
+    court_seconds = None
+    observed_balls = list(balls)
+    handler_method = os.environ.get("BALLFORM_HANDLER", "smoothed")
+    if handler_method not in {"smoothed", "online"}:
+        raise ValueError("BALLFORM_HANDLER must be 'smoothed' or 'online'.")
+    stitched: dict[int, int] = {}
+    if game_mode:
+        edges = [0, *cut_frames, frame_no + 1]
+        segments = [[f for f in player_frames if start <= f["frame"] < end] for start, end in zip(edges, edges[1:])]
+        # Rejoin fragments of the same player before anything reads identities
+        # (handler decoding, game analysis, review labels). Identities reset at cuts.
+        for segment in segments:
+            stitched.update(stitch_tracks(segment, width / height, analyzed_fps))
+        for frame_data in player_frames:
+            online = frame_data["handler"]
+            if online is not None and online.track_id in stitched:
+                online = HandlerDecision(stitched[online.track_id], online.source)
+            frame_data["handler_online"] = frame_data["handler"] = online
+        if handler_method == "smoothed":
+            for segment in segments:
+                for frame_data, decision in zip(segment, decode_handlers(segment, width / height)):
+                    frame_data["handler"] = decision
+        # Keep measured inputs for scoring review. The inferred handler only
+        # cross-checks the shooter of attempts found without raised-hand release
+        # contact (app/shots.py); it never creates or removes a shot.
+        if output_dir is not None:
+            (output_dir / "observations.json").write_text(json.dumps({
+                "fps": fps, "width": width, "height": height, "cuts": cut_frames,
+                "balls": [asdict(b) for b in observed_balls],
+                "players": [{"frame": f["frame"], "time_s": f["time_s"],
+                             "players": [asdict(p) for p in f["players"]],
+                             "handler": asdict(f["handler"]) if f["handler"] else None,
+                             "handler_online": asdict(f["handler_online"]) if f["handler_online"] else None,
+                             "possession": f["possession"], "unposed": f["unposed"], "events": f["events"]}
+                            for f in player_frames],
+            }, default=lambda value: float(value)))
+    detected_rims: dict[int, tuple[float, float, float, float]] = {}
+    rim_stats: dict = {}
+    if auto_rim:
+        detected_rims, rim_stats = track_detected_rims(
+            {f["frame"]: f["rims"] for f in player_frames}, cut_frames, step=stride,
+            max_gap_frames=max(stride, round(fps * .5)))
+        # Net flow was measured around each frame's most confident rim; keep it
+        # only where that was the hoop finally chosen.
+        for frame_no_, box in flow_rims.items():
+            chosen = detected_rims.get(frame_no_)
+            if box is not None and (chosen is None or box_iou(box, chosen) < .3):
+                flows[frame_no_] = {"net": 0.0, "reference": 0.0}
+    normalized_flow = _normalize_net_flow(flows)
+    scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
+    shots = []
+    boundaries = [0, *cut_frames, frame_no + 1]
+    for start, end in zip(boundaries, boundaries[1:]):
+        segment_balls = _interpolate_track([b for b in balls if start <= b.frame < end], max(2, round(fps * .25)))
+        segment_poses = [p for p in poses if start <= p.frame < end]
+        segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
+                                     aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
+        if game_mode:
+            segment_shots = find_attempts(segment_shots, segment_balls,
+                                          [f for f in player_frames if start <= f["frame"] < end],
+                                          fps, scoring_rim, width / height, normalized_flow)
+        for shot in segment_shots:
+            if scoring_rim is None:
+                shot.evidence = ["Outcome unavailable: no rim was detected or marked."
+                                 if item == "Outcome unavailable because the rim was not marked" else item
+                                 for item in shot.evidence]
+            shot.number = len(shots) + 1
+            shots.append(shot)
+    game_summary = None
+    if mode == "one_on_one":
+        # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
+        for shot in shots:
+            shot.metrics = {}
+            shot.cues = []
+        game_summary = analyze_game_shots(shots, player_frames, observed_balls, fps, width / height,
+                                          min_torso=10 / height)
+    court_map = None
+    if calibration is not None:
+        report(.9, "Following the calibrated court through camera motion")
+        court_started = time.perf_counter()
+        court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
+                                    cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
+        add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
+        # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
+        trajectories = floor_trajectories(player_frames, court_map, cut_frames)
+        if output_dir is not None:
+            (output_dir / "court.json").write_text(json.dumps({**court_json(court_map),
+                                                               "trajectories": trajectories_json(trajectories)}))
+        court_seconds = time.perf_counter() - court_started
+    view, view_confidence = classify_view(poses, aspect_ratio=width / height)
+    if game_mode:
+        view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
+    return {"observed_balls": observed_balls, "handler_method": handler_method, "stitched": stitched,
+            "detected_rims": detected_rims, "rim_stats": rim_stats, "scoring_rim": scoring_rim,
+            "rim_source": rim_source, "shots": shots, "game_summary": game_summary, "court_map": court_map,
+            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds}
+
+
+def save_scoring_inputs(inputs: dict, path: Path) -> None:
+    """Save ``score_clip`` inputs; the review-only drawn poses are left out."""
+    frames = [{k: v for k, v in f.items() if k != "drawn_poses"} for f in inputs["player_frames"]]
+    with gzip.open(path, "wb", compresslevel=3) as handle:
+        pickle.dump({**inputs, "player_frames": frames}, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_scoring_inputs(path: Path) -> dict:
+    with gzip.open(path, "rb") as handle:
+        return pickle.load(handle)
+
+
 def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, float, float] | None,
                   progress: Callable[[float, str], None] | None = None,
                   mode: str = "form", handedness: str = "right", camera: str = "courtside",
@@ -662,9 +798,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     calibration = None
     if court_landmarks is not None and game_mode:
         # Fit before the long frame loop so an unusable marking fails fast.
-        court_landmarks = parse_landmarks(court_landmarks)
-        calibration = fit_court(court_landmarks["points"], width, height, court_landmarks["standard"])
-        calibration.source = court_landmarks["source"]
+        court_landmarks, calibration = fit_calibration(court_landmarks, width, height)
     # Preserve more release/contest detail than the original 15 FPS pipeline.
     stride = max(1, int(np.ceil(fps / 30.0)))
     analyzed_fps = fps / stride
@@ -790,95 +924,23 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                 report(min(.88, .08 + .78 * frame_no / max(1, total)), f"Analyzing frame {frame_no:,} of {total:,}")
     stage_times["frame_processing"] = time.perf_counter() - stage_started
     stage_started = time.perf_counter()
-    observed_balls = list(balls)
-    handler_method = os.environ.get("BALLFORM_HANDLER", "smoothed")
-    if handler_method not in {"smoothed", "online"}:
-        raise ValueError("BALLFORM_HANDLER must be 'smoothed' or 'online'.")
-    stitched: dict[int, int] = {}
-    if game_mode:
-        edges = [0, *cut_frames, frame_no + 1]
-        segments = [[f for f in player_frames if start <= f["frame"] < end] for start, end in zip(edges, edges[1:])]
-        # Rejoin fragments of the same player before anything reads identities
-        # (handler decoding, game analysis, review labels). Identities reset at cuts.
-        for segment in segments:
-            stitched.update(stitch_tracks(segment, width / height, analyzed_fps))
-        for frame_data in player_frames:
-            online = frame_data["handler"]
-            if online is not None and online.track_id in stitched:
-                online = HandlerDecision(stitched[online.track_id], online.source)
-            frame_data["handler_online"] = frame_data["handler"] = online
-        if handler_method == "smoothed":
-            for segment in segments:
-                for frame_data, decision in zip(segment, decode_handlers(segment, width / height)):
-                    frame_data["handler"] = decision
-        # Keep measured inputs for scoring review. The inferred handler only
-        # cross-checks the shooter of attempts found without raised-hand release
-        # contact (app/shots.py); it never creates or removes a shot.
-        (output_dir / "observations.json").write_text(json.dumps({
-            "fps": fps, "width": width, "height": height, "cuts": cut_frames,
-            "balls": [asdict(b) for b in observed_balls],
-            "players": [{"frame": f["frame"], "time_s": f["time_s"],
-                         "players": [asdict(p) for p in f["players"]],
-                         "handler": asdict(f["handler"]) if f["handler"] else None,
-                         "handler_online": asdict(f["handler_online"]) if f["handler_online"] else None,
-                         "possession": f["possession"], "unposed": f["unposed"], "events": f["events"]}
-                        for f in player_frames],
-        }, default=lambda value: float(value)))
-    detected_rims: dict[int, tuple[float, float, float, float]] = {}
-    rim_stats: dict = {}
-    if auto_rim:
-        detected_rims, rim_stats = track_detected_rims(
-            {f["frame"]: f["rims"] for f in player_frames}, cut_frames, step=stride,
-            max_gap_frames=max(stride, round(fps * .5)))
-        # Net flow was measured around each frame's most confident rim; keep it
-        # only where that was the hoop finally chosen.
-        for frame_no_, box in flow_rims.items():
-            chosen = detected_rims.get(frame_no_)
-            if box is not None and (chosen is None or box_iou(box, chosen) < .3):
-                flows[frame_no_] = {"net": 0.0, "reference": 0.0}
-    normalized_flow = _normalize_net_flow(flows)
-    scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
-    shots = []
-    boundaries = [0, *cut_frames, frame_no + 1]
-    for start, end in zip(boundaries, boundaries[1:]):
-        segment_balls = _interpolate_track([b for b in balls if start <= b.frame < end], max(2, round(fps * .25)))
-        segment_poses = [p for p in poses if start <= p.frame < end]
-        segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
-                                     aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
-        if game_mode:
-            segment_shots = find_attempts(segment_shots, segment_balls,
-                                          [f for f in player_frames if start <= f["frame"] < end],
-                                          fps, scoring_rim, width / height, normalized_flow)
-        for shot in segment_shots:
-            if scoring_rim is None:
-                shot.evidence = ["Outcome unavailable: no rim was detected or marked."
-                                 if item == "Outcome unavailable because the rim was not marked" else item
-                                 for item in shot.evidence]
-            shot.number = len(shots) + 1
-            shots.append(shot)
-    game_summary = None
-    if mode == "one_on_one":
-        # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
-        for shot in shots:
-            shot.metrics = {}
-            shot.cues = []
-        game_summary = analyze_game_shots(shots, player_frames, observed_balls, fps, width / height,
-                                          min_torso=10 / height)
-    court_map = None
-    if calibration is not None:
-        report(.9, "Following the calibrated court through camera motion")
-        court_started = time.perf_counter()
-        court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
-                                    cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
-        add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
-        # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
-        trajectories = floor_trajectories(player_frames, court_map, cut_frames)
-        (output_dir / "court.json").write_text(json.dumps({**court_json(court_map),
-                                                           "trajectories": trajectories_json(trajectories)}))
-        stage_times["court_calibration"] = time.perf_counter() - court_started
-    view, view_confidence = classify_view(poses, aspect_ratio=width / height)
-    if game_mode:
-        view, view_confidence = profile, 0.0  # User-selected profile, not inferred calibration.
+    inputs = {"fps": fps, "width": width, "height": height, "total": total, "frame_no": frame_no,
+              "analyzed_fps": analyzed_fps, "stride": stride, "mode": mode, "handedness": handedness,
+              "profile": profile, "rim": rim, "rim_marked": rim_marked, "auto_rim": auto_rim,
+              "tracked_rims": tracked_rims, "cut_frames": cut_frames, "balls": balls, "poses": poses,
+              "player_frames": player_frames, "flows": flows, "flow_rims": flow_rims,
+              "calibration": calibration, "court_landmarks": court_landmarks, "game_mode": game_mode}
+    if os.environ.get("BALLFORM_SAVE_SCORING_INPUTS"):
+        # Saved before scoring mutates identities, so a replay starts from the same state.
+        save_scoring_inputs(inputs, output_dir / SCORING_INPUTS)
+    scored = score_clip(inputs, output_dir, input_path, report)
+    (observed_balls, handler_method, stitched, detected_rims, rim_stats, scoring_rim, rim_source, shots,
+     game_summary, court_map, view, view_confidence) = (
+        scored[k] for k in ("observed_balls", "handler_method", "stitched", "detected_rims", "rim_stats",
+                            "scoring_rim", "rim_source", "shots", "game_summary", "court_map", "view",
+                            "view_confidence"))
+    if scored["court_seconds"] is not None:
+        stage_times["court_calibration"] = scored["court_seconds"]
     stage_times["scoring_and_observations"] = time.perf_counter() - stage_started
 
     report(.92, "Rendering review video")
