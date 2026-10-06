@@ -17,6 +17,9 @@ from app.basketball import RIM_CLASS
 
 RimBox = tuple[float, float, float, float]  # normalized x, y, w, h
 MIN_CONFIDENCE = .5
+# Two rim detections in one frame covering this much of the smaller box are
+# one hoop: the ball at the rim gave 0.43 and 0.75 (f6f0, 3e78).
+SAME_HOOP_OVERLAP = .3
 
 
 class RimTracker:
@@ -146,6 +149,14 @@ def box_iou(a: RimBox, b: RimBox) -> float:
     return ix * iy / union if union > 0 else 0.
 
 
+def _overlap(a: RimBox, b: RimBox) -> float:
+    """Intersection over the smaller box's area."""
+    ix = max(0., min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
+    iy = max(0., min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
+    smaller = min(a[2] * a[3], b[2] * b[3])
+    return ix * iy / smaller if smaller > 0 else 0.
+
+
 def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int = 1,
                         max_gap_frames: int = 15) -> tuple[dict[int, RimBox], dict]:
     """Link per-frame rim detections into hoops and keep the dominant hoop per camera segment.
@@ -170,8 +181,15 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
         tracks: list[list[tuple[int, float, RimBox]]] = []
         for frame in segment:
             used = set()
+            kept: list[RimBox] = []
             for conf, box in sorted(detections[frame], reverse=True):
                 box = xywh(box)
+                # The ball at the rim can add a second, overlapping hoop box (ball
+                # and rim together). Starting a track from it split the hoop just
+                # as the ball arrived (3e78, f6f0), losing the rim for the outcome.
+                if any(_overlap(box, other) >= SAME_HOOP_OVERLAP for other in kept):
+                    continue
+                kept.append(box)
                 best, best_cost = None, math.inf
                 for index, track in enumerate(tracks):
                     last_frame, _, last = track[-1]

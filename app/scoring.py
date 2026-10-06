@@ -25,6 +25,16 @@ ARRIVAL_S = 1.
 # rim: 9.4 in ball / 18 in rim is 0.26 rim widths. A centre crossing closer to
 # either edge than this hit the rim (labeled makes crossed at 0.34-0.69).
 PASS_MARGIN = .25
+# Such a ball seen falling on past the rim, its centre still that close to or
+# beyond the edge it crossed on every confident detection (at least
+# EDGE_FALL_SEEN) down to EDGE_FALL_DEPTH rim-box heights below the rim's top
+# within EDGE_FALL_S, fell beside the rim: a ball through the hoop is held
+# toward the rim's middle by the net. On the dev labels this held for no make's
+# crossing, tested against either edge, at 2-4 detections over 0.2-0.5 s; 3
+# rim heights deep it caught one make whose ball swung the net aside.
+EDGE_FALL_S = .3
+EDGE_FALL_DEPTH = 2.
+EDGE_FALL_SEEN = 3
 # A shot that comes down to the rim (ball centre lower than BOUNCE_REACH
 # rim-box heights above its top edge) and then rises BOUNCE_RISE rim-box
 # heights, back above the rim, bounced off the rim or backboard: a made ball
@@ -51,6 +61,16 @@ def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
         return None
     amount = (frame - left) / (right - left)
     return tuple(rim[left][i] + amount * (rim[right][i] - rim[left][i]) for i in range(4))  # type: ignore[return-value]
+
+
+def rim_by_arrival(rim: RimInput, apex_frame: int, fps: float) -> bool:
+    """True when a rim is known at the apex or before the ball can arrive (ARRIVAL_S).
+
+    A camera following the ball can bring the rim into view, or the rim
+    detector find it, only as the ball comes down to it.
+    """
+    return any(_rim_at(rim, frame) is not None for frame in range(apex_frame, round(apex_frame + ARRIVAL_S * fps) + 1))
+
 
 def _point(pose: PoseFrame, name: str, aspect_ratio: float = 1.0) -> tuple[float, float] | None:
     value = pose.landmarks.get(name)
@@ -248,6 +268,23 @@ def bounced_out(track: Sequence[Detection], frame: int, rim: RimInput, fps: floa
     return False
 
 
+def fell_beside(track: Sequence[Detection], frame: int, left: bool, rim: RimInput, fps: float) -> bool:
+    """True when the ball, after crossing the rim plane over its ``left`` (or right) edge at ``frame``,
+    falls on past the rim still over or beyond that edge."""
+    seen = 0
+    for b in track:
+        if not frame <= b.frame <= frame + EDGE_FALL_S * fps or b.confidence < .45:
+            continue
+        box = _rim_at(rim, b.frame)
+        if box is None or not box[1] + .5 * box[3] <= b.y <= box[1] + EDGE_FALL_DEPTH * box[3]:
+            continue
+        u = (b.x - box[0]) / box[2]
+        if (u >= PASS_MARGIN) if left else (u <= 1 - PASS_MARGIN):
+            return False
+        seen += 1
+    return seen >= EDGE_FALL_SEEN
+
+
 def rim_bounce(track: Sequence[Detection], start: int, end: float, rim: RimInput, fps: float) -> int | None:
     """Frame where the descending ball reached the rim between ``start`` and ``end`` and then bounced back up."""
     seen = [b for b in track if start <= b.frame <= end + REBOUND_S * fps and b.confidence >= .45]
@@ -268,7 +305,7 @@ def rim_bounce(track: Sequence[Detection], start: int, end: float, rim: RimInput
 def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
                 net_motion: dict[int, float | dict[str, float]] | None, fps: float,
                 track: Sequence[Detection] | None = None) -> tuple[str, float, list[str], int | None]:
-    """Made/missed from the descent after ``apex_frame``; the caller checks a rim exists there.
+    """Made/missed from the descent after ``apex_frame``; the caller checks a rim is known by arrival.
 
     ``track`` is the ball track to follow after a crossing when it runs past ``segment``.
     """
@@ -316,10 +353,14 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
         confidence = .66
         evidence.append("Ball crossed the rim plane inside the rim, then came back up above the rim: a rim-out or "
                         "a ball passing in front of or behind the rim")
-    elif inside and not PASS_MARGIN <= (inside[0][1] - inside[0][2][0]) / inside[0][2][2] <= 1 - PASS_MARGIN:
-        # It may still have rolled in or out unseen, so this is not called.
-        evidence.append("Ball centre crossed the rim plane over the rim's edge, too close to it to pass through "
-                        "cleanly: it hit the rim, and whether it then dropped in was not seen")
+    elif inside and not PASS_MARGIN <= (edge_u := (inside[0][1] - inside[0][2][0]) / inside[0][2][2]) <= 1 - PASS_MARGIN:
+        if fell_beside(track or segment, inside[0][0], edge_u < .5, rim, fps):
+            outcome, confidence, outcome_frame = "missed", .66, inside[0][0]
+            evidence.append("Ball centre crossed the rim plane over the rim's edge and kept falling beside the rim")
+        else:
+            # It may still have rolled in or out unseen, so this is not called.
+            evidence.append("Ball centre crossed the rim plane over the rim's edge, too close to it to pass through "
+                            "cleanly: it hit the rim, and whether it then dropped in was not seen")
     elif inside:
         crossing_frame = inside[0][0]
         motion_score, motion_frame = motion_event(crossing_frame, round(crossing_frame + .35 * fps))
@@ -460,8 +501,7 @@ def analyze_shots(
             if release_contact else
             "Release contact unavailable: timestamp uses the start of the visible arc and may precede or follow actual release"
         )
-        segment_rim = _rim_at(rim, apex_frame)
-        if segment_rim:
+        if rim_by_arrival(rim, apex_frame, fps):
             outcome, confidence, rim_evidence, outcome_frame = rim_outcome(
                 segment, apex_frame, rim, net_motion, fps, ordered)
             evidence += rim_evidence

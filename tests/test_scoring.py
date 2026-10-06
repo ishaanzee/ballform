@@ -58,6 +58,19 @@ def test_one_stray_detection_above_rim_does_not_undo_a_make():
     assert shots[0].outcome == "made"
 
 
+def test_rim_found_only_as_the_ball_comes_down_still_scores_the_shot():
+    # 8e57: the camera brings the rim into view after the apex.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .55, .55),
+    ]
+    rims = {frame: (.48, .36, .14, .08) for frame in range(6, 9)}
+    shots = analyze_shots(track, [], 10, rims, {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "made"
+
+
 def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
     # The ball reaches the rim at frame 7 without crossing its plane, bounces
     # up off it, and only drops through 1.2 s after the apex (rebound or putback).
@@ -97,6 +110,23 @@ def test_crossing_over_the_rim_edge_is_not_called_made():
     shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
     assert len(shots) == 1
     assert shots[0].outcome == "unknown"
+
+
+@pytest.mark.parametrize("after, outcome", [
+    # 122e, 9f2f, d76f: still over the edge as it falls on past the rim.
+    ([(.50, .47), (.50, .51)], "missed"),
+    # Pulled toward the middle: it may have dropped in.
+    ([(.53, .47), (.54, .51)], "unknown"),
+])
+def test_ball_falling_on_beside_the_rim_after_an_edge_crossing_is_a_miss(after, outcome):
+    track = [
+        ball(0, .24, .70), ball(1, .30, .56), ball(2, .36, .40), ball(3, .42, .25),
+        ball(4, .47, .18), ball(5, .48, .23), ball(6, .49, .32), ball(7, .50, .43),
+        *(ball(8 + i, x, y) for i, (x, y) in enumerate(after)),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {})
+    assert len(shots) == 1
+    assert shots[0].outcome == outcome
 
 
 def test_ball_bouncing_off_the_rim_without_crossing_it_is_a_miss():

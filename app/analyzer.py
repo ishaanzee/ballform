@@ -1052,7 +1052,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         },
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
-            "Make/miss is inferred from visible ball/rim geometry: a make needs the ball to drop through the middle of the rim on its first arrival and not bounce back up. A ball bouncing off the rim, crossing over its edge, or dropping in only after a rebound is called missed or left unknown. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make.",
+            "Make/miss is inferred from visible ball/rim geometry: a make needs the ball to drop through the middle of the rim on its first arrival and not bounce back up. A ball bouncing off the rim, crossing over its edge and falling on beside it, or followed by a tip or putback that goes in is called missed; a ball that hits the rim's edge or drops in only after a rebound, without the rest being seen, is left unknown. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make. On 101 labeled broadcast clips 95 of the 101 shots found got a make/miss call and all 95 were right; the rest were left unknown, mostly where the rim or the attempt's timing was not seen.",
             "Feedback is descriptive and should complement, not replace, coaching judgment.",
             "Shot candidates and outcomes require video review; passes, occlusion and camera movement can cause errors.",
         ],

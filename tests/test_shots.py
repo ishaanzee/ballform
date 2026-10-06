@@ -1,7 +1,7 @@
 import pytest
 
 from app.models import Detection, PoseFrame, ShotResult
-from app.shots import find_attempts
+from app.shots import Anchor, find_attempts, missed_before_follow_up
 from app.tracking import HandlerDecision
 
 FPS = 30
@@ -333,6 +333,18 @@ def test_ball_carried_into_the_rim_area_is_released_at_the_end_of_the_hold():
     assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "layup or dunk"
 
 
+def test_dunk_through_the_rim_before_the_hold_ends_is_made():
+    # 8c88, a80c: the hands are still on the ball as it goes down through the rim.
+    path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
+    path.update({f: lerp((.5, .06), (.5, .14), (f - 24) / 4) for f in range(25, 29)})
+    path.update({f: lerp((.5, .14), (.5, .4), (f - 28) / 10) for f in range(29, 45)})
+    holders = {f: (1, path[f]) for f in range(29)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(29)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["contact_frame"] == 28 and shot.outcome == "made"
+    assert shot.outcome_frame < 28
+
+
 def test_rim_attempt_moments_after_an_arc_replaces_it():
     # b212: the arc path caught the gather; the same hands finished at the rim 0.4 s later.
     path = {f: lerp((.4, .3), BASKET, f / 6) for f in range(7)}
@@ -354,6 +366,20 @@ def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
     assert shot.outcome == "unknown"
     assert any("so the make is not credited" in item for item in shot.evidence)
+
+
+def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detection():
+    # 5adf: the ball-in-basket class fired on the net while the ball was still in flight.
+    path = {f: (.3, .35) for f in range(11)}
+    path.update({f: lerp((.3, .35), (.5, -.3), (f - 10) / 15) for f in range(11, 26)})
+    path.update({f: lerp((.5, -.3), (.5, .15), (f - 25) / 24) for f in range(26, 50)})
+    path.update({f: lerp((.5, .15), (.5, .35), (f - 49) / 10) for f in range(50, 60)})
+    holders = {f: (1, (.3, .35)) for f in range(11)}
+    events = [(f, *basket_box(.9)) for f in range(19, 50, 5)]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["basket_frame"] == 19
+    assert shot.outcome == "made"
 
 
 def test_ball_caught_after_a_shot_ends_its_flight():
@@ -390,3 +416,27 @@ def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
     balls, frames = scene(path, holders, [(25, *basket_box(.8)), (26, *basket_box(.8))], {f: 1 for f in range(11)})
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
     assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == "jump shot"
+
+
+def attempt(release, reached, outcome, outcome_frame=None):
+    shot = ShotResult(1, release / FPS, release / FPS, release / FPS + 1, outcome, 0., [], {},
+                      outcome_frame=outcome_frame)
+    return Anchor(release, reached, shot)
+
+
+@pytest.mark.parametrize("tip_release, outcome", [
+    (36, "missed"),   # 699d, a326, ec07: a tip 0.53 s after it reached the basket went in
+    (22, "unknown"),  # too soon after: the same attempt seen twice
+    (110, "unknown"),  # long after: a new possession
+])
+def test_attempt_followed_by_a_made_tip_missed(tip_release, outcome):
+    first, tip = attempt(10, 20, "unknown"), attempt(tip_release, None, "made", tip_release + 5)
+    missed_before_follow_up([first, tip], FPS)
+    assert first.shot.outcome == outcome
+    assert tip.shot.outcome == "made"
+
+
+def test_follow_up_that_did_not_go_in_says_nothing():
+    first, tip = attempt(10, 20, "unknown"), attempt(36, None, "missed", 45)
+    missed_before_follow_up([first, tip], FPS)
+    assert first.shot.outcome == "unknown"

@@ -29,7 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
-from app.scoring import RimInput, _rim_at, arc_apexes, rim_outcome
+from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -191,6 +191,12 @@ def _near_box(ball: Detection, box: tuple[float, float, float, float]) -> bool:
     return x1 - w <= ball.x <= x2 + w and y1 - h <= ball.y <= y2 + h
 
 
+def _in_rim_area(ball: Detection, box: tuple[float, float, float, float]) -> bool:
+    """The ball is at the basket: over or just beside the rim box (x, y, w, h), up to a net's length below."""
+    return (box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
+            and box[1] - 1.5 * box[3] <= ball.y <= box[1] + 1.2 * box[3])
+
+
 def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps: float,
                   contact_frames: list[int] = ()) -> list[BasketEvent]:
     """Moments the ball reaches the basket: ball-in-basket detections and rim-area entries.
@@ -219,8 +225,7 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
             box = _rim_at(rim, ball.frame)
             if box is None or ball.confidence < .45:
                 continue
-            inside = (box[0] - .25 * box[2] <= ball.x <= box[0] + 1.25 * box[2]
-                      and box[1] - 1.5 * box[3] <= ball.y <= box[1] + 1.2 * box[3])
+            inside = _in_rim_area(ball, box)
             if inside and not was_inside:
                 events.append(BasketEvent(ball.frame, ["rim_area"], 0., (box[0] + box[2] / 2, box[1] + .45 * box[3])))
             was_inside = inside
@@ -321,8 +326,10 @@ def _overlapping(runs: list[Run], start: int, end: int) -> Run | None:
 
 def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim: RimInput,
              net_motion, fps: float) -> tuple[str, float, list[str], int | None]:
-    segment = [b for b in balls if start <= b.frame <= apex_frame + 1.5 * fps]
-    if _rim_at(rim, apex_frame) is None or not segment:
+    # A dunk or a layup carried up crosses the rim plane before the hold ends
+    # (``start``), so the descent is followed from the top of the ball's path.
+    segment = [b for b in balls if min(start, apex_frame) <= b.frame <= apex_frame + 1.5 * fps]
+    if not rim_by_arrival(rim, apex_frame, fps) or not segment:
         evidence = ["Outcome unavailable because the rim was not marked"]
         if event is not None and "ball_in_basket" in event.sources:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
@@ -369,6 +376,31 @@ def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_t
         shot_type=shot_type,
         attempt=attempt,
     )
+
+
+def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:
+    """Call an unknown attempt missed when a later attempt, let go soon after it
+    reached the basket, is seen going through the rim.
+
+    A make ends the possession: the ball goes to the other team under the
+    basket it just went through. A tip or putback let go between SAME_ATTEMPT_S
+    and TIP_WINDOW_S after the first attempt reached the basket means that
+    attempt stayed out (699d, a326, ec07: the tip went in).
+    """
+    for anchor in anchors:
+        shot = anchor.shot
+        if shot.outcome != "unknown":
+            continue
+        reached = anchor.reached if anchor.reached is not None else anchor.release
+        follow = next((later for later in sorted(anchors, key=lambda a: a.release)
+                       if reached + SAME_ATTEMPT_S * fps <= later.release <= reached + TIP_WINDOW_S * fps
+                       and later.shot.outcome == "made" and later.shot.outcome_frame is not None
+                       and later.shot.outcome_frame > later.release), None)
+        if follow is None:
+            continue
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "missed", .6, follow.release
+        shot.evidence.append(f"Another attempt, let go {(follow.release - reached) / fps:.2f} s after this one reached "
+                             f"the basket, went through the rim: this one stayed out")
 
 
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
@@ -554,10 +586,14 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      _outcome(balls, contact.frame, event, top.frame, rim, net_motion, fps), shot_type, evidence,
                      {"path": "rim_attempt", "contact_frame": contact.frame, "basket_frame": event.frame,
                       "basket_sources": event.sources, "shooter_track_id": shooter})
-        if shot.outcome in {"made", "likely made"} and shot.outcome_frame - event.frame > FOLLOW_UP_S * fps:
+        # The ball-in-basket class can fire on the net while the ball is still in
+        # flight (5adf): time the make from the ball first seen at the rim.
+        arrived = next((b.frame for b in balls if b.frame >= event.frame and b.confidence >= .45
+                        and (box := _rim_at(rim, b.frame)) is not None and _in_rim_area(b, box)), event.frame)
+        if shot.outcome in {"made", "likely made"} and shot.outcome_frame - arrived > FOLLOW_UP_S * fps:
             # As late as a tip after it: the make may be an unseen follow-up touch's (f267, a tip left on
             # the rim and tipped in again).
-            shot.evidence.append(f"The ball went through {(shot.outcome_frame - event.frame) / fps:.2f} s after "
+            shot.evidence.append(f"The ball went through {(shot.outcome_frame - arrived) / fps:.2f} s after "
                                  "reaching the basket, as late as a follow-up tip, so the make is not credited")
             shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
         anchors.append(Anchor(contact.frame, event.frame, shot))
@@ -595,6 +631,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
         anchors.append(Anchor(contact.frame, None, shot))
 
+    missed_before_follow_up(anchors, fps)
     ordered = sorted((a.shot for a in anchors), key=lambda s: s.release_s)
     for number, shot in enumerate(ordered, 1):
         shot.number = number
