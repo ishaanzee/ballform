@@ -112,6 +112,23 @@ def test_crossing_over_the_rim_edge_is_not_called_made():
     assert shots[0].outcome == "unknown"
 
 
+@pytest.mark.parametrize("after, outcome", [
+    # 122e, 9f2f, d76f: still over the edge as it falls on past the rim.
+    ([(.50, .47), (.50, .51)], "missed"),
+    # Pulled toward the middle: it may have dropped in.
+    ([(.53, .47), (.54, .51)], "unknown"),
+])
+def test_ball_falling_on_beside_the_rim_after_an_edge_crossing_is_a_miss(after, outcome):
+    track = [
+        ball(0, .24, .70), ball(1, .30, .56), ball(2, .36, .40), ball(3, .42, .25),
+        ball(4, .47, .18), ball(5, .48, .23), ball(6, .49, .32), ball(7, .50, .43),
+        *(ball(8 + i, x, y) for i, (x, y) in enumerate(after)),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {})
+    assert len(shots) == 1
+    assert shots[0].outcome == outcome
+
+
 def test_ball_bouncing_off_the_rim_without_crossing_it_is_a_miss():
     # Comes down onto the rim (y .35, just above its plane) and bounces high.
     track = [
