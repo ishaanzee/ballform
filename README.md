@@ -21,7 +21,7 @@ The numbers are review signals, not a scouting department in a box. Compare clip
 - **Finds the rim by itself**, follows it through pans, zooms and cuts, and calls makes from the rim crossing plus net motion.
 - **Picks the shooter and the nearest contesting defender**, then scores the shot with a transparent formula: 65% separation + 35% contest clearance.
 - **Labels shot types**: jump shot, floater, layup, dunk, tip.
-- **Court calibration (optional)** maps the floor so distances, zones and spacing come out in feet.
+- **Court calibration** maps the floor so distances, zones and spacing come out in feet. On broadcast footage it is found automatically from the whole clip; you can also mark or adjust the court landmarks yourself.
 - **Form mode** reports 2D release timing, launch angle, elbow angle and upper-arm elevation for comparing your own reps.
 - **Annotated review video** with tracking, court lines and a pulse on makes.
 
@@ -82,7 +82,7 @@ Tips for a good clip: keep the shooter, ball and rim visible, shoot at 60 fps an
 Deeper write-ups, with the measurements behind them:
 
 - [Game mode](docs/game-mode.md): the shot-space score, shot-type rules, validation
-- [Court calibration](docs/court-calibration.md): homography fit, auto-detect, floor trajectories, accuracy checks
+- [Court calibration](docs/court-calibration.md): homography fit, auto-detect, whole-clip calibration, floor trajectories, accuracy checks
 - [Performance](docs/performance.md): model backends, pipelining, review video encoding, timings
 - [Cameras and clips](docs/cameras-and-clips.md): profiles, rim detection, make classifier
 
