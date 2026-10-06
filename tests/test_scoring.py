@@ -99,6 +99,19 @@ def test_crossing_over_the_rim_edge_is_not_called_made():
     assert shots[0].outcome == "unknown"
 
 
+def test_ball_bouncing_off_the_rim_without_crossing_it_is_a_miss():
+    # Comes down onto the rim (y .35, just above its plane) and bounces high.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .25), ball(6, .54, .31), ball(7, .55, .35),
+        ball(8, .57, .26), ball(9, .59, .17), ball(10, .61, .14),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert shots[0].outcome_frame == 7
+
+
 def test_net_only_motion_cannot_turn_an_airball_into_a_make():
     # The ball is lost before it has a descending path through the rim. This
     # represents an airball that brushes the net from the side or below.

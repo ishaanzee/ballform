@@ -25,6 +25,12 @@ ARRIVAL_S = 1.
 # rim: 9.4 in ball / 18 in rim is 0.26 rim widths. A centre crossing closer to
 # either edge than this hit the rim (labeled makes crossed at 0.34-0.69).
 PASS_MARGIN = .25
+# A shot that comes down to the rim (ball centre lower than BOUNCE_REACH
+# rim-box heights above its top edge) and then rises BOUNCE_RISE rim-box
+# heights, back above the rim, bounced off the rim or backboard: a made ball
+# never rises again near the hoop.
+BOUNCE_REACH = 1.
+BOUNCE_RISE = 2.
 
 
 def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
@@ -242,6 +248,23 @@ def bounced_out(track: Sequence[Detection], frame: int, rim: RimInput, fps: floa
     return False
 
 
+def rim_bounce(track: Sequence[Detection], start: int, end: float, rim: RimInput, fps: float) -> int | None:
+    """Frame where the descending ball reached the rim between ``start`` and ``end`` and then bounced back up."""
+    seen = [b for b in track if start <= b.frame <= end + REBOUND_S * fps and b.confidence >= .45]
+    for b in seen:
+        box = _rim_at(rim, b.frame)
+        if (b.frame > end or box is None or not box[0] - .5 * box[2] <= b.x <= box[0] + 1.5 * box[2]
+                or b.y < box[1] - BOUNCE_REACH * box[3]):
+            continue
+        rising = [a for a in seen if b.frame < a.frame <= b.frame + REBOUND_S * fps
+                  and (box2 := _rim_at(rim, a.frame)) is not None
+                  and box2[0] - box2[2] <= a.x <= box2[0] + 2 * box2[2]
+                  and a.y < min(box2[1], b.y - BOUNCE_RISE * box2[3])]
+        if len(rising) >= 2:
+            return b.frame
+    return None
+
+
 def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
                 net_motion: dict[int, float | dict[str, float]] | None, fps: float,
                 track: Sequence[Detection] | None = None) -> tuple[str, float, list[str], int | None]:
@@ -321,6 +344,9 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
             outcome, confidence, outcome_frame = "missed", .66, frame
             how = "through the rim and bounced back up" if through else "outside the rim"
             evidence.append(f"The ball came down {how} {delay}, with no earlier crossing through the rim")
+    elif (bounce := rim_bounce(track or segment, apex_frame, arrival, rim, fps)) is not None:
+        outcome, confidence, outcome_frame = "missed", .66, bounce
+        evidence.append("The ball came down to the rim without crossing its plane and bounced back up")
     else:
         # A moving net alone is never enough: an airball can brush the
         # net. When the ball is occluded at the hoop, require a descending
