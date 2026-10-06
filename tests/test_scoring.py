@@ -34,6 +34,30 @@ def test_made_shot_uses_rim_track_during_camera_pan():
     assert shots[0].outcome_frame == 7
 
 
+def test_ball_back_above_rim_after_crossing_is_a_rim_out():
+    # Same descent through the rim as the made shot, but the ball then pops
+    # back up over the rim: a rim-out, or a ball passing in front of it in 2D.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .58, .33), ball(9, .61, .28), ball(10, .64, .30),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert shots[0].outcome_frame == 7
+
+
+def test_one_stray_detection_above_rim_does_not_undo_a_make():
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        ball(8, .60, .30), ball(9, .55, .55), ball(10, .55, .65),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
+    assert shots[0].outcome == "made"
+
+
 def test_net_only_motion_cannot_turn_an_airball_into_a_make():
     # The ball is lost before it has a descending path through the rim. This
     # represents an airball that brushes the net from the side or below.
