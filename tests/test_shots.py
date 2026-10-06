@@ -92,13 +92,14 @@ def test_dribble_under_the_basket_is_not_a_shot():
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
 
 
-def test_dunk_is_a_contact_at_the_basket():
+def test_contact_at_the_basket_is_a_layup_or_dunk():
+    # In 2D a dunk and a layup let go at the rim look alike.
     path = {f: lerp((.45, .35), (.5, .12), f / 18) for f in range(19)}
     path.update({f: (.5, .12 + .02 * (f - 18)) for f in range(19, 30)})
     holders = {f: (1, path[f]) for f in range(19)}
     balls, frames = scene(path, holders, [(20, *basket_box(.8))], {f: 1 for f in range(19)})
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
-    assert shot.shot_type == "dunk"
+    assert shot.shot_type == "layup or dunk"
     assert shot.attempt["contact_frame"] == 18
 
 
@@ -318,3 +319,74 @@ def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
     # 8628: a tip-dunk's catch above the rim and its slam read as two arcs.
     shot, = arc_shots_reaching([(10, 16), (18, 16)])
     assert shot.release_s == pytest.approx(10 / FPS)
+
+
+def test_ball_carried_into_the_rim_area_is_released_at_the_end_of_the_hold():
+    # 1b06, a80c: the ball enters the rim's area still in the hands and moves as
+    # smoothly as a ball in flight; the release is the last contact of the hold.
+    path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
+    path.update({f: lerp((.5, .06), (.5, .3), (f - 24) / 12) for f in range(25, 40)})
+    holders = {f: (1, path[f]) for f in range(25)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(25)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.attempt["contact_frame"] == 24
+    assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "layup or dunk"
+
+
+def test_rim_attempt_moments_after_an_arc_replaces_it():
+    # b212: the arc path caught the gather; the same hands finished at the rim 0.4 s later.
+    path = {f: lerp((.4, .3), BASKET, f / 6) for f in range(7)}
+    path.update({f: (.5, .15) for f in range(7, 13)})
+    path.update({f: lerp((.5, .15), BASKET, (f - 12) / 3) for f in range(13, 25)})
+    holders = {f: (1, (.5, .15)) for f in range(8, 13)}
+    events = [(6, *basket_box(.8)), (15, *basket_box(.8)), (16, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(8, 13)})
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.release_s == round(12 / FPS, 2)
+
+
+def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
+    # f267: a tip left on the rim was tipped in again by an unseen touch.
+    path = {f: (.5, .35) for f in range(11)}
+    path.update({f: (.5, .01 + .34 / 900 * (f - 40) ** 2) for f in range(11, 65)})
+    holders = {f: (1, (.5, .35)) for f in range(11)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.outcome == "unknown"
+    assert any("so the make is not credited" in item for item in shot.evidence)
+
+
+def test_ball_caught_after_a_shot_ends_its_flight():
+    # cd04: a false arc claimed the layup of the player who rebounded it.
+    path = {f: lerp((.3, .3), (.55, .25), f / 10) for f in range(11)}
+    path.update({f: (.55, .25) for f in range(11, 17)})
+    path.update({f: lerp((.55, .25), BASKET, (f - 16) / 4) for f in range(17, 30)})
+    holders = {f: (2, (.55, .25)) for f in range(10, 17)}
+    balls, frames = scene(path, holders, [(20, *basket_box(.8)), (21, *basket_box(.8))], {f: 2 for f in range(10, 17)})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert [shot.attempt and shot.attempt["path"] for shot in shots] == [None, "rim_attempt"]
+    assert shots[1].release_s == round(16 / FPS, 2)
+
+
+@pytest.mark.parametrize("wrist, found", [((.55, .30), True), ((.55, -.02), False)])
+def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
+    # 3b4f, 699d: the tipper's wrist is a hand's length below the ball. The
+    # same distance with the ball below the hand is not a touch.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, 40)})
+    events = [(20, *basket_box(.8)), (30, *basket_box(.8))]
+    balls, frames = scene(path, {26: (2, wrist)}, events, n=40)
+    shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
+
+
+def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
+    # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
+    path = {f: (.42, .35) for f in range(11)}
+    path.update({f: lerp((.42, .35), BASKET, (f - 10) / 15) for f in range(11, 26)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 25) / 10) for f in range(26, 36)})
+    holders = {f: (1, (.42, .35)) for f in range(11)}
+    balls, frames = scene(path, holders, [(25, *basket_box(.8)), (26, *basket_box(.8))], {f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == "jump shot"
