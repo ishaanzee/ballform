@@ -55,6 +55,8 @@ f0e1d2c3b4a5,,,,,,,,no shot: passes around the arc
 
 Once thresholds are tuned against these clips, they stop being an honest test. Put about a third of the rows in `holdout.csv` (same columns) and only score it occasionally, without tuning against its per-shot errors.
 
+`holdout2.csv` is a blind second holdout made on 2026-10-06, after `holdout.csv` had been scored once following a day of tuning: 88 rows (82 attempts, 6 no-shot clips) in 54 broadcast clips from ten 2025-26 games in neither other file (GSW@SAS 11-12, CHI@POR 11-19, MIA@DAL 12-03, PHX@GSW 12-20, BOS@IND 01-12, MIN@SAS 01-17, MEM@DEN 02-11, ORL@LAL 02-24, DEN@UTA 03-02, HOU@MIN 03-25), labeled before any Ballform output existed for them. Nothing has been tuned against it; score it rarely and never tune against its per-shot errors.
+
 ## running it
 
 ```bash
