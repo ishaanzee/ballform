@@ -341,31 +341,39 @@ window.courtCalibration = (() => {
     if (!summary && !auto) return;
     let text;
     if (summary) {
-      const names = (summary.landmarks || []).map(p => templates?.[summary.standard]?.landmarks[p.id]?.label || p.id);
       const placed = {auto: ' (proposed automatically and accepted)', 'auto, adjusted': ' (proposed automatically, adjusted by hand)'}[summary.landmark_source] || '';
       // Landmarks found from the whole clip lie exactly on one fitted court, so they have no click error to show.
       const how = summary.landmark_source === 'auto, whole clip'
         ? ', found automatically from the whole clip' + (auto
-          ? `: ${auto.frames_agreeing} of the ${auto.frames_tried} frames tried agree on where the camera stands, and `
+          ? `: ${auto.frames_agreeing} of the ${auto.frames_tried} frames fitted agree on where the camera stands, and `
             + `the landmarks were read off the frame at ${Number(summary.anchor_time_s ?? 0).toFixed(2)} s`
           : ' in an earlier analysis')
         : `${placed}, ${summary.clicked_error_px.rms} px RMS error on the marked points`;
-      text = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks${how}`
-        + `${names.length ? ` (${names.join(', ')})` : ''}. The floor mapping held on ${summary.reliable_frames} of `
+      text = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks${how}. `
+        + `The floor mapping held on ${summary.reliable_frames} of `
         + `${summary.frames} analyzed frames. Metrics in feet are measured on the floor; the torso-length metrics are `
         + 'unchanged. Check the court lines drawn in the video.';
     } else {
       text = `Automatic court calibration found no court to use: ${auto.reason}. Distances, zones and spacing are `
         + 'not reported in feet. Mark the court by hand on a frame where the floor lines are clear to get them.';
     }
-    note.append(text);
+    const paragraph = document.createElement('p');
+    paragraph.textContent = text;
+    note.append(paragraph);
+    const names = (summary?.landmarks || []).map(p => templates?.[summary.standard]?.landmarks[p.id]?.label || p.id);
+    if (names.length) {
+      const details = document.createElement('details'), title = document.createElement('summary');
+      title.textContent = `Landmarks used (${names.length})`;
+      details.append(title, names.join(' · '));
+      note.append(details);
+    }
     // The clip is still loaded on this page (not after reconnecting to a job), so it can be calibrated again.
     if (typeof file !== 'undefined' && file && result.mode === 'one_on_one') {
       const button = document.createElement('button');
       button.type = 'button'; button.className = 'ghost';
       button.textContent = summary ? 'Adjust court marks' : 'Calibrate court by hand';
       button.addEventListener('click', () => reopen(summary, result.video?.fps || 30));
-      note.append(document.createElement('br'), button);
+      note.append(button);
     }
   }
 

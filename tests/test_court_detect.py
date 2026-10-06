@@ -123,6 +123,8 @@ def test_the_calibration_is_picked_from_frames_that_agree_on_the_camera():
                               proposal(90, diagram_view(position=(90., 80., 30.)))], W, H)
     assert "court_landmarks" not in split and "agree" in split["rejected"]
     assert "none" in pick_calibration([proposal(0, pans[0], ok=False)], W, H)["rejected"]
+    few = pick_calibration([proposal(0, pans[0]), proposal(30, pans[1]), proposal(60, wrong, ok=False)], W, H)
+    assert few["rejected"] == "auto-detect proposed a court on only 2 of the 3 frames tried"
 
 
 def test_shots_are_measured_on_the_shooters_half():

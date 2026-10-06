@@ -839,6 +839,9 @@ def pick_calibration(proposals: list[dict], width: int, height: int, standard: s
     members = np.flatnonzero(agree[centre])
     check = {"frames_tried": tried, "frames_proposed": len(cameras), "frames_agreeing": int(len(members)),
              "camera_ft": [round(float(v), 1) for v in np.abs(centres[centre])]}
+    if len(cameras) < min_agree:
+        return {"rejected": f"auto-detect proposed a court on only {len(cameras)} of the {tried} frames tried",
+                "check": check}
     if len(members) < max(min_agree, min_share * len(cameras)):
         return {"rejected": f"only {len(members)} of {len(cameras)} proposed frames agree on the camera position "
                             f"({tried} frames tried)", "check": check}
