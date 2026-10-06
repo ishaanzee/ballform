@@ -312,3 +312,9 @@ def test_blocked_shot_coming_down_away_stays_a_shot():
     balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
     assert any(item.startswith("Blocked") for item in shot.evidence)
+
+
+def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
+    # 8628: a tip-dunk's catch above the rim and its slam read as two arcs.
+    shot, = arc_shots_reaching([(10, 16), (18, 16)])
+    assert shot.release_s == pytest.approx(10 / FPS)

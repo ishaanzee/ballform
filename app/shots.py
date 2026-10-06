@@ -362,7 +362,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     apexes = arc_apexes(balls, [], fps, game_mode=True)
 
     anchors = []
-    previous_reach = None
+    previous_reach = kept_reach = None
     for shot in sorted(shots, key=lambda s: s.release_s):
         release = round(shot.release_s * fps)
         apex = next((f for f in apexes if release <= f <= release + ARC_APEX_S * fps), None)
@@ -387,6 +387,11 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                 continue
             shot.evidence += ["Blocked: the ball came down away from the rim, with the detector's shot-block class "
                               "firing between release and apex", *_class_note(block, "shot-block")]
+        if reach is not None and reach == kept_reach:
+            # One attempt reaching the basket once: the previous arc (e.g. a
+            # dunk's gather and its slam read as two arcs).
+            continue
+        kept_reach = reach
         if reach is not None and reach - release <= RIM_FLIGHT_S * fps:
             flight = f"the ball reached the basket {max(0, reach - release) / fps:.2f} s after release"
             if (previous_reach is not None and previous_reach < reach
