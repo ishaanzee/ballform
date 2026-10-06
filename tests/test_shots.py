@@ -482,3 +482,13 @@ def test_shooter_still_holding_the_ball_on_the_rim_is_not_a_new_attempt(monkeypa
     import app.shots
     monkeypatch.setattr(app.shots, "_held_since", lambda *args: False)
     assert len(find_attempts([], balls, frames, FPS, RIM, 1.)) == 2
+
+
+def test_hand_at_the_rim_as_the_shot_arrives_is_not_a_tip():
+    # 20f2: a hand next to the rim as the jump shot hit it; the ball bounced off.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, 40)})
+    events = [(20, *basket_box(.8)), (30, *basket_box(.8))]
+    balls, frames = scene(path, {22: (2, path[22])}, events, n=40)
+    assert [shot.shot_type for shot in find_attempts([arc_shot()], balls, frames, FPS, None, 1.)] == ["jump shot"]

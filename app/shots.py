@@ -99,6 +99,11 @@ ARC_SEEN_S = .1
 # real attempt came 1.28 s or more after a "made" call (25e9, after a false
 # make); hands on the ball falling through the net came 0.15-0.32 s after (b212, 25e9).
 DEAD_BALL_S = 1.
+# A touch this soon after a shot reaches the basket is part of its arrival (a
+# contest, a hand behind the rim in 2D: 20f2 0.07 s), not a follow-up; the
+# ball has to come off the rim first. The earliest labeled follow-up touched
+# it 0.25 s after (883b, a miss caught short of the rim).
+SETTLE_S = .15
 
 
 @dataclass
@@ -538,7 +543,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                     "it does not change the outcome, which needs the rim")
             continue
         if current is not None and current.reached is not None:
-            recent = [c for c in recent if c.frame > current.reached]
+            recent = [c for c in recent if c.frame > current.reached + SETTLE_S * fps]
         if not recent:
             continue
         # No free-flight test here: a ball carried up to the rim, or tipped, moves
