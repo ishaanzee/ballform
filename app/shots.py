@@ -266,7 +266,7 @@ def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps:
     if apex is None:
         return False
     for ball in balls:
-        if ball.frame <= apex or ball.confidence < .45:
+        if ball.frame < apex or ball.confidence < .45:
             continue
         if ball.frame > apex + ARC_APEX_S * fps or (reach is not None and ball.frame >= reach):
             break
