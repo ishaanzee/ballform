@@ -92,13 +92,14 @@ def test_dribble_under_the_basket_is_not_a_shot():
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
 
 
-def test_dunk_is_a_contact_at_the_basket():
+def test_contact_at_the_basket_is_a_layup_or_dunk():
+    # In 2D a dunk and a layup let go at the rim look alike.
     path = {f: lerp((.45, .35), (.5, .12), f / 18) for f in range(19)}
     path.update({f: (.5, .12 + .02 * (f - 18)) for f in range(19, 30)})
     holders = {f: (1, path[f]) for f in range(19)}
     balls, frames = scene(path, holders, [(20, *basket_box(.8))], {f: 1 for f in range(19)})
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
-    assert shot.shot_type == "dunk"
+    assert shot.shot_type == "layup or dunk"
     assert shot.attempt["contact_frame"] == 18
 
 
@@ -329,7 +330,7 @@ def test_ball_carried_into_the_rim_area_is_released_at_the_end_of_the_hold():
     balls, frames = scene(path, holders, handlers={f: 1 for f in range(25)})
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
     assert shot.attempt["path"] == "rim_attempt" and shot.attempt["contact_frame"] == 24
-    assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "dunk"
+    assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "layup or dunk"
 
 
 def test_rim_attempt_moments_after_an_arc_replaces_it():

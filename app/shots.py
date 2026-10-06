@@ -512,9 +512,11 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot_type = "tip"
             evidence.append(f"Tip: raised-hand touch at the rim {(contact.frame - previous_reach) / fps:.2f} s after the "
                             "previous attempt reached the basket")
-        elif at_rim and dy <= .3 and event.frame - contact.frame <= .35 * fps:
-            shot_type = "dunk"
-            evidence.append("Dunk: last contact at or above the basket, reaching it within 0.35 s")
+        elif at_rim and event.frame - contact.frame <= .35 * fps:
+            # In 2D a layup let go at the rim looks like a dunk: on the dev labels the
+            # contact's height against the basket did not separate them.
+            shot_type = "layup or dunk"
+            evidence.append("Layup or dunk: last contact at the basket, reaching it within 0.35 s")
         else:
             shot_type = "layup"
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
