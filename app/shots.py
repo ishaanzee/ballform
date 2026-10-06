@@ -45,6 +45,12 @@ CONTACT_TO_BASKET_S = 1.2
 # A single low-confidence ball-in-basket frame fires on an empty net (3074e
 # frames 54 and 136); a lone detection must be this confident.
 BASKET_CONFIDENCE = .5
+# A ball-in-basket run is an empty net when the ball was seen confidently
+# elsewhere, and never at the box, on its frames; when it was not seen
+# confidently on them, on the frames this close to them, as the ball cannot get
+# to the basket faster (76d9: a one-frame detection while the ball, blurred on
+# that frame, was mid-court on the frames around it).
+EMPTY_NET_S = .1
 # Detector class runs this close to an existing shot's release belong to it.
 SHOT_WINDOW_S = .7
 # A shot's flight can claim basket events for this long after release.
@@ -228,9 +234,12 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
     by_frame = {ball.frame: ball for ball in balls}
     for run in event_runs(frames, "ball_in_basket", fps):
         # An empty net fires too: drop the run when the ball was seen confidently
-        # elsewhere on its frames, and never at the box.
+        # elsewhere on its frames (or, unseen there, just around them), and never at the box.
         seen = [ball for frame in range(run.start, run.end + 1)
                 if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
+        if not seen:
+            seen = [ball for frame in range(round(run.start - EMPTY_NET_S * fps), round(run.end + EMPTY_NET_S * fps) + 1)
+                    if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
         if seen and not any(_near_box(ball, run.box) for ball in seen):
             continue
         if run.peak >= BASKET_CONFIDENCE or run.count >= 2:

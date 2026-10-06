@@ -503,3 +503,11 @@ def test_layup_dunk_class_without_a_rim_must_be_confident(conf, found):
     path.update({f: lerp((.42, .45), (.45, .05), (f - 10) / 10) for f in range(11, 30)})
     balls, frames = scene(path, holders, events)
     assert len(find_attempts([], balls, frames, FPS, None, 1.)) == (1 if found else 0)
+
+
+def test_one_frame_basket_detection_with_the_ball_elsewhere_around_it_is_ignored():
+    # 76d9: the ball was blurred on the detection's frame and confidently mid-court around it.
+    from app.shots import basket_events
+    balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9))])
+    balls[5].confidence = .3
+    assert basket_events(frames, balls, None, FPS) == []
