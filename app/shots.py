@@ -57,6 +57,9 @@ HOLD_GAP_S = .2
 # (the arc caught the gather); labeled tips came at least 0.8 s after the
 # previous shot reached the basket.
 SAME_ATTEMPT_S = .5
+# Labeled tips touched the ball 0.80-0.90 s after the previous attempt reached
+# the basket, so a rim attempt's make seen later than this may be a follow-up's.
+FOLLOW_UP_S = .8
 # An arc shot whose ball reaches the basket this soon after release was let go
 # at the rim. On the labeled broadcast clips, jump shots took 1.05-1.38 s,
 # floaters 0.50-0.65 s, and 11 of 14 rim finishes 0.30 s or less (the other
@@ -529,6 +532,12 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      _outcome(balls, contact.frame, event, top.frame, rim, net_motion, fps), shot_type, evidence,
                      {"path": "rim_attempt", "contact_frame": contact.frame, "basket_frame": event.frame,
                       "basket_sources": event.sources, "shooter_track_id": shooter})
+        if shot.outcome in {"made", "likely made"} and shot.outcome_frame - event.frame > FOLLOW_UP_S * fps:
+            # As late as a tip after it: the make may be an unseen follow-up touch's (f267, a tip left on
+            # the rim and tipped in again).
+            shot.evidence.append(f"The ball went through {(shot.outcome_frame - event.frame) / fps:.2f} s after "
+                                 "reaching the basket, as late as a follow-up tip, so the make is not credited")
+            shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
         anchors.append(Anchor(contact.frame, event.frame, shot))
         anchors.sort(key=lambda a: a.release)
 

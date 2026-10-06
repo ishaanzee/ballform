@@ -342,3 +342,14 @@ def test_rim_attempt_moments_after_an_arc_replaces_it():
     balls, frames = scene(path, holders, events, {f: 1 for f in range(8, 13)})
     shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
     assert shot.attempt["path"] == "rim_attempt" and shot.release_s == round(12 / FPS, 2)
+
+
+def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
+    # f267: a tip left on the rim was tipped in again by an unseen touch.
+    path = {f: (.5, .35) for f in range(11)}
+    path.update({f: (.5, .01 + .34 / 900 * (f - 40) ** 2) for f in range(11, 65)})
+    holders = {f: (1, (.5, .35)) for f in range(11)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(11)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.outcome == "unknown"
+    assert any("so the make is not credited" in item for item in shot.evidence)
