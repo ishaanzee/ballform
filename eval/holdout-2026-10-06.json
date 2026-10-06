@@ -27,7 +27,7 @@
       "misses_called_made": 2
     },
     "shot_type": {
-      "accuracy": "28/44 (64%)",
+      "accuracy": "30/44 (68%)",
       "shot_vs_rim": "41/44 (93%)",
       "shot_vs_rim_labeled_vs_predicted": {
         "rim": {
@@ -311,7 +311,7 @@
       "predicted_release_s": 3.9,
       "problem": "",
       "outcome": "made / made",
-      "shot_type": "floater / jump shot",
+      "shot_type": "floater / floater",
       "distance_ft": "13.0 / 6.5",
       "zone": "paint / paint",
       "shooter_label": "#3 UTA purple (Keyonte George per pbp)",
@@ -491,7 +491,7 @@
       "predicted_release_s": 3.6,
       "problem": "",
       "outcome": "made / made",
-      "shot_type": "floater / jump shot",
+      "shot_type": "floater / floater",
       "distance_ft": "10.0 / 10.1",
       "zone": "paint / paint",
       "shooter_label": "#22 NOP red (Derik Queen)",
@@ -539,8 +539,8 @@
       "predicted_release_s": 3.87,
       "problem": "false shot",
       "outcome": "- / missed",
-      "shot_type": "- / jump shot",
-      "distance_ft": "- / 4.6",
+      "shot_type": "- / tip",
+      "distance_ft": "- / 5.8",
       "zone": "- / paint",
       "shooter_label": "",
       "predicted_shooter_track": 10

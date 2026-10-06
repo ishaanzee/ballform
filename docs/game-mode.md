@@ -12,20 +12,21 @@ Separation is projected hip-to-hip distance in shooter torso lengths. Contest cl
 
 ### measured accuracy
 
-Scored against hand labels of NBA broadcast possessions (`eval/`, timings from the frames, distances from ESPN/NBA play-by-play). The rules below were tuned on the dev set only; the holdout is 51 clips from 12 other games that were never looked at while tuning, scored once afterwards (2026-10-06). Read the holdout column as the honest number.
+Scored against hand labels of NBA broadcast possessions (`eval/`, timings from the frames, distances from ESPN/NBA play-by-play). The rules were tuned on the dev set only. Holdout 1 is 51 clips from 12 other games, never used for tuning and scored a few times as work landed. Holdout 2 is 54 clips (82 shots, 60% misses, half of them rim attempts) from 10 more games, labeled blind after the tuning was finished and scored once (2026-10-06). Read the holdout columns as the honest numbers; holdout 2 is the cleanest.
 
-| | dev before | dev after | holdout before | holdout after |
+| | holdout 1 before | holdout 1 after | holdout 2 before | holdout 2 after |
 |---|---|---|---|---|
-| shots found (recall) | 66% | 87% (102/117) | 64% (39/61) | 72% (44/61) |
-| predicted shots that are real (precision) | 58% | 94% (102/108) | 74% (39/53) | 90% (44/49) |
-| make/miss called | 82% | 95% | 95% | 93% (41/44) |
-| make/miss right when called | 79% | 100% (97/97) | 86% (32/37) | 95% (39/41) |
-| misses called made | 13 | 0 | 5 | 2 |
-| shot vs rim finish | 84% | 93% | 92% | 93% |
-| distance, median error | n/a | 1.3 ft (51 shots) | n/a | 1.6 ft (24 shots) |
-| two vs three | n/a | 96% | n/a | 94% (34/36) |
+| shots found (recall) | 64% (39/61) | 72% (44/61) | 66% (54/82) | 78% (64/82) |
+| predicted shots that are real (precision) | 74% (39/53) | 90% (44/49) | 65% (54/83) | 81% (64/79) |
+| make/miss called | 95% | 93% (41/44) | 87% | 91% (58/64) |
+| make/miss right when called | 86% (32/37) | 95% (39/41) | 74% (35/47) | 93% (54/58) |
+| misses called made | 5 | 2 | 12 | 4 |
+| shot type (five types) | 56% | 68% | 71% | 79% (48/61) |
+| shot vs rim finish | 92% | 93% | 92% | 92% |
+| distance, median error | n/a | 1.6 ft (24 shots) | n/a | 1.3 ft (26 shots) |
+| zone / two vs three | n/a | 81% / 94% | n/a | 93% / 100% (54/54) |
 
-"Before" is the code at `0ba3d67`; distances need court calibration, which no labeled clip had before automatic calibration was added. The dev/holdout gap shows some fitting to the dev clips, mostly in recall and make/miss. Fixed-camera pickup, gym and form footage have not been labeled yet.
+On the dev set itself the same code gets recall 87%, precision 94%, make/miss 100% right when called and shot type 90%, so the dev numbers overstate accuracy by roughly 10 points. "Before" is the code at `0ba3d67`; no clip had distances before automatic court calibration. Fixed-camera pickup, gym and form footage have not been labeled yet.
 
 ### which shots game mode finds
 

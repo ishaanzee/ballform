@@ -88,7 +88,7 @@ Deeper write-ups, with the measurements behind them:
 
 ## limits
 
-Camera movement changes apparent distances. Jerseys can look alike. Players overlap. The ball can be hidden for exactly the frames that matter. Passes and slow-motion edits can resemble shots. Cuts reset tracking. On held-out NBA broadcast clips it finds 72% of shots, 90% of its shots are real, and its make/miss calls are right 95% of the time ([measured accuracy](docs/game-mode.md#measured-accuracy)); pickup and gym footage has not been labeled yet. Treat it as a review assistant, not an oracle.
+Camera movement changes apparent distances. Jerseys can look alike. Players overlap. The ball can be hidden for exactly the frames that matter. Passes and slow-motion edits can resemble shots. Cuts reset tracking. On NBA broadcast clips from games it was never tuned on, it finds 72–78% of shots, 81–90% of its shots are real, and its make/miss calls are right 93–95% of the time ([measured accuracy](docs/game-mode.md#measured-accuracy)); pickup and gym footage has not been labeled yet. Treat it as a review assistant, not an oracle.
 
 ## code map
 
