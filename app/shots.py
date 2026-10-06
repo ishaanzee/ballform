@@ -378,6 +378,31 @@ def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_t
     )
 
 
+def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:
+    """Call an unknown attempt missed when a later attempt, let go soon after it
+    reached the basket, is seen going through the rim.
+
+    A make ends the possession: the ball goes to the other team under the
+    basket it just went through. A tip or putback let go between SAME_ATTEMPT_S
+    and TIP_WINDOW_S after the first attempt reached the basket means that
+    attempt stayed out (699d, a326, ec07: the tip went in).
+    """
+    for anchor in anchors:
+        shot = anchor.shot
+        if shot.outcome != "unknown":
+            continue
+        reached = anchor.reached if anchor.reached is not None else anchor.release
+        follow = next((later for later in sorted(anchors, key=lambda a: a.release)
+                       if reached + SAME_ATTEMPT_S * fps <= later.release <= reached + TIP_WINDOW_S * fps
+                       and later.shot.outcome == "made" and later.shot.outcome_frame is not None
+                       and later.shot.outcome_frame > later.release), None)
+        if follow is None:
+            continue
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "missed", .6, follow.release
+        shot.evidence.append(f"Another attempt, let go {(follow.release - reached) / fps:.2f} s after this one reached "
+                             f"the basket, went through the rim: this one stayed out")
+
+
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
                   rim: RimInput, aspect: float, net_motion=None) -> list[ShotResult]:
     """Type the arc shots and add the attempts they miss, sorted by release (one camera segment)."""
@@ -606,6 +631,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
         anchors.append(Anchor(contact.frame, None, shot))
 
+    missed_before_follow_up(anchors, fps)
     ordered = sorted((a.shot for a in anchors), key=lambda s: s.release_s)
     for number, shot in enumerate(ordered, 1):
         shot.number = number
