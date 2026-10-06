@@ -10,6 +10,23 @@ The shot-space score is deliberately transparent:
 
 Separation is projected hip-to-hip distance in shooter torso lengths. Contest clearance is projected ball-to-defender-wrist distance in the same units. Separation change is reported as context, not secretly folded into the grade. It compares the release separation with the median over 0.3–0.7s before release. It relies on persistent player identities, so it needs both players tracked on at least half the frames through release. Each earlier frame is rescaled by the camera's zoom, estimated from every player seen in both frames. Frames zoomed by more than about 20% are skipped. One player crouching or turning no longer voids it, and neither does a camera pan. Each defender hand is measured on the frame nearest release, within 0.1s, where both that hand and the ball are visible. A hand briefly hidden on the release frame therefore no longer turns the contest into a range, and the confidence drops with the time offset. Only a hand unseen for that whole window leaves the score as a range with "other hand unknown". The score is a 0–100 review heuristic, not make probability, expected points, or a professional player grade. Missing evidence stays missing; it does not become a zero.
 
+### measured accuracy
+
+Scored against hand labels of NBA broadcast possessions (`eval/`, timings from the frames, distances from ESPN/NBA play-by-play). The rules below were tuned on the dev set only; the holdout is 51 clips from 12 other games that were never looked at while tuning, scored once afterwards (2026-10-06). Read the holdout column as the honest number.
+
+| | dev before | dev after | holdout before | holdout after |
+|---|---|---|---|---|
+| shots found (recall) | 66% | 87% (102/117) | 64% (39/61) | 72% (44/61) |
+| predicted shots that are real (precision) | 58% | 94% (102/108) | 74% (39/53) | 90% (44/49) |
+| make/miss called | 82% | 95% | 95% | 93% (41/44) |
+| make/miss right when called | 79% | 100% (97/97) | 86% (32/37) | 95% (39/41) |
+| misses called made | 13 | 0 | 5 | 2 |
+| shot vs rim finish | 84% | 93% | 92% | 93% |
+| distance, median error | n/a | 1.3 ft (51 shots) | n/a | 1.6 ft (24 shots) |
+| two vs three | n/a | 96% | n/a | 94% (34/36) |
+
+"Before" is the code at `0ba3d67`; distances need court calibration, which no labeled clip had before automatic calibration was added. The dev/holdout gap shows some fitting to the dev clips, mostly in recall and make/miss. Fixed-camera pickup, gym and form footage have not been labeled yet.
+
 ### which shots game mode finds
 
 Each game shot is labelled jump shot, floater, layup, dunk, "layup or dunk" or tip, and its evidence says why (`app/shots.py`).
