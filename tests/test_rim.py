@@ -18,6 +18,15 @@ def test_dominant_hoop_is_kept_and_a_false_positive_blip_dropped():
     assert stats["other_hoop_tracks"] == 1
 
 
+def test_ball_at_the_rim_adding_an_overlapping_box_does_not_split_the_hoop():
+    # 3e78, f6f0: as the ball arrives the detector also boxes ball and rim together.
+    detections = {f: [rim(.30 - .002 * f)] for f in range(0, 40)}
+    detections[20] = [rim(.254, w=.04, h=.016, conf=.64), rim(.26, conf=.55)]
+    rims, stats = track_detected_rims(detections, [])
+    assert sorted(rims) == list(range(40))
+    assert stats["other_hoop_tracks"] == 0
+
+
 def test_panning_hoop_is_followed_and_jitter_is_smoothed():
     rng = np.random.default_rng(0)
     detections = {f: [rim(.2 + .004 * f + rng.normal(0, .0015))] for f in range(0, 60)}
