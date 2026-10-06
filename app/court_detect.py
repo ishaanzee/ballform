@@ -799,8 +799,11 @@ def propose(frame: np.ndarray, standard: str = "nba", boxes=()) -> Proposal:
     return Proposal(True, None, support, standard, points, court_to_image, diagnostics)
 
 
+MIN_AGREE, MIN_SHARE = 3, .35  # pick_calibration's gate: frames agreeing, and their share of the proposed ones
+
+
 def pick_calibration(proposals: list[dict], width: int, height: int, standard: str = "nba",
-                     agree_ft: float = 12., min_agree: int = 3, min_share: float = .35) -> dict:
+                     agree_ft: float = 12., min_agree: int = MIN_AGREE, min_share: float = MIN_SHARE) -> dict:
     """Choose one frame's proposal from proposals on several frames of one clip.
 
     proposals are `Proposal.to_dict()` results with their "frame". A broadcast camera
@@ -942,17 +945,28 @@ class ClipCalibration:
 
     def finish(self, wait_s: float = CLIP_WAIT_S) -> dict:
         """pick_calibration's result, with source CLIP_SOURCE, plus timing and unfinished fits in "check"."""
-        proposals, unfinished = [], 0
         deadline = time.perf_counter() + wait_s
-        if self.reader is not None:
-            self.reader.join(wait_s)
-        for frame_no in sorted(self.pending):
-            try:
-                proposals.append(self.pending[frame_no].get(max(0., deadline - time.perf_counter())))
-            except multiprocessing.TimeoutError:
-                unfinished += 1
-            except Exception as exc:  # noqa: BLE001 - one failed frame does not end the clip
-                self.error = f"{type(exc).__name__}: {exc}"
+        done: dict[int, dict | None] = {}
+        while True:
+            for frame_no, result in list(self.pending.items()):
+                if frame_no not in done and result.ready():
+                    try:
+                        done[frame_no] = result.get()
+                    except Exception as exc:  # noqa: BLE001 - one failed frame does not end the clip
+                        done[frame_no], self.error = None, f"{type(exc).__name__}: {exc}"
+            proposals = [done[f] for f in sorted(done) if done[f] is not None]
+            reading = self.reader is not None and self.reader.is_alive()
+            if (not reading and len(done) == len(self.pending)) or time.perf_counter() >= deadline:
+                break
+            # Stop early once the frames still to come could not overturn the acceptance,
+            # even if none of them agreed.
+            if proposals and "court_landmarks" in (picked := pick_calibration(proposals, *self.size,
+                                                                               standard=self.standard)):
+                remaining = len(self.frames) - len(done)
+                if picked["check"]["frames_agreeing"] >= MIN_SHARE * (picked["check"]["frames_proposed"] + remaining):
+                    break
+            time.sleep(.1)
+        unfinished = len(self.pending) - len(done)
         self.close()
         if proposals:
             picked = pick_calibration(proposals, *self.size, standard=self.standard)
