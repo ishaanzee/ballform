@@ -105,7 +105,8 @@ def main() -> None:
         print(f"{job}: " + (f"frame {picked['court_landmarks']['frame']}, {picked['check']}" if "court_landmarks" in picked
                             else f"rejected: {picked['rejected']}"))
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(dict(sorted(out.items())), indent=1) + "\n")
+    # One job per line keeps the file small and its diffs readable.
+    args.out.write_text("{\n" + ",\n".join(f"{json.dumps(job)}: {json.dumps(out[job])}" for job in sorted(out)) + "\n}\n")
     print(f"{accepted} of {len(ids)} clips calibrated; wrote {args.out}")
 
 
