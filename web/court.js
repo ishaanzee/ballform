@@ -6,7 +6,8 @@ window.courtCalibration = (() => {
   const svgNS = 'http://www.w3.org/2000/svg';
   const scale = 6, pad = 14;  // diagram pixels per foot, margin
   let templates = null, standard = 'nba', marks = {}, selected = null, markedTime = null, fitted = null;
-  // source: 'manual' | 'auto' (as proposed) | 'auto, adjusted' (proposed, then moved, added or removed)
+  // source: 'manual' | 'auto' (as proposed) | 'auto, whole clip' (found by an analysis, reopened here)
+  // | 'auto, adjusted' (proposed or found, then moved, added or removed)
   let source = 'manual', notice = '', dragging = null, detecting = false;
 
   fetch('/assets/court-template.json').then(r => r.json()).then(data => { templates = data; renderDiagram(); update(); })
@@ -15,6 +16,7 @@ window.courtCalibration = (() => {
   const court = () => templates && templates[standard];
   const game = () => q('#analysisMode').value === 'one_on_one';
   const active = () => marking === 'landmarks';
+  const wholeClip = () => game() && !!q('#courtAutoClip').checked;
   const onFrame = () => markedTime == null || Math.abs(preview.currentTime - markedTime) < .02;
 
   // The video is letterboxed inside its element (object-fit: contain); map through the shown picture.
@@ -168,11 +170,17 @@ window.courtCalibration = (() => {
       ? `Now click “${c.landmarks[selected].label}” on the video${selected in marks ? ', or drag its point' : ''}.`
       : 'Pick a landmark on the diagram, then click the same spot on the video.';
     if (!onFrame()) return `${lead}Court marks belong to the frame at ${markedTime.toFixed(2)} s. Return to it to see or add to them.`;
-    if (n < 4) return `${lead}${pick} ${n} of at least 4 marked (5 or more lets Ballform check the fit).`;
+    if (n < 4) {
+      const fallback = n ? ' Fewer than 4 marks are not used' : '';
+      const auto = wholeClip()
+        ? `${fallback || ' Without marks'}, Ballform calibrates the court automatically from frames across the clip.`
+        : (fallback ? `${fallback}.` : '');
+      return `${lead}${pick} ${n} of at least 4 marked (5 or more lets Ballform check the fit).${auto}`;
+    }
     if (fitted?.error) return `${lead}${pick} These marks cannot define the floor yet: 4 of them must not lie on one line.`;
     const rms = Math.sqrt(fitted.errors.reduce((a, e) => a + e * e, 0) / n);
     let text = `${lead}${pick}`;
-    if (source === 'auto') {
+    if (source === 'auto' || source === 'auto, whole clip') {
       // Proposed points all come from one fitted court, so their click and leave-one-out errors are ~0 and say nothing.
       text += ' The proposed points sit exactly on the fitted court, so there is no click error to show: judge the fit by whether the drawn lines follow the paint.';
     } else {
@@ -187,11 +195,12 @@ window.courtCalibration = (() => {
         }
       }
     }
+    if (wholeClip()) text += ' These marks are used instead of the automatic whole-clip calibration.';
     if (fitted.far < c.length / 4) text += ' All marks are near the basket, so far-court distances are extrapolated; add a half-court or far-sideline landmark if one is visible.';
     return text + ' Check that the drawn lines sit on the court.';
   }
 
-  const adjusted = () => { if (source === 'auto') source = 'auto, adjusted'; };
+  const adjusted = () => { if (source === 'auto' || source === 'auto, whole clip') source = 'auto, adjusted'; };
   function normalized(e) {
     const {r, w, h, x, y} = picture();
     return [(e.clientX - r.left - x) / w, (e.clientY - r.top - y) / h];
@@ -326,23 +335,76 @@ window.courtCalibration = (() => {
     separation_ft: 'Floor separation at release', contest_clearance_ft: 'Contest clearance (approx., feet)',
     visible_hand_clearance_ft: 'Visible hand clearance (approx., feet)'});
   function report(result) {
-    const summary = result.court_calibration, note = q('#courtNote');
-    note.classList.toggle('hidden', !summary);
-    if (!summary) return;
-    const error = summary.clicked_error_px;
-    const placed = {auto: ' (proposed automatically and accepted)', 'auto, adjusted': ' (proposed automatically, adjusted by hand)'}[summary.landmark_source] || '';
-    note.textContent = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks${placed}, `
-      + `${error.rms} px RMS error on the marked points; the floor mapping held on ${summary.reliable_frames} of `
-      + `${summary.frames} analyzed frames. Metrics in feet are measured on the floor; the torso-length metrics are `
-      + 'unchanged. Check the court lines drawn in the video.';
+    const summary = result.court_calibration, auto = result.court_auto_calibration, note = q('#courtNote');
+    note.classList.toggle('hidden', !summary && !auto);
+    note.replaceChildren();
+    if (!summary && !auto) return;
+    let text;
+    if (summary) {
+      const names = (summary.landmarks || []).map(p => templates?.[summary.standard]?.landmarks[p.id]?.label || p.id);
+      const placed = {auto: ' (proposed automatically and accepted)', 'auto, adjusted': ' (proposed automatically, adjusted by hand)'}[summary.landmark_source] || '';
+      // Landmarks found from the whole clip lie exactly on one fitted court, so they have no click error to show.
+      const how = summary.landmark_source === 'auto, whole clip'
+        ? ', found automatically from the whole clip' + (auto
+          ? `: ${auto.frames_agreeing} of the ${auto.frames_tried} frames tried agree on where the camera stands, and `
+            + `the landmarks were read off the frame at ${Number(summary.anchor_time_s ?? 0).toFixed(2)} s`
+          : ' in an earlier analysis')
+        : `${placed}, ${summary.clicked_error_px.rms} px RMS error on the marked points`;
+      text = `Court calibration: ${summary.standard.toUpperCase()} lines, ${summary.points} landmarks${how}`
+        + `${names.length ? ` (${names.join(', ')})` : ''}. The floor mapping held on ${summary.reliable_frames} of `
+        + `${summary.frames} analyzed frames. Metrics in feet are measured on the floor; the torso-length metrics are `
+        + 'unchanged. Check the court lines drawn in the video.';
+    } else {
+      text = `Automatic court calibration found no court to use: ${auto.reason}. Distances, zones and spacing are `
+        + 'not reported in feet. Mark the court by hand on a frame where the floor lines are clear to get them.';
+    }
+    note.append(text);
+    // The clip is still loaded on this page (not after reconnecting to a job), so it can be calibrated again.
+    if (typeof file !== 'undefined' && file && result.mode === 'one_on_one') {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'ghost';
+      button.textContent = summary ? 'Adjust court marks' : 'Calibrate court by hand';
+      button.addEventListener('click', () => reopen(summary, result.video?.fps || 30));
+      note.append(document.createElement('br'), button);
+    }
+  }
+
+  // Back from the results to the clip with the court panel open: the landmarks the analysis used are
+  // placed on their frame to adjust, or, when none were found, the user marks them.
+  function reopen(summary, fps) {
+    q('#results').classList.add('hidden');
+    ['#workspace', '#markStep', '#settings'].forEach(s => q(s).classList.remove('hidden'));
+    q('#progressStep').classList.add('hidden');
+    marking = 'landmarks';
+    q('#courtPanel').classList.remove('hidden');
+    if (summary?.landmarks?.length && templates?.[summary.standard]) {
+      if (standard !== summary.standard) { standard = summary.standard; q('#courtStandard').value = standard; renderDiagram(); }
+      // A quarter frame in, so the browser shows the anchor frame and the server rounds back to it.
+      markedTime = (summary.anchor_frame + .25) / fps;
+      marks = Object.fromEntries(summary.landmarks.filter(p => court().landmarks[p.id]).map(p => [p.id, p.image]));
+      selected = null; source = summary.landmark_source || 'manual';
+      notice = 'These are the landmarks the analysis used, on the frame they were read from. Drag any point that is '
+        + 'off, or select one on the diagram and remove it, then analyze again.';
+      preview.currentTime = markedTime;
+    } else {
+      notice = 'Scrub to a frame where the floor lines are clear, then mark the landmarks or press Auto-detect court, and analyze again.';
+    }
+    update();
+    q('#courtPanel').scrollIntoView?.({behavior: 'smooth', block: 'start'});
   }
 
   function clear() { marks = {}; markedTime = null; selected = null; source = 'manual'; notice = ''; dragging = null; update(); }
 
+  // Marks that define the floor are sent; without them the analysis may calibrate from the whole clip.
   function append(form) {
-    if (!game() || !court() || !fitted?.h) return;
-    form.append('court_landmarks', JSON.stringify({standard, time_s: markedTime, source,
-      points: Object.entries(marks).map(([id, image]) => ({id, image}))}));
+    if (!game()) return;
+    if (court() && fitted?.h) {
+      form.append('court_landmarks', JSON.stringify({standard, time_s: markedTime, source,
+        points: Object.entries(marks).map(([id, image]) => ({id, image}))}));
+      return;
+    }
+    form.append('court_auto', wholeClip() ? '1' : '0');
+    form.append('court_standard', standard);
   }
 
   q('#markLandmarks').addEventListener('click', () => { marking = 'landmarks'; q('#courtPanel').classList.remove('hidden'); update(); });
@@ -354,5 +416,6 @@ window.courtCalibration = (() => {
   q('#analysisMode').addEventListener('change', update);
   preview.addEventListener('seeked', update);
   preview.addEventListener('loadedmetadata', clear);
-  return {place, move, release, remove, draw, clear, append, report, applyProposal, source: () => source};
+  return {place, move, release, remove, draw, clear, append, report, reopen, applyProposal, refresh: update,
+    source: () => source};
 })();

@@ -12,6 +12,7 @@ function updateSettings() {
   const game = $('#analysisMode').value === 'one_on_one';
   $('#handedness').disabled = game;
   $('#poseModel').disabled = !game;
+  $('#courtAutoField').classList.toggle('hidden', !game);
   $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
@@ -29,10 +30,21 @@ function courtAllowed() {
   return $('#analysisMode').value === 'one_on_one' && ['elevated', 'courtside'].includes($('#cameraProfile').value);
 }
 $('#analysisMode').onchange = updateSettings;
+$('#courtAutoClip').onchange = () => window.courtCalibration?.refresh();
+// Whole-clip court calibration was checked on broadcast footage; for fixed cameras it is opt-in.
+function courtAutoDefault() {
+  const moving = $('#cameraProfile').value === 'moving';
+  $('#courtAutoClip').checked = moving;
+  $('#courtAutoHelp').textContent = moving
+    ? 'Finds the floor lines on frames across the clip so distances, zones and spacing come out in feet. Adds some CPU time; court marks you place in the preview are used instead.'
+    : 'Off by default for fixed cameras: it has only been checked on broadcast footage, and frames of a still camera show the same view, so their agreeing is weaker evidence. If you turn it on, check the court lines in the review video.';
+}
 $('#cameraProfile').onchange = () => {
   if (['elevated','moving'].includes($('#cameraProfile').value)) $('#analysisMode').value = 'one_on_one';
+  courtAutoDefault();
   updateSettings();
 };
+courtAutoDefault();
 $('#markRim').onclick = () => {marking='rim';};
 $('#markCourt').onclick = () => {marking='court';};
 updateSettings();
