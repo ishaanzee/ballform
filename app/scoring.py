@@ -16,6 +16,11 @@ RimInput = RimBox | Mapping[int, RimBox] | None
 # falling (rim to floor takes about 0.8 s). A rim-out, or a ball passing in
 # front of or behind the rim in the image, comes back up above the rim instead.
 REBOUND_S = .6
+# A shot falls from its apex to the rim within this long: 1 s of free fall is
+# 4.9 m, far higher than any arc rises above the rim (labeled makes took
+# 0.08-0.78 s). A later crossing is the ball dropping again after hitting the
+# rim or backboard, or a rebound or putback.
+ARRIVAL_S = 1.
 
 
 def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
@@ -242,6 +247,8 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
     """
     outcome, confidence, evidence, outcome_frame = "unknown", 0.0, [], None
     descending = [b for b in segment if b.frame >= apex_frame]
+    def box_inside(x: float, box: RimBox) -> bool:
+        return box[0] - .08 * box[2] <= x <= box[0] + 1.08 * box[2]
     crossings = []
     for p1, p2 in zip(descending, descending[1:]):
         rim1, rim2 = _rim_at(rim, p1.frame), _rim_at(rim, p2.frame)
@@ -255,9 +262,11 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
         x = p1.x + amount * (p2.x - p1.x)
         crossing_rim = tuple(rim1[i] + amount * (rim2[i] - rim1[i]) for i in range(4))
         if p2.frame - p1.frame <= max(3, fps * 0.25):
-            crossings.append((p2.frame, x, crossing_rim))
-    inside = [(f, x) for f, x, box in crossings
-              if box[0] - .08 * box[2] <= x <= box[0] + 1.08 * box[2]]
+            crossings.append((p2.frame, x, crossing_rim, box_inside(x, crossing_rim)))
+    arrival = apex_frame + ARRIVAL_S * fps
+    late = [(f, is_inside) for f, _, _, is_inside in crossings if f > arrival]
+    crossings = [c for c in crossings if c[0] <= arrival]
+    inside = [(f, x) for f, x, _, is_inside in crossings if is_inside]
     flow = net_motion or {}
     def motion_event(start: int, end: int) -> tuple[float, int | None]:
         """Return net-specific motion, not camera/background motion.
@@ -292,12 +301,24 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
         outcome = "missed"
         confidence = 0.74
         evidence.append("Descending ball crossed the rim plane outside the rim")
+    elif late:
+        # The shot did not come down through the rim plane on arrival (it hit
+        # the rim or backboard, or was hidden); the ball came down later.
+        frame, through = late[0]
+        delay = f"{(frame - apex_frame) / fps:.2f} s after the arc's apex, too late for the shot's first arrival"
+        if through and not bounced_out(track or segment, frame, rim, fps):
+            evidence.append(f"The ball dropped through the rim {delay}: a rattle-in, a rebound or a putback, "
+                            "so it is not called")
+        else:
+            outcome, confidence, outcome_frame = "missed", .66, frame
+            how = "through the rim and bounced back up" if through else "outside the rim"
+            evidence.append(f"The ball came down {how} {delay}, with no earlier crossing through the rim")
     else:
         # A moving net alone is never enough: an airball can brush the
         # net. When the ball is occluded at the hoop, require a descending
         # path that projects through the rim *and* a delayed net event.
         pre_rim = [b for b in descending if (box := _rim_at(rim, b.frame)) is not None
-                   and b.y <= box[1] + .8 * box[3]]
+                   and b.y <= box[1] + .8 * box[3] and b.frame <= arrival]
         last = pre_rim[-1] if pre_rim else None
         projected_u = None
         if last:

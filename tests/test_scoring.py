@@ -58,6 +58,34 @@ def test_one_stray_detection_above_rim_does_not_undo_a_make():
     assert shots[0].outcome == "made"
 
 
+def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
+    # The ball reaches the rim at frame 7 without crossing its plane, bounces
+    # up off it, and only drops through 1.2 s after the apex (rebound or putback).
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .56, .30), ball(9, .56, .25), ball(10, .56, .23), ball(11, .55, .26),
+        ball(12, .55, .30), ball(13, .55, .34), ball(14, .55, .36), ball(15, .55, .38),
+        ball(16, .55, .45), ball(17, .55, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "unknown"
+
+
+def test_late_drop_outside_rim_after_hitting_it_is_a_miss():
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .58, .30), ball(9, .61, .25), ball(10, .64, .23), ball(11, .66, .26),
+        ball(12, .68, .30), ball(13, .70, .34), ball(14, .71, .36), ball(15, .72, .38),
+        ball(16, .73, .45), ball(17, .74, .55),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+
+
 def test_net_only_motion_cannot_turn_an_airball_into_a_make():
     # The ball is lost before it has a descending path through the rim. This
     # represents an airball that brushes the net from the side or below.
