@@ -333,6 +333,18 @@ def test_ball_carried_into_the_rim_area_is_released_at_the_end_of_the_hold():
     assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "layup or dunk"
 
 
+def test_dunk_through_the_rim_before_the_hold_ends_is_made():
+    # 8c88, a80c: the hands are still on the ball as it goes down through the rim.
+    path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
+    path.update({f: lerp((.5, .06), (.5, .14), (f - 24) / 4) for f in range(25, 29)})
+    path.update({f: lerp((.5, .14), (.5, .4), (f - 28) / 10) for f in range(29, 45)})
+    holders = {f: (1, path[f]) for f in range(29)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(29)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["contact_frame"] == 28 and shot.outcome == "made"
+    assert shot.outcome_frame < 28
+
+
 def test_rim_attempt_moments_after_an_arc_replaces_it():
     # b212: the arc path caught the gather; the same hands finished at the rim 0.4 s later.
     path = {f: lerp((.4, .3), BASKET, f / 6) for f in range(7)}

@@ -321,7 +321,9 @@ def _overlapping(runs: list[Run], start: int, end: int) -> Run | None:
 
 def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim: RimInput,
              net_motion, fps: float) -> tuple[str, float, list[str], int | None]:
-    segment = [b for b in balls if start <= b.frame <= apex_frame + 1.5 * fps]
+    # A dunk or a layup carried up crosses the rim plane before the hold ends
+    # (``start``), so the descent is followed from the top of the ball's path.
+    segment = [b for b in balls if min(start, apex_frame) <= b.frame <= apex_frame + 1.5 * fps]
     if _rim_at(rim, apex_frame) is None or not segment:
         evidence = ["Outcome unavailable because the rim was not marked"]
         if event is not None and "ball_in_basket" in event.sources:
