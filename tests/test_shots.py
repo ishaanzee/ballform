@@ -492,3 +492,14 @@ def test_hand_at_the_rim_as_the_shot_arrives_is_not_a_tip():
     events = [(20, *basket_box(.8)), (30, *basket_box(.8))]
     balls, frames = scene(path, {22: (2, path[22])}, events, n=40)
     assert [shot.shot_type for shot in find_attempts([arc_shot()], balls, frames, FPS, None, 1.)] == ["jump shot"]
+
+
+@pytest.mark.parametrize("conf, found", [(.7, True), (.6, False)])
+def test_layup_dunk_class_without_a_rim_must_be_confident(conf, found):
+    # 8e57, dd76: a rebound tipped out upward under a weak layup-dunk class (0.51-0.57).
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(f, "layup_dunk", conf, (.35, .3, .45, .7)) for f in range(5, 11)]
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.45, .05), (f - 10) / 10) for f in range(11, 30)})
+    balls, frames = scene(path, holders, events)
+    assert len(find_attempts([], balls, frames, FPS, None, 1.)) == (1 if found else 0)

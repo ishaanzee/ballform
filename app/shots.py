@@ -100,6 +100,11 @@ ARC_RISE_RADII = 1.
 # real attempt came 1.28 s or more after a "made" call (25e9, after a false
 # make); hands on the ball falling through the net came 0.15-0.32 s after (b212, 25e9).
 DEAD_BALL_S = 1.
+# With no rim or basket detection to check the ball against, a layup-dunk
+# class run must be this confident. On the dev labels the path found no real
+# attempt; its two finds were one rebound tip-out seen in two overlapping clips
+# (8e57, dd76), at peaks 0.51 and 0.57.
+LAYUP_CLASS_PEAK = .7
 # A touch this soon after a shot reaches the basket is part of its arrival (a
 # contest, a hand behind the rim in 2D: 20f2 0.07 s), not a follow-up; the
 # ball has to come off the rim first. The earliest labeled follow-up touched
@@ -646,7 +651,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
 
     # Layup-dunk class without a basket event (no rim, ball-in-basket missed).
     for run in c7:
-        if (run.count < 2 or run.peak < .5
+        if (run.count < 2 or run.peak < LAYUP_CLASS_PEAK
                 or any(run.start - window <= a.release <= run.end + CONTACT_TO_BASKET_S * fps for a in anchors)
                 or any(run.start <= e.frame <= run.end + CONTACT_TO_BASKET_S * fps for e in events)):
             continue
