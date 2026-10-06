@@ -362,10 +362,19 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     previous_reach = None
     for shot in sorted(shots, key=lambda s: s.release_s):
         release = round(shot.release_s * fps)
+        apex = next((f for f in apexes if release <= f <= release + ARC_APEX_S * fps), None)
+        # The ball flies free from release to apex. A hand still bending its path
+        # later means the release estimate caught the gather or a pump fake.
+        late = [c for c in contacts if apex is not None and release < c.frame < apex - .1 * fps
+                and not free_flight(balls, c.frame, fps, aspect)]
+        if late:
+            shot.evidence.append(f"Release moved from frame {release} to the last hand contact before the arc apex, "
+                                 f"frame {late[-1].frame}")
+            release = late[-1].frame
+            shot.release_s = round(release / fps, 2)
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
-        apex = next((f for f in apexes if release <= f <= release + ARC_APEX_S * fps), None)
         if came_down_away(balls, apex, rim, fps, reach):
             # A pass. The ball still reached the basket later (some other
             # attempt), which a tip right after it is measured from.

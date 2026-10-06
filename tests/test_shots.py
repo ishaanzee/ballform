@@ -293,3 +293,15 @@ def test_ball_in_basket_with_the_ball_seen_elsewhere_is_ignored():
     balls, frames = scene({f: BASKET if f in (5, 6) else (.2, .4) for f in range(10)}, {},
                           [(5, *basket_box(.9)), (6, *basket_box(.9))])
     assert len(basket_events(frames, balls, None, FPS)) == 1
+
+
+def test_hand_on_the_ball_after_the_release_estimate_moves_the_release():
+    # The arc path timed the release at the gather (frame 0); P1 held the ball overhead to frame 8.
+    path = {f: (.4, .3) for f in range(9)}
+    path.update({f: lerp((.4, .3), (.45, .05), (f - 8) / 12) for f in range(9, 21)})
+    path.update({f: lerp((.45, .05), BASKET, (f - 20) / 8) for f in range(21, 35)})
+    holders = {f: (1, (.4, .3)) for f in range(9)}
+    balls, frames = scene(path, holders, [(28, *basket_box(.8)), (29, *basket_box(.8))])
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert shot.release_s == round(8 / FPS, 2) and shot.shot_type == "jump shot"
+    assert any(item.startswith("Release moved from frame 0") for item in shot.evidence)
