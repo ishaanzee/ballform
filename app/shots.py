@@ -48,6 +48,15 @@ FLIGHT_S = 3.0
 # A contact this close to the basket (torso lengths) is at the rim.
 AT_RIM = 1.2
 TIP_WINDOW_S = 2.5
+# The ball can reach the rim's area still in the shooter's hands (a dunk, a
+# layup carried up). The same player's contacts up to this long after it, with
+# gaps of at most HOLD_GAP_S, are still that hold.
+HOLD_PAST_BASKET_S = .4
+HOLD_GAP_S = .2
+# A rim attempt and an arc shot released this close together are one attempt
+# (the arc caught the gather); labeled tips came at least 0.8 s after the
+# previous shot reached the basket.
+SAME_ATTEMPT_S = .5
 # An arc shot whose ball reaches the basket this soon after release was let go
 # at the rim. On the labeled broadcast clips, jump shots took 1.05-1.38 s,
 # floaters 0.50-0.65 s, and 11 of 14 rim finishes 0.30 s or less (the other
@@ -438,7 +447,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     anchors.sort(key=lambda a: a.release)
 
     # Rim attempts: a basket event preceded by a new hand contact.
+    last_release = -1
     for event in events:
+        if event.frame <= last_release:
+            continue  # reached while the previous rim attempt's shooter still held the ball
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
         recent = [c for c in contacts if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
                   and (current is None or c.frame > current.release + .15 * fps)]
@@ -467,11 +479,29 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             bounced = any(b.y > contact.ball.y + .5 * contact.torso for b in path)
             if rise < .5 * contact.torso or bounced:
                 continue
+        # A dunk or a layup carried up enters the rim's area still in the
+        # hands; the release is the end of that hold.
+        for later in contacts:
+            if (contact.frame < later.frame <= event.frame + HOLD_PAST_BASKET_S * fps
+                    and later.track_id == contact.track_id and later.frame - contact.frame <= HOLD_GAP_S * fps):
+                contact = later
+        if contact.frame > event.frame:
+            dx, dy = _torso_distance(contact, event.location, aspect)
+            at_rim = math.hypot(dx, dy) <= AT_RIM
+        last_release = contact.frame
+        # An arc found within moments of this contact is the same attempt; the
+        # later of the two releases is the one the ball actually left on.
+        twin = next((a for a in anchors if a.shot.attempt is None
+                     and abs(a.release - contact.frame) <= SAME_ATTEMPT_S * fps), None)
+        if twin is not None:
+            if twin.release >= contact.frame:
+                continue
+            anchors.remove(twin)
         previous_reach = max((a.reached for a in anchors if a.reached is not None and a.reached < contact.frame),
                              default=None)
         handler = _handler_before(frames, contact.frame, fps)
         evidence = [f"Rim attempt: last hand contact by P{contact.track_id} at frame {contact.frame}; the ball reached the "
-                    f"basket {(event.frame - contact.frame) / fps:.2f} s later ({', '.join(event.sources).replace('_', '-')})"]
+                    f"basket {max(0, event.frame - contact.frame) / fps:.2f} s later ({', '.join(event.sources).replace('_', '-')})"]
         if (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
                 and at_rim and contact.raised and handler != contact.track_id):
             shot_type = "tip"
@@ -491,7 +521,8 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                          "" if shooter is not None else f", but the decoded ball handler was P{handler}; shooter withheld"))
         evidence += _class_note(_overlapping(c7, contact.frame - window, event.frame), "layup-dunk")
         evidence += _class_note(_overlapping(c8, contact.frame, event.frame + window), "shot-block")
-        top = min(path + [b for b in balls if event.frame < b.frame <= event.frame + .3 * fps], key=lambda b: b.y)
+        top = min(path + [b for b in balls if event.frame < b.frame <= max(event.frame, contact.frame) + .3 * fps],
+                  key=lambda b: b.y, default=contact.ball)
         shot = _shot(balls, contact.frame - round(.5 * fps), contact.frame, round(event.frame + 1.5 * fps), fps,
                      _outcome(balls, contact.frame, event, top.frame, rim, net_motion, fps), shot_type, evidence,
                      {"path": "rim_attempt", "contact_frame": contact.frame, "basket_frame": event.frame,

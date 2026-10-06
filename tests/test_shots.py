@@ -318,3 +318,27 @@ def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
     # 8628: a tip-dunk's catch above the rim and its slam read as two arcs.
     shot, = arc_shots_reaching([(10, 16), (18, 16)])
     assert shot.release_s == pytest.approx(10 / FPS)
+
+
+def test_ball_carried_into_the_rim_area_is_released_at_the_end_of_the_hold():
+    # 1b06, a80c: the ball enters the rim's area still in the hands and moves as
+    # smoothly as a ball in flight; the release is the last contact of the hold.
+    path = {f: lerp((.45, .4), (.5, .06), f / 24) for f in range(25)}
+    path.update({f: lerp((.5, .06), (.5, .3), (f - 24) / 12) for f in range(25, 40)})
+    holders = {f: (1, path[f]) for f in range(25)}
+    balls, frames = scene(path, holders, handlers={f: 1 for f in range(25)})
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.attempt["contact_frame"] == 24
+    assert shot.attempt["basket_frame"] < 24 and shot.shot_type == "dunk"
+
+
+def test_rim_attempt_moments_after_an_arc_replaces_it():
+    # b212: the arc path caught the gather; the same hands finished at the rim 0.4 s later.
+    path = {f: lerp((.4, .3), BASKET, f / 6) for f in range(7)}
+    path.update({f: (.5, .15) for f in range(7, 13)})
+    path.update({f: lerp((.5, .15), BASKET, (f - 12) / 3) for f in range(13, 25)})
+    holders = {f: (1, (.5, .15)) for f in range(8, 13)}
+    events = [(6, *basket_box(.8)), (15, *basket_box(.8)), (16, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(8, 13)})
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
+    assert shot.attempt["path"] == "rim_attempt" and shot.release_s == round(12 / FPS, 2)
