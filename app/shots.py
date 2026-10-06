@@ -68,6 +68,9 @@ ARC_APEX_S = 1.5
 # A ball coming down this many rim widths to the side of the rim's centre is
 # beside the basket, not at it.
 AWAY_RIM_WIDTHS = 1.
+# A blocked shot never reaches the basket either: a confident shot-block class
+# between release and apex keeps such an arc (76d9, Durant's block).
+BLOCK_CONFIDENCE = .8
 
 
 @dataclass
@@ -376,10 +379,14 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
         if came_down_away(balls, apex, rim, fps, reach):
-            # A pass. The ball still reached the basket later (some other
-            # attempt), which a tip right after it is measured from.
-            previous_reach = reach if reach is not None else previous_reach
-            continue
+            block = _overlapping(c8, release, apex or release)
+            if block is None or block.peak < BLOCK_CONFIDENCE:
+                # A pass. The ball still reached the basket later (some other
+                # attempt), which a tip right after it is measured from.
+                previous_reach = reach if reach is not None else previous_reach
+                continue
+            shot.evidence += ["Blocked: the ball came down away from the rim, with the detector's shot-block class "
+                              "firing between release and apex", *_class_note(block, "shot-block")]
         if reach is not None and reach - release <= RIM_FLIGHT_S * fps:
             flight = f"the ball reached the basket {max(0, reach - release) / fps:.2f} s after release"
             if (previous_reach is not None and previous_reach < reach

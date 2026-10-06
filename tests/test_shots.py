@@ -305,3 +305,10 @@ def test_hand_on_the_ball_after_the_release_estimate_moves_the_release():
     shot, = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
     assert shot.release_s == round(8 / FPS, 2) and shot.shot_type == "jump shot"
     assert any(item.startswith("Release moved from frame 0") for item in shot.evidence)
+
+
+def test_blocked_shot_coming_down_away_stays_a_shot():
+    events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
+    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert any(item.startswith("Blocked") for item in shot.evidence)
