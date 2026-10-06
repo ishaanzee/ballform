@@ -284,3 +284,12 @@ def test_pass_coming_down_beside_the_rim_is_not_a_shot():
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
     assert shot.shot_type == "jump shot"
 
+
+def test_ball_in_basket_with_the_ball_seen_elsewhere_is_ignored():
+    # 5adf: the empty net fired while the tracked ball was mid-pass across the court.
+    from app.shots import basket_events
+    balls, frames = scene({f: (.2, .4) for f in range(10)}, {}, [(5, *basket_box(.9)), (6, *basket_box(.9))])
+    assert basket_events(frames, balls, None, FPS) == []
+    balls, frames = scene({f: BASKET if f in (5, 6) else (.2, .4) for f in range(10)}, {},
+                          [(5, *basket_box(.9)), (6, *basket_box(.9))])
+    assert len(basket_events(frames, balls, None, FPS)) == 1

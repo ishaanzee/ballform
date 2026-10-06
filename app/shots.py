@@ -159,6 +159,13 @@ def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> 
     return contacts
 
 
+def _near_box(ball: Detection, box: tuple[float, float, float, float]) -> bool:
+    """The ball is within one box size of a detector box (x1, y1, x2, y2)."""
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    return x1 - w <= ball.x <= x2 + w and y1 - h <= ball.y <= y2 + h
+
+
 def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps: float,
                   contact_frames: list[int] = ()) -> list[BasketEvent]:
     """Moments the ball reaches the basket: ball-in-basket detections and rim-area entries.
@@ -168,7 +175,14 @@ def basket_events(frames: list[dict], balls: list[Detection], rim: RimInput, fps
     0.5 s merge into one event unless a hand touched the ball in between (a tip).
     """
     events = []
+    by_frame = {ball.frame: ball for ball in balls}
     for run in event_runs(frames, "ball_in_basket", fps):
+        # An empty net fires too: drop the run when the ball was seen confidently
+        # elsewhere on its frames, and never at the box.
+        seen = [ball for frame in range(run.start, run.end + 1)
+                if (ball := by_frame.get(frame)) is not None and ball.confidence >= .45]
+        if seen and not any(_near_box(ball, run.box) for ball in seen):
+            continue
         if run.peak >= BASKET_CONFIDENCE or run.count >= 2:
             x1, y1, x2, y2 = run.box
             events.append(BasketEvent(run.start, ["ball_in_basket"], run.peak, ((x1 + x2) / 2, (y1 + y2) / 2)))
