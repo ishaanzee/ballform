@@ -416,6 +416,34 @@ def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
     assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
 
 
+def tip_scene(holders, n=40):
+    """The jump shot reaches the basket at frame 20 and bounces to (.55, .14) by frame 26,
+    where it is tipped back to the basket (frame 30)."""
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, n)})
+    return scene(path, holders, [(20, *basket_box(.8)), (30, *basket_box(.8))], n=n)
+
+
+@pytest.mark.parametrize("rim, wrist, found", [(RIM, (.55, .36), True), (None, (.55, .36), False),
+                                                (RIM, (.55, .41), False)])
+def test_tip_at_full_stretch_by_the_rim(rim, wrist, found):
+    # f797, 1472, 8046: by the rim the tipper's wrist was up to 1.2 torso lengths
+    # below the ball (here 1.1); 1.35 is not a touch, nor is 1.1 away from a rim.
+    balls, frames = tip_scene({26: (2, wrist)})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
+
+
+def test_fingertips_under_the_ball_on_the_rim_do_not_hold_it():
+    # 699d, 9a92: the tipper's raised hand stayed a stretch below the ball as it
+    # sat on the rim; that is not the ball in his hands, so the tip ends at the touch.
+    holders = {26: (2, (.55, .30)), **{f: (2, (.5, .32)) for f in range(31, 40)}}
+    balls, frames = tip_scene(holders)
+    jump, tip = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert tip.shot_type == "tip" and tip.release_s == round(26 / FPS, 2)
+
+
 def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
     # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
     path = {f: (.42, .35) for f in range(11)}

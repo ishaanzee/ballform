@@ -40,6 +40,14 @@ CONTACT_MARGIN = .2
 # wrist: tippers' wrists were 0.7-0.97 torso lengths from the ball (3b4f,
 # 699d, ec07).
 FINGERTIP_REACH = .9
+# At the rim, players reaching up for the ball (a tip, a rebound) are at full
+# stretch, and the pose model puts the wrist of a fully extended arm short of
+# the hand: tippers' wrists were up to 1.2 torso lengths from a ball over their
+# raised hand (f797, 1472, 8046, f644). With the ball within RIM_REACH_WIDTHS
+# rim widths of the rim box, such a touch counts out to RIM_FINGERTIP_REACH. It
+# only finds the touch: a hold and a gather still need the ball in the hands.
+RIM_FINGERTIP_REACH = 1.25
+RIM_REACH_WIDTHS = 1.
 # A layup, dunk or tip reaches the basket this soon after the last touch.
 CONTACT_TO_BASKET_S = 1.2
 # A single low-confidence ball-in-basket frame fires on an empty net (3074e
@@ -194,14 +202,26 @@ def event_runs(frames: list[dict], name: str, fps: float, gap_s: float = .2) -> 
     return runs
 
 
-def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> list[Contact]:
-    """Frames where exactly one tracked player's wrist is on a confident ball."""
+def _by_the_rim(ball: Detection, rim: RimInput, aspect: float) -> bool:
+    """The ball is within RIM_REACH_WIDTHS rim widths of the rim box (x, y, w, h)."""
+    box = _rim_at(rim, ball.frame) if rim is not None else None
+    if box is None:
+        return False
+    margin = RIM_REACH_WIDTHS * box[2]
+    return (box[0] - margin <= ball.x <= box[0] + box[2] + margin
+            and box[1] - margin * aspect <= ball.y <= box[1] + box[3] + margin * aspect)
+
+
+def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float, rim: RimInput = None) -> list[Contact]:
+    """Frames where exactly one tracked player's wrist is on a confident ball. With ``rim``,
+    a fingertip touch at full stretch by the rim counts too (RIM_FINGERTIP_REACH)."""
     by_frame = {ball.frame: ball for ball in balls}
     contacts = []
     for frame in frames:
         ball = by_frame.get(frame["frame"])
         if ball is None or ball.confidence < .45:
             continue
+        fingertip = RIM_FINGERTIP_REACH if _by_the_rim(ball, rim, aspect) else FINGERTIP_REACH
         point = (ball.x * aspect, ball.y)
         ranked = []
         for pose in frame["players"]:
@@ -214,7 +234,7 @@ def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> 
                 wrist = min(wrists, key=lambda w: math.dist(w, point))
                 ranked.append((math.dist(wrist, point) / geometry[1], pose, geometry[1], wrist))
         ranked.sort(key=lambda item: item[0])
-        if not ranked or ranked[0][0] > FINGERTIP_REACH:
+        if not ranked or ranked[0][0] > fingertip:
             continue
         if len(ranked) > 1 and ranked[1][0] - ranked[0][0] < CONTACT_MARGIN:
             continue
@@ -533,7 +553,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     balls = sorted(balls, key=lambda b: b.frame)
     frames = sorted(frames, key=lambda f: f["frame"])
     contacts = hand_contacts(frames, balls, aspect)
-    events = basket_events(frames, balls, rim, fps, [c.frame for c in contacts])
+    # Touches that can start a rim attempt include a fingertip at full stretch by
+    # the rim; a hold or a gather (contacts) needs the ball in the hands.
+    touches = hand_contacts(frames, balls, aspect, rim)
+    events = basket_events(frames, balls, rim, fps, [c.frame for c in touches])
     c6, c7, c8 = (event_runs(frames, name, fps) for name in ("jump_shot", "layup_dunk", "shot_block"))
     window = round(SHOT_WINDOW_S * fps)
     by_frame = {b.frame: b for b in balls}
@@ -634,7 +657,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         if event.frame <= last_release:
             continue  # reached while the previous rim attempt's shooter still held the ball
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
-        recent = [c for c in contacts if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
+        recent = [c for c in touches if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
                   and (current is None or c.frame > current.release + .15 * fps)]
         caught = bool(recent) and sum(c.track_id == recent[-1].track_id for c in recent) >= CAUGHT_CONTACTS
         if (current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps
@@ -659,7 +682,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # of 32 missed rim attempts and floaters; the pass-overs it was added for
         # are claimed by the shot in flight or dropped as empty-net detections.
         contact = recent[-1]
-        if current is not None and current.shot.attempt is not None and _held_since(contacts, contact, current.release, fps):
+        if current is not None and current.shot.attempt is not None and _held_since(touches, contact, current.release, fps):
             # The previous rim attempt's shooter never let go (1b06: the blocked
             # dunker held the ball on the rim, then came down with it).
             continue
