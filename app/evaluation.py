@@ -12,6 +12,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import statistics
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -45,6 +46,18 @@ class Label:
     line: int = 0
 
 
+GAME = re.compile(r"\b([A-Z]{2,4}@[A-Z]{2,4} \d{4}-\d{2}-\d{2})")
+
+
+def game_of(notes: str) -> str:
+    """The game a label's notes name ("LAL@HOU 2026-03-18"), or "" when they name none.
+
+    Clips from one game share an arena, a broadcast and players, so tuning checks
+    hold out whole games (leave-one-game-out), not single clips."""
+    found = GAME.search(notes or "")
+    return found.group(1) if found else ""
+
+
 @dataclass
 class Match:
     label: Label | None
@@ -60,6 +73,7 @@ class ClipResult:
     job_id: str
     matches: list[Match] = field(default_factory=list)
     error: str | None = None
+    game: str = ""
 
 
 def _float(value: str, line: int, name: str) -> float | None:
@@ -197,6 +211,7 @@ def shot_rows(clips: list[ClipResult]) -> list[dict]:
             shot = m.shot or {}
             rows.append({
                 "job_id": clip.job_id,
+                "game": clip.game,
                 "label_release_s": m.label.release_s if m.label else None,
                 "predicted_release_s": shot.get("release_s"),
                 "problem": "missed shot" if not m.shot else "false shot" if not m.label else "",
@@ -326,7 +341,9 @@ def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: 
             except (OSError, ValueError, RuntimeError, EOFError, KeyError) as exc:
                 clips.append(ClipResult(job_id, error=f"{type(exc).__name__}: {exc}"))
                 continue
-            clips.append(ClipResult(job_id, match_shots(job_labels, result.get("shots") or [], tolerance_s)))
+            game = next((game_of(label.notes) for label in job_labels if game_of(label.notes)), "")
+            clips.append(ClipResult(job_id, match_shots(job_labels, result.get("shots") or [], tolerance_s),
+                                    game=game))
     return clips
 
 
@@ -381,7 +398,15 @@ def main(argv: list[str] | None = None) -> int:
     summary, rows = summarize(clips), shot_rows(clips)
     _print(summary, rows)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"summary": summary, "shots": rows}, indent=2))
+    games: dict[str, list[ClipResult]] = {}
+    for clip in clips:
+        games.setdefault(clip.game or "unknown", []).append(clip)
+    by_game = {game: {key: value for key, value in summarize(group).items()
+                      if key in {"clips", "labeled_shots", "predicted_shots", "matched", "detection", "outcome"}}
+               for game, group in sorted(games.items())}
+    for value in by_game.values():
+        value["outcome"] = {key: value["outcome"][key] for key in ("accuracy_when_called", "misses_called_made")}
+    args.out.write_text(json.dumps({"summary": summary, "by_game": by_game, "shots": rows}, indent=2))
     print(f"\nwrote {args.out}")
     return 0
 

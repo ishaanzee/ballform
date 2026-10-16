@@ -19,3 +19,4 @@ eval/report.json
 eval/clips/
 .claude/worktrees/
 eval/draft-frames/
+eval/staging/

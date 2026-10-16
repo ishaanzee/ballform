@@ -110,3 +110,10 @@ def test_the_court_map_cache_key_follows_the_landmarks_and_the_rerun(tmp_path):
     assert key != _court_map_key({"points": [1, 3]}, saved, video)
     saved.write_bytes(b"ab")
     assert key != _court_map_key({"points": [1, 2]}, saved, video)
+
+
+def test_the_game_comes_from_the_label_notes():
+    from app.evaluation import game_of
+
+    assert game_of("MIN@DEN 2025-12-25 ESPN event 401809242 Q4 9:55 'Rudy Gobert blocks ...'") == "MIN@DEN 2025-12-25"
+    assert game_of("no shot: passes around the arc") == ""
