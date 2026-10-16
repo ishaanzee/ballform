@@ -607,6 +607,47 @@ def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance
     assert bool(shot.evidence) == (expected != shot_type)
 
 
+class FlatCourt:
+    """A court map whose image is the floor seen from above: pixel = court feet (100 x 100 px)."""
+    width = height = 100
+
+    def __init__(self):
+        from app.court import template
+        self.court = template("nba")
+
+    def to_court(self, frame, pixel):
+        return float(pixel[0]), float(pixel[1])
+
+
+def walking_shooter(speed_ft_s, distance_ft):
+    """P1's feet for the second before a release at frame 30, coming at the basket at ``speed_ft_s``
+    and letting go ``distance_ft`` out; a jump shot measured at that distance."""
+    rim_y = FlatCourt().court.rim[1]
+    frames = []
+    for frame in range(31):
+        y = rim_y + distance_ft + speed_ft_s * (30 - frame) / FPS
+        feet = (0., y / 100, .9)  # in line with the basket (court x 0)
+        frames.append({"frame": frame, "time_s": frame / FPS,
+                       "players": [PoseFrame(frame, frame / FPS, {"left_ankle": feet, "right_ankle": feet}, track_id=1)]})
+    shot = ShotResult(1, 0., 1., 2., "unknown", 0., [], {}, shot_type="jump shot",
+                      game={"players": {"shooter_track_id": 1}, "release_frame": 30,
+                            "metrics": {"shot_distance_ft": distance_ft}})
+    return shot, frames
+
+
+@pytest.mark.parametrize("speed, distance, expected", [
+    (12., 15., "floater"),     # 913a, 4c19: runners measured 16.2 ft out at 13-17 ft/s
+    (2., 15., "jump shot"),    # a pull-up stops first
+    (12., 20., "jump shot"),   # too far out for a floater
+])
+def test_shooter_driving_at_the_basket_lets_go_a_floater(speed, distance, expected):
+    from app.shots import approach_speed, type_by_distance
+    shot, frames = walking_shooter(speed, distance)
+    assert approach_speed(shot, frames, FlatCourt()) == pytest.approx(speed)
+    type_by_distance([shot], frames, FlatCourt())
+    assert shot.shot_type == expected
+
+
 def test_single_touch_lofted_back_up_soon_after_the_previous_shot_is_a_tip():
     # fffe: the tip took 0.47 s to get back to the basket, longer than a finish at the rim.
     first, tip = arc_shots_reaching([(0, 20), (36, 51)])

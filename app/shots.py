@@ -93,6 +93,20 @@ FLOATER_FLIGHT_S = (.6, .8)
 # jump shots 7.0 ft (a 10 ft pull-up) and then 10.7 ft or more.
 JUMP_SHOT_MIN_FT = 10.
 FLOATER_MAX_FT = 16.
+# A floater is let go on the move toward the basket; a jump shooter stops first
+# (a pull-up, a turnaround, a catch and shoot). On the dev labels every floater
+# whose shooter came at the basket at 10 ft/s or more over the second before
+# release was a floater (11 of 11), and no jump shot from inside 20 ft came
+# faster than 7.4 ft/s. On a calibrated court an arc shot from up to
+# DRIVE_FLOATER_MAX_FT whose shooter approached at DRIVE_FT_S or more is a
+# floater: four driving floaters measured 15.6-16.6 ft out had been called
+# jump shots (041f, 4c19, 913a, e9d0).
+DRIVE_FT_S = 9.
+DRIVE_FLOATER_MAX_FT = 18.
+# The approach compares the shooter's floor position this long before release
+# (medians) with the position just before it.
+APPROACH_FROM_S = (.45, 1.)
+APPROACH_TO_S = (.05, .35)
 # Such a finish within this long of the previous shot reaching the basket is a
 # tip: labeled tips came 0.80-0.90 s after, a gathered putback dunk 1.48 s.
 TIP_AFTER_REACH_S = 1.
@@ -510,14 +524,50 @@ def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
     return "jump shot", _class_note(jump, "jump-shot")
 
 
-def type_by_distance(shots: list[ShotResult]) -> None:
+def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> float | None:
+    """The shooter's speed toward the basket on the calibrated floor in the second before
+    release, in ft/s (negative going away), or None without the shooter's feet mapped in
+    both windows (APPROACH_FROM_S, then APPROACH_TO_S before release)."""
+    from app.court import floor_point, near_half
+
+    game = shot.game or {}
+    shooter = (game.get("players") or {}).get("shooter_track_id")
+    near = next((f for f in player_frames if f["frame"] == game.get("release_frame")), None)
+    if shooter is None or near is None:
+        return None
+    windows: tuple[list, list] = ([], [])
+    for frame in player_frames:
+        before = near["time_s"] - frame["time_s"]
+        window = next((windows[i] for i, (low, high) in enumerate((APPROACH_FROM_S, APPROACH_TO_S))
+                       if low <= before <= high), None)
+        pose = next((p for p in frame["players"] if p.track_id == shooter), None) if window is not None else None
+        found = floor_point(pose, court_map.width, court_map.height) if pose is not None else None
+        point = court_map.to_court(frame["frame"], found[0]) if found else None
+        if point is not None:
+            window.append((frame["time_s"], near_half(point, court_map.court)))
+    if not all(windows):
+        return None
+    elapsed = float(np.median([t for t, _ in windows[1]]) - np.median([t for t, _ in windows[0]]))
+    start, end = (math.dist(np.median([p for _, p in w], axis=0), court_map.court.rim) for w in windows)
+    return (start - end) / elapsed if elapsed > 0 else None
+
+
+def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> None:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
-    ``shot_distance_ft``, the take-off spot), which says more than the detector classes
-    or the flight time. Rim finishes are left alone: their distance is where the path
-    passes the basket, and changing them would change how that distance is measured."""
+    ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
+    which say more than the detector classes or the flight time. Rim finishes are left
+    alone: their distance is where the path passes the basket, and changing them would
+    change how that distance is measured."""
     for shot in shots:
         distance = ((shot.game or {}).get("metrics") or {}).get("shot_distance_ft")
         if distance is None or shot.shot_type not in {"jump shot", "floater"}:
+            continue
+        speed = approach_speed(shot, player_frames, court_map) if court_map is not None else None
+        if speed is not None and speed >= DRIVE_FT_S and distance <= DRIVE_FLOATER_MAX_FT:
+            if shot.shot_type == "jump shot" or distance > FLOATER_MAX_FT:
+                shot.evidence.append(f"Floater: the shooter came at the basket at {speed:.0f} ft/s and let go "
+                                     f"{distance:.1f} ft out; jump shooters stop first")
+            shot.shot_type = "floater"
             continue
         if shot.shot_type == "jump shot" and distance < JUMP_SHOT_MIN_FT:
             shot.shot_type = "floater"
