@@ -29,7 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
-from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
+from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -143,6 +143,13 @@ LAYUP_CLASS_PEAK = .7
 # ball has to come off the rim first. The earliest labeled follow-up touched
 # it 0.25 s after (883b, a miss caught short of the rim).
 SETTLE_S = .15
+# A jump shot or floater comes down onto the rim from its arc. On the dev labels
+# every one that went in crossed the rim plane within 0.20 s of first coming down
+# to the rim (within BOUNCE_REACH rim-box heights above its top); the misses called
+# made had sat on the rim 0.33-0.58 s first (887d rolled off the front rim, 1c45
+# bounced and came down in front of it, 87a8 was tipped in). A ball that sits on
+# the rim longer can roll in or off, and in 2D the two cross the rim plane alike.
+RATTLE_S = .25
 
 
 @dataclass
@@ -564,6 +571,33 @@ def held_before_make(anchors: list[Anchor], contacts: list[Contact]) -> list[int
     return baskets
 
 
+def rattles_not_called(anchors: list[Anchor], balls: list[Detection], rim: RimInput, fps: float) -> None:
+    """Leave a jump shot's or floater's make uncalled when the ball sat on the rim (RATTLE_S) before
+    it dropped through: a rattle-in, a roll off the front or a tip look alike in 2D.
+
+    A rim finish is let go at the rim and often rolls off the fingertips onto it, so
+    only shots that came down onto the rim from an arc are timed.
+    """
+    for anchor in anchors:
+        shot = anchor.shot
+        if (shot.outcome != "made" or shot.outcome_frame is None or anchor.flight is None
+                or shot.shot_type not in {"jump shot", "floater"}):
+            continue
+        flight = [b for b in balls if anchor.flight <= b.frame <= shot.outcome_frame and b.confidence >= .45]
+        if not flight:
+            continue
+        top = min(flight, key=lambda b: b.y)
+        arrived = next((b.frame for b in flight if b.frame >= top.frame and (box := _rim_at(rim, b.frame)) is not None
+                        and box[0] - .5 * box[2] <= b.x <= box[0] + 1.5 * box[2]
+                        and b.y >= box[1] - BOUNCE_REACH * box[3]), None)
+        if arrived is None or shot.outcome_frame - arrived <= RATTLE_S * fps:
+            continue
+        shot.evidence.append(f"The ball sat on the rim {(shot.outcome_frame - arrived) / fps:.2f} s before it dropped "
+                             f"through: a rattle-in, a roll off the front of the rim or a tip, which look alike in 2D, "
+                             f"so it is not called")
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
+
+
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
                   rim: RimInput, aspect: float, net_motion=None) -> list[ShotResult]:
     """Type the arc shots and add the attempts they miss, sorted by release (one camera segment)."""
@@ -815,6 +849,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         anchors.append(Anchor(contact.frame, None, shot, contact.frame))
 
     baskets = held_before_make(anchors, contacts)
+    rattles_not_called(anchors, balls, rim, fps)
     kept = []
     for anchor in sorted(anchors, key=lambda a: a.release):
         # A make ends the possession: the ball drops through the net and has to be

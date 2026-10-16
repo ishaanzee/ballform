@@ -495,6 +495,25 @@ def test_basket_taken_off_a_shot_still_ends_the_possession():
     assert second.shot.outcome == "made"
 
 
+@pytest.mark.parametrize("shot_type, crossing, outcome", [
+    ("jump shot", 42, "unknown"),    # 887d, 1c45, 87a8: sat on the rim, then dropped
+    ("floater", 42, "unknown"),
+    ("jump shot", 26, "made"),       # through the rim as it came down
+    ("layup or dunk", 42, "made"),   # a finish rolls off the fingertips onto the rim
+])
+def test_jump_shot_that_sat_on_the_rim_before_dropping_is_not_called(shot_type, crossing, outcome):
+    from app.shots import rattles_not_called
+    path = arc((.45, .0), (.5, .07))
+    path.update({f: (.5, .07) for f in range(31, 41)})
+    path.update({f: (.5, .07 + .03 * (f - 40)) for f in range(41, 50)})
+    balls = [Detection(f, f / FPS, x, y, .9) for f, (x, y) in sorted(path.items())]
+    shot = attempt(0, None, "made", crossing)
+    shot.flight = 15
+    shot.shot.shot_type = shot_type
+    rattles_not_called([shot], balls, RIM, FPS)
+    assert shot.shot.outcome == outcome
+
+
 def test_follow_up_that_did_not_go_in_says_nothing():
     first, tip = attempt(10, 20, "unknown"), attempt(36, None, "missed", 45)
     missed_before_follow_up([first, tip], FPS)
