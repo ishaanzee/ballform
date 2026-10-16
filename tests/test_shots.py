@@ -851,3 +851,15 @@ def test_contact_that_looks_at_the_rim_but_takes_a_floaters_time_is_a_floater(re
     balls, frames = scene(path, holders, [(reach, *basket_box(.8))], {f: 1 for f in range(11)}, n=reach + 20)
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
     assert shot.attempt["path"] == "rim_attempt" and shot.shot_type == expected
+
+
+def test_a_shot_seen_never_reaching_a_basket_is_dropped_only_on_a_following_camera():
+    path = {f: (.4, .45) for f in range(6)}
+    path.update({f: lerp((.4, .45), (.5, .05), (f - 5) / 15) for f in range(6, 21)})
+    path.update({f: lerp((.5, .05), (.6, .3), (f - 20) / 15) for f in range(21, 36)})
+    holders = {f: (1, (.4, .45)) for f in range(6)}
+    events = [(f, "jump_shot", .9, (.35, .3, .45, .7)) for f in range(9)]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(6)})
+    assert find_attempts([], balls, frames, FPS, None, 1.) == []
+    shot, = find_attempts([], balls, frames, FPS, None, 1., following=False)
+    assert shot.shot_type == "jump shot"

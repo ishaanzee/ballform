@@ -743,7 +743,8 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
         if game_mode:
             segment_shots = find_attempts(segment_shots, segment_balls,
                                           [f for f in player_frames if start <= f["frame"] < end],
-                                          fps, scoring_rim, width / height, normalized_flow)
+                                          fps, scoring_rim, width / height, normalized_flow,
+                                          following=profile == "moving")
         for shot in segment_shots:
             if scoring_rim is None:
                 shot.evidence = ["Outcome unavailable: no rim was detected or marked."
