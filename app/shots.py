@@ -29,7 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
-from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
+from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -69,7 +69,10 @@ HOLD_GAP_S = .2
 SAME_ATTEMPT_S = .5
 # A shot in flight stops claiming basket events once one player has this many
 # sampled contacts with the ball after it (caught, not brushed: the 2fcb fan
-# pass-overs touched it on two).
+# pass-overs touched it on two). Held that long between a shot's flight to the
+# basket and the crossing it is credited with, the ball was caught and the shot
+# was over (held_before_make): labeled makes had at most 3 such contacts (2fcb's
+# fans again), the misses credited with a putback's basket 4 to 9.
 CAUGHT_CONTACTS = 4
 # Labeled tips touched the ball 0.80-0.90 s after the previous attempt reached
 # the basket, so a rim attempt's make seen later than this may be a follow-up's.
@@ -140,6 +143,13 @@ LAYUP_CLASS_PEAK = .7
 # ball has to come off the rim first. The earliest labeled follow-up touched
 # it 0.25 s after (883b, a miss caught short of the rim).
 SETTLE_S = .15
+# A jump shot or floater comes down onto the rim from its arc. On the dev labels
+# every one that went in crossed the rim plane within 0.20 s of first coming down
+# to the rim (within BOUNCE_REACH rim-box heights above its top); the misses called
+# made had sat on the rim 0.33-0.58 s first (887d rolled off the front rim, 1c45
+# bounced and came down in front of it, 87a8 was tipped in). A ball that sits on
+# the rim longer can roll in or off, and in 2D the two cross the rim plane alike.
+RATTLE_S = .25
 
 
 @dataclass
@@ -174,6 +184,9 @@ class Anchor:
     release: int
     reached: int | None
     shot: ShotResult
+    # From this frame the shot's ball is on its way to the basket: the arc's apex,
+    # or a rim attempt's release.
+    flight: int | None = None
 
 
 def event_runs(frames: list[dict], name: str, fps: float, gap_s: float = .2) -> list[Run]:
@@ -527,6 +540,64 @@ def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:
                              f"the basket, went through the rim: this one stayed out")
 
 
+def held_before_make(anchors: list[Anchor], contacts: list[Contact]) -> list[int]:
+    """Call a make missed when a player held the ball between the shot's flight to the basket and
+    the crossing it was credited with; returns those crossings, which are still baskets.
+
+    Nobody touches a shot on its way down to the rim, so a player holding the ball
+    in between (CAUGHT_CONTACTS sampled contacts: caught, not brushed) means the shot
+    ended there: blocked or rebounded, and the crossing was a putback's or a tip's
+    that was not found as its own attempt (d96f, f208: a dunk off the miss; 928c:
+    a tip-in credited to the layup it followed).
+    """
+    baskets = []
+    for anchor in anchors:
+        shot = anchor.shot
+        if shot.outcome not in {"made", "likely made"} or shot.outcome_frame is None or anchor.flight is None:
+            continue
+        held: dict[int, list[int]] = {}
+        for contact in contacts:
+            if anchor.flight < contact.frame < shot.outcome_frame:
+                held.setdefault(contact.track_id, []).append(contact.frame)
+        player, frames = max(held.items(), key=lambda item: len(item[1]), default=(None, []))
+        if len(frames) < CAUGHT_CONTACTS:
+            continue
+        shot.evidence.append(f"P{player} had the ball ({len(frames)} sampled contacts from frame {frames[0]}) after the "
+                             f"shot was on its way to the basket and before the ball went through the rim at frame "
+                             f"{shot.outcome_frame}: the shot stayed out, and that basket was a later touch's")
+        if shot.outcome == "made":
+            baskets.append(shot.outcome_frame)
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "missed", .6, frames[0]
+    return baskets
+
+
+def rattles_not_called(anchors: list[Anchor], balls: list[Detection], rim: RimInput, fps: float) -> None:
+    """Leave a jump shot's or floater's make uncalled when the ball sat on the rim (RATTLE_S) before
+    it dropped through: a rattle-in, a roll off the front or a tip look alike in 2D.
+
+    A rim finish is let go at the rim and often rolls off the fingertips onto it, so
+    only shots that came down onto the rim from an arc are timed.
+    """
+    for anchor in anchors:
+        shot = anchor.shot
+        if (shot.outcome != "made" or shot.outcome_frame is None or anchor.flight is None
+                or shot.shot_type not in {"jump shot", "floater"}):
+            continue
+        flight = [b for b in balls if anchor.flight <= b.frame <= shot.outcome_frame and b.confidence >= .45]
+        if not flight:
+            continue
+        top = min(flight, key=lambda b: b.y)
+        arrived = next((b.frame for b in flight if b.frame >= top.frame and (box := _rim_at(rim, b.frame)) is not None
+                        and box[0] - .5 * box[2] <= b.x <= box[0] + 1.5 * box[2]
+                        and b.y >= box[1] - BOUNCE_REACH * box[3]), None)
+        if arrived is None or shot.outcome_frame - arrived <= RATTLE_S * fps:
+            continue
+        shot.evidence.append(f"The ball sat on the rim {(shot.outcome_frame - arrived) / fps:.2f} s before it dropped "
+                             f"through: a rattle-in, a roll off the front of the rim or a tip, which look alike in 2D, "
+                             f"so it is not called")
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
+
+
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
                   rim: RimInput, aspect: float, net_motion=None) -> list[ShotResult]:
     """Type the arc shots and add the attempts they miss, sorted by release (one camera segment)."""
@@ -595,7 +666,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot.shot_type, notes = _jump_type(release, c6, c7, fps, None if reach is None else (reach - release) / fps)
         shot.evidence += notes
         previous_reach = reach if reach is not None else previous_reach
-        anchors.append(Anchor(release, None, shot))
+        anchors.append(Anchor(release, None, shot, apex))
 
     # Hidden-release jump shots: jump-shot class plus a supported arc, no known shot nearby.
     for run in c6:
@@ -625,7 +696,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      _outcome(balls, contact.frame, None, apex, rim, net_motion, fps), shot_type, evidence,
                      {"path": "hidden_release", "contact_frame": contact.frame, "apex_frame": apex,
                       "shooter_track_id": shooter})
-        anchors.append(Anchor(contact.frame, None, shot))
+        anchors.append(Anchor(contact.frame, None, shot, apex))
     anchors.sort(key=lambda a: a.release)
 
     # Rim attempts: a basket event preceded by a new hand contact.
@@ -742,7 +813,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot.evidence.append(f"The ball went through {(shot.outcome_frame - arrived) / fps:.2f} s after "
                                  "reaching the basket, as late as a follow-up tip, so the make is not credited")
             shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
-        anchors.append(Anchor(contact.frame, event.frame, shot))
+        anchors.append(Anchor(contact.frame, event.frame, shot, contact.frame))
         anchors.sort(key=lambda a: a.release)
 
     # Layup-dunk class without a basket event (no rim, ball-in-basket missed).
@@ -775,14 +846,19 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         shot = _shot(balls, contact.frame - round(.5 * fps), contact.frame, round(contact.frame + 1.5 * fps), fps,
                      _outcome(balls, contact.frame, None, top.frame, rim, net_motion, fps), "layup or dunk", evidence,
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
-        anchors.append(Anchor(contact.frame, None, shot))
+        anchors.append(Anchor(contact.frame, None, shot, contact.frame))
 
+    baskets = held_before_make(anchors, contacts)
+    rattles_not_called(anchors, balls, rim, fps)
     kept = []
     for anchor in sorted(anchors, key=lambda a: a.release):
         # A make ends the possession: the ball drops through the net and has to be
         # inbounded, so a "release" right after it is a hand on the falling ball.
-        if any(made.shot.outcome == "made" and made.shot.outcome_frame is not None
-               and 0 <= anchor.release - made.shot.outcome_frame <= DEAD_BALL_S * fps for made in kept):
+        # That holds for a basket taken off the shot before it, too, except for the
+        # attempt that scored it (a dunk still in the hands as it went through).
+        made_at = [frame for frame in baskets if frame != anchor.shot.outcome_frame] + [
+            made.shot.outcome_frame for made in kept if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
+        if any(0 <= anchor.release - frame <= DEAD_BALL_S * fps for frame in made_at):
             continue
         kept.append(anchor)
     missed_before_follow_up(kept, fps)

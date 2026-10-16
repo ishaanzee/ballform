@@ -86,6 +86,21 @@ def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
     assert shots[0].outcome == "unknown"
 
 
+def test_late_drop_through_the_rim_plane_that_falls_beside_the_net_is_a_miss():
+    # 913a, f29: the ball sat on the rim's edge and rolled off beside the net long after the apex.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .56, .30), ball(9, .56, .25), ball(10, .56, .23), ball(11, .57, .26),
+        ball(12, .58, .30), ball(13, .59, .34), ball(14, .60, .36), ball(15, .61, .38),
+        ball(16, .62, .42), ball(17, .65, .47), ball(18, .68, .52),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert any("beside the net" in item for item in shots[0].evidence)
+
+
 def test_late_drop_outside_rim_after_hitting_it_is_a_miss():
     track = [
         ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
@@ -125,6 +140,29 @@ def test_ball_falling_on_beside_the_rim_after_an_edge_crossing_is_a_miss(after, 
         *(ball(8 + i, x, y) for i, (x, y) in enumerate(after)),
     ]
     shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {})
+    assert len(shots) == 1
+    assert shots[0].outcome == outcome
+
+
+@pytest.mark.parametrize("after, outcome", [
+    # c949, cbf2: blocked away, the ball falls on past the rim's edge while still at net depth.
+    ([(.64, .47), (.68, .52)], "missed"),
+    # 5c66: rolls off the rim sideways at the net's height.
+    ([(.60, .45), (.65, .46), (.70, .46)], "missed"),
+    # Through the net: it stays under the rim.
+    ([(.55, .47), (.56, .52)], "made"),
+    # One stray detection beside the rim is not enough.
+    ([(.66, .47), (.56, .52)], "made"),
+    # Out of the bottom of the net a made ball can drift aside.
+    ([(.55, .47), (.66, .60), (.70, .66)], "made"),
+])
+def test_ball_seen_beside_the_net_after_crossing_inside_the_rim_is_a_miss(after, outcome):
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .32), ball(7, .55, .43),
+        *(ball(8 + i, x, y) for i, (x, y) in enumerate(after)),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {7: 3.0})
     assert len(shots) == 1
     assert shots[0].outcome == outcome
 
