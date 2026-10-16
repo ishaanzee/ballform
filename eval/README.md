@@ -57,6 +57,12 @@ Once thresholds are tuned against these clips, they stop being an honest test. P
 
 `holdout2.csv` is a blind second holdout made on 2026-10-06, after `holdout.csv` had been scored once following a day of tuning: 88 rows (82 attempts, 6 no-shot clips) in 54 broadcast clips from ten 2025-26 games in neither other file (GSW@SAS 11-12, CHI@POR 11-19, MIA@DAL 12-03, PHX@GSW 12-20, BOS@IND 01-12, MIN@SAS 01-17, MEM@DEN 02-11, ORL@LAL 02-24, DEN@UTA 03-02, HOU@MIN 03-25), labeled before any Ballform output existed for them. Nothing has been tuned against it; score it rarely and never tune against its per-shot errors.
 
+`holdout3.csv` is a blind third holdout made on 2026-10-16: 61 clips (90 shots, 7 no-shot clips) from ten 2025-26 games in no other file (GSW@IND 11-01, DEN@NOP 11-19, BKN@MIL 11-29, UTA@MEM 12-12, DAL@SAC 12-27, CHA@LAC 01-12, MEM@CHA 03-21, ORL@BOS 04-12, and the playoff games TOR@CLE 04-20 and SAS@OKC 05-20), labeled from the frames before Ballform had seen them, with `scripts/labeling/`. Treat it like `holdout2.csv`.
+
+`fixed.csv` holds non-broadcast footage: 35 clips from four public fixed-camera videos of adult games (notes start `FIXED youtube:<id>`; `ballform-eval` groups them by video). Their jobs use the courtside or elevated profile at the source frame rate (25-30 fps), and have no distances or zones. Score it with `--labels eval/fixed.csv`.
+
+New broadcast clips are labeled with the toolkit in `scripts/labeling/` (see its README): play-by-play, the NBA channel's full-game upload, scorebug OCR to line the two up, cut-free clips, contact sheets, and locked commits of the rows.
+
 ## running it
 
 ```bash

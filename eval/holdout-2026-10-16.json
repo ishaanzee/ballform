@@ -1,0 +1,1073 @@
+{
+  "summary": {
+    "clips": 51,
+    "clips_failed": 0,
+    "labeled_shots": 61,
+    "predicted_shots": 54,
+    "matched": 50,
+    "detection": {
+      "recall": "50/61 (82%)",
+      "precision": "50/54 (93%)"
+    },
+    "release_error_s_median": 0.095,
+    "outcome": {
+      "coverage": "46/50 (92%)",
+      "accuracy_when_called": "44/46 (96%)",
+      "labeled_vs_predicted": {
+        "made": {
+          "missed": 1,
+          "unknown": 2,
+          "made": 27
+        },
+        "missed": {
+          "missed": 17,
+          "unknown": 2,
+          "made": 1
+        }
+      },
+      "misses_called_made": 1
+    },
+    "shot_type": {
+      "accuracy": "35/49 (71%)",
+      "shot_vs_rim": "46/49 (94%)",
+      "shot_vs_rim_labeled_vs_predicted": {
+        "rim": {
+          "rim": 23,
+          "shot": 1
+        },
+        "shot": {
+          "shot": 23,
+          "rim": 2
+        }
+      }
+    },
+    "distance_ft": {
+      "coverage": "29/30 (97%)",
+      "mean_abs_error": 2.84,
+      "median_abs_error": 1.5,
+      "bias": 0.38,
+      "worst": 19.2
+    },
+    "zone": {
+      "accuracy": "38/45 (84%)",
+      "two_vs_three": "43/45 (96%)"
+    }
+  },
+  "by_game": {
+    "DEN@LAL 2026-03-14": {
+      "clips": 1,
+      "labeled_shots": 1,
+      "predicted_shots": 1,
+      "matched": 1,
+      "detection": {
+        "recall": "1/1 (100%)",
+        "precision": "1/1 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "0/0",
+        "misses_called_made": 0
+      }
+    },
+    "IND@CHA 2026-01-08": {
+      "clips": 4,
+      "labeled_shots": 7,
+      "predicted_shots": 6,
+      "matched": 5,
+      "detection": {
+        "recall": "5/7 (71%)",
+        "precision": "5/6 (83%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "3/4 (75%)",
+        "misses_called_made": 1
+      }
+    },
+    "LAL@DET 2026-03-23": {
+      "clips": 1,
+      "labeled_shots": 1,
+      "predicted_shots": 1,
+      "matched": 1,
+      "detection": {
+        "recall": "1/1 (100%)",
+        "precision": "1/1 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "0/1 (0%)",
+        "misses_called_made": 0
+      }
+    },
+    "LAL@OKC 2026-04-02": {
+      "clips": 4,
+      "labeled_shots": 5,
+      "predicted_shots": 1,
+      "matched": 1,
+      "detection": {
+        "recall": "1/5 (20%)",
+        "precision": "1/1 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "1/1 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "MIA@ORL 2025-12-09": {
+      "clips": 4,
+      "labeled_shots": 5,
+      "predicted_shots": 5,
+      "matched": 4,
+      "detection": {
+        "recall": "4/5 (80%)",
+        "precision": "4/5 (80%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "4/4 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "NOP@UTA 2026-02-26": {
+      "clips": 4,
+      "labeled_shots": 3,
+      "predicted_shots": 3,
+      "matched": 3,
+      "detection": {
+        "recall": "3/3 (100%)",
+        "precision": "3/3 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "3/3 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "NYK@PHI 2026-01-24": {
+      "clips": 7,
+      "labeled_shots": 8,
+      "predicted_shots": 8,
+      "matched": 8,
+      "detection": {
+        "recall": "8/8 (100%)",
+        "precision": "8/8 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "8/8 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "NYK@PHX 2026-01-09": {
+      "clips": 7,
+      "labeled_shots": 9,
+      "predicted_shots": 8,
+      "matched": 8,
+      "detection": {
+        "recall": "8/9 (89%)",
+        "precision": "8/8 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "8/8 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "ORL@SAS 2026-02-01": {
+      "clips": 4,
+      "labeled_shots": 4,
+      "predicted_shots": 5,
+      "matched": 4,
+      "detection": {
+        "recall": "4/4 (100%)",
+        "precision": "4/5 (80%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "4/4 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "SAS@LAL 2025-11-05": {
+      "clips": 7,
+      "labeled_shots": 9,
+      "predicted_shots": 9,
+      "matched": 8,
+      "detection": {
+        "recall": "8/9 (89%)",
+        "precision": "8/9 (89%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "7/7 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "SAS@MIN 2025-11-30": {
+      "clips": 4,
+      "labeled_shots": 4,
+      "predicted_shots": 4,
+      "matched": 4,
+      "detection": {
+        "recall": "4/4 (100%)",
+        "precision": "4/4 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "3/3 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "UTA@BOS 2025-11-03": {
+      "clips": 4,
+      "labeled_shots": 5,
+      "predicted_shots": 3,
+      "matched": 3,
+      "detection": {
+        "recall": "3/5 (60%)",
+        "precision": "3/3 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "3/3 (100%)",
+        "misses_called_made": 0
+      }
+    }
+  },
+  "shots": [
+    {
+      "job_id": "22847e65c6e8",
+      "game": "LAL@DET 2026-03-23",
+      "label_release_s": 4.9,
+      "predicted_release_s": 4.5,
+      "problem": "",
+      "outcome": "made / missed",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "5.0 / 3.6",
+      "zone": "paint / paint",
+      "shooter_label": "LAL gold (Vanderbilt per pbp)",
+      "predicted_shooter_track": 12
+    },
+    {
+      "job_id": "63f63cabf0cf",
+      "game": "DEN@LAL 2026-03-14",
+      "label_release_s": 4.3,
+      "predicted_release_s": 4.14,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "4.0 / 23.2",
+      "zone": "paint / corner_three",
+      "shooter_label": "#77 LAL gold (Doncic per pbp)",
+      "predicted_shooter_track": 11
+    },
+    {
+      "job_id": "8b398d70db4e",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": 5.4,
+      "predicted_release_s": 5.51,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "3.0 / None",
+      "zone": "paint / -",
+      "shooter_label": "#5 ORL black (Banchero per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "803b7f0f8a65",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": 2.6,
+      "predicted_release_s": 2.74,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": "paint / -",
+      "shooter_label": "#0 ORL black (Anthony Black per pbp)",
+      "predicted_shooter_track": 18
+    },
+    {
+      "job_id": "803b7f0f8a65",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": null,
+      "predicted_release_s": 3.8,
+      "problem": "false shot",
+      "outcome": "- / made",
+      "shot_type": "- / tip",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 20
+    },
+    {
+      "job_id": "803b7f0f8a65",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": 5.0,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "dunk / -",
+      "distance_ft": "1.0 / -",
+      "zone": "paint / -",
+      "shooter_label": "#0 ORL black (Anthony Black per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "18926a34ef4f",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": 5.1,
+      "predicted_release_s": 5.11,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 7.6",
+      "zone": "paint / paint",
+      "shooter_label": "#24 MIA white (Norman Powell per pbp)",
+      "predicted_shooter_track": 15
+    },
+    {
+      "job_id": "18926a34ef4f",
+      "game": "MIA@ORL 2025-12-09",
+      "label_release_s": 6.2,
+      "predicted_release_s": 6.14,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "tip / tip",
+      "distance_ft": "- / 1.8",
+      "zone": "paint / paint",
+      "shooter_label": "#9 MIA white (Pelle Larsson per pbp)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "9e495ccdb596",
+      "game": "SAS@MIN 2025-11-30",
+      "label_release_s": 3.3,
+      "predicted_release_s": 3.17,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 1.8",
+      "zone": "paint / paint",
+      "shooter_label": "#27 MIN black (Gobert per pbp)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "9e495ccdb596",
+      "game": "SAS@MIN 2025-11-30",
+      "label_release_s": 7.4,
+      "predicted_release_s": 7.34,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "- / 1.2",
+      "zone": "paint / paint",
+      "shooter_label": "#5 MIN black (Edwards per pbp)",
+      "predicted_shooter_track": 14
+    },
+    {
+      "job_id": "009e191da0b6",
+      "game": "SAS@MIN 2025-11-30",
+      "label_release_s": 2.1,
+      "predicted_release_s": 2.1,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "12.0 / 13.5",
+      "zone": "paint / paint",
+      "shooter_label": "#4 MIN black (Dillingham per pbp)",
+      "predicted_shooter_track": 7
+    },
+    {
+      "job_id": "2176506d25ee",
+      "game": "SAS@MIN 2025-11-30",
+      "label_release_s": 5.8,
+      "predicted_release_s": 5.71,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / floater",
+      "distance_ft": "5.0 / 7.5",
+      "zone": "paint / paint",
+      "shooter_label": "#3 SAS silver (Keldon Johnson per pbp)",
+      "predicted_shooter_track": 8
+    },
+    {
+      "job_id": "0dde54344d00",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 5.3,
+      "predicted_release_s": 5.27,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 11.6",
+      "zone": "paint / midrange",
+      "shooter_label": "#1 CHA purple (LaMelo Ball per pbp)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "0dde54344d00",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 6.6,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "dunk / -",
+      "distance_ft": "- / -",
+      "zone": "paint / -",
+      "shooter_label": "#16 CHA purple (PJ Hall per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "63b5066eb4ae",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": null,
+      "predicted_release_s": 1.9,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / layup",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "63b5066eb4ae",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 2.4,
+      "predicted_release_s": 2.5,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "dunk / tip",
+      "distance_ft": "3.0 / 0.7",
+      "zone": "paint / paint",
+      "shooter_label": "#0 CHA purple (Miles Bridges per pbp)",
+      "predicted_shooter_track": 4
+    },
+    {
+      "job_id": "63b5066eb4ae",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 9.5,
+      "predicted_release_s": 9.24,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 12.8",
+      "zone": "paint / -",
+      "shooter_label": "#43 IND white (Pascal Siakam per pbp)",
+      "predicted_shooter_track": 19
+    },
+    {
+      "job_id": "63b5066eb4ae",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 10.5,
+      "predicted_release_s": 10.68,
+      "problem": "",
+      "outcome": "missed / made",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 23.2",
+      "zone": "paint / -",
+      "shooter_label": "#43 IND white (Pascal Siakam)",
+      "predicted_shooter_track": 19
+    },
+    {
+      "job_id": "5179f9e8ec62",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 3.55,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "24.0 / -",
+      "zone": "corner_three / -",
+      "shooter_label": "#29 IND white (Quenton Jackson per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "5179f9e8ec62",
+      "game": "IND@CHA 2026-01-08",
+      "label_release_s": 6.05,
+      "predicted_release_s": 6.27,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 6.1",
+      "zone": "paint / paint",
+      "shooter_label": "#43 IND white (Pascal Siakam per pbp)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "691eb6f7dd43",
+      "game": "UTA@BOS 2025-11-03",
+      "label_release_s": 1.05,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "23.0 / -",
+      "zone": "corner_three / -",
+      "shooter_label": "#9 BOS white (Derrick White per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "691eb6f7dd43",
+      "game": "UTA@BOS 2025-11-03",
+      "label_release_s": 6.65,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "27.0 / -",
+      "zone": "above_break_three / -",
+      "shooter_label": "#30 BOS white (Sam Hauser per pbp)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "d8e8b3c8d849",
+      "game": "UTA@BOS 2025-11-03",
+      "label_release_s": 3.95,
+      "predicted_release_s": 3.9,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / floater",
+      "distance_ft": "13.0 / 6.5",
+      "zone": "paint / paint",
+      "shooter_label": "#3 UTA purple (Keyonte George per pbp)",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "571a42d92272",
+      "game": "UTA@BOS 2025-11-03",
+      "label_release_s": 2.6,
+      "predicted_release_s": 2.6,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / layup or dunk",
+      "distance_ft": "15.0 / 5.8",
+      "zone": "midrange / paint",
+      "shooter_label": "#3 UTA purple (Keyonte George per pbp)",
+      "predicted_shooter_track": 12
+    },
+    {
+      "job_id": "571a42d92272",
+      "game": "UTA@BOS 2025-11-03",
+      "label_release_s": 5.2,
+      "predicted_release_s": 5.41,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": " / layup or dunk",
+      "distance_ft": "1.0 / 4.7",
+      "zone": "paint / paint",
+      "shooter_label": "#30 UTA purple (Jusuf Nurkic per pbp)",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "cab42107d36d",
+      "game": "ORL@SAS 2026-02-01",
+      "label_release_s": 4.1,
+      "predicted_release_s": 3.64,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "8.0 / 10.8",
+      "zone": "paint / paint",
+      "shooter_label": "#23 ORL navy (Tristan da Silva)",
+      "predicted_shooter_track": 9
+    },
+    {
+      "job_id": "fe021028ddf3",
+      "game": "ORL@SAS 2026-02-01",
+      "label_release_s": 0.5,
+      "predicted_release_s": 0.47,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "23.0 / 22.5",
+      "zone": "corner_three / corner_three",
+      "shooter_label": "#93 ORL navy (Noah Penda)",
+      "predicted_shooter_track": 4
+    },
+    {
+      "job_id": "fe021028ddf3",
+      "game": "ORL@SAS 2026-02-01",
+      "label_release_s": 4.7,
+      "predicted_release_s": 4.6,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "1.0 / 2.4",
+      "zone": "paint / paint",
+      "shooter_label": "#93 ORL navy (Noah Penda)",
+      "predicted_shooter_track": 4
+    },
+    {
+      "job_id": "8f2d42a36ee2",
+      "game": "ORL@SAS 2026-02-01",
+      "label_release_s": 5.1,
+      "predicted_release_s": 5.21,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "1.0 / 3.3",
+      "zone": "paint / paint",
+      "shooter_label": "#1 SAS white (Victor Wembanyama)",
+      "predicted_shooter_track": 10
+    },
+    {
+      "job_id": "3270fbb9f4c8",
+      "game": "ORL@SAS 2026-02-01",
+      "label_release_s": null,
+      "predicted_release_s": 4.47,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / jump shot",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "9941b5da303e",
+      "game": "LAL@OKC 2026-04-02",
+      "label_release_s": 3.7,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "13.0 / -",
+      "zone": "midrange / -",
+      "shooter_label": "#2 OKC blue (Gilgeous-Alexander)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "9941b5da303e",
+      "game": "LAL@OKC 2026-04-02",
+      "label_release_s": 6.3,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "tip / -",
+      "distance_ft": "- / -",
+      "zone": "paint / -",
+      "shooter_label": "#55 OKC blue (Hartenstein)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "a21e9b93ed27",
+      "game": "LAL@OKC 2026-04-02",
+      "label_release_s": 1.7,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "22.0 / -",
+      "zone": "corner_three / -",
+      "shooter_label": "#77 LAL purple (Doncic)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "a21e9b93ed27",
+      "game": "LAL@OKC 2026-04-02",
+      "label_release_s": 3.8,
+      "predicted_release_s": 3.6,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "- / 7.8",
+      "zone": "paint / paint",
+      "shooter_label": "#28 LAL purple (Hachimura)",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "22517df1081c",
+      "game": "LAL@OKC 2026-04-02",
+      "label_release_s": 3.8,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "floater / -",
+      "distance_ft": "6.0 / -",
+      "zone": "paint / -",
+      "shooter_label": "#5 LAL purple (Ayton)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "4ab18555fb74",
+      "game": "NOP@UTA 2026-02-26",
+      "label_release_s": 2.2,
+      "predicted_release_s": 1.7,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "dunk / floater",
+      "distance_ft": "- / 8.2",
+      "zone": "paint / paint",
+      "shooter_label": "#5 UTA dark (Cody Williams)",
+      "predicted_shooter_track": 10
+    },
+    {
+      "job_id": "cd510e8ff6bb",
+      "game": "NOP@UTA 2026-02-26",
+      "label_release_s": 3.8,
+      "predicted_release_s": 3.6,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / floater",
+      "distance_ft": "10.0 / 10.1",
+      "zone": "paint / paint",
+      "shooter_label": "#22 NOP red (Derik Queen)",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "24e1db7b2910",
+      "game": "NOP@UTA 2026-02-26",
+      "label_release_s": 3.6,
+      "predicted_release_s": 3.34,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "23.0 / 18.2",
+      "zone": "corner_three / midrange",
+      "shooter_label": "#41 NOP red (Saddiq Bey)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "0619a2f48b41",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 2.9,
+      "predicted_release_s": 2.64,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "floater / floater",
+      "distance_ft": "8.0 / 7.5",
+      "zone": "paint / paint",
+      "shooter_label": "#1 SAS white (Victor Wembanyama)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "0619a2f48b41",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": null,
+      "predicted_release_s": 3.87,
+      "problem": "false shot",
+      "outcome": "- / missed",
+      "shot_type": "- / tip",
+      "distance_ft": "- / 5.8",
+      "zone": "- / paint",
+      "shooter_label": "",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "0619a2f48b41",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 4.7,
+      "predicted_release_s": 4.67,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "tip / layup or dunk",
+      "distance_ft": "- / 2.9",
+      "zone": "paint / paint",
+      "shooter_label": "#1 SAS white (Victor Wembanyama)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "43ff316a0dda",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 3.1,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "26.0 / -",
+      "zone": "above_break_three / -",
+      "shooter_label": "#77 LAL purple (Luka Doncic)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "586305af489d",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 3.6,
+      "predicted_release_s": 3.54,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "24.0 / 22.3",
+      "zone": "corner_three / corner_three",
+      "shooter_label": "#30 SAS white (Julian Champagnie)",
+      "predicted_shooter_track": 13
+    },
+    {
+      "job_id": "b63413f65202",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 4.0,
+      "predicted_release_s": 3.97,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "19.0 / 18.7",
+      "zone": "midrange / midrange",
+      "shooter_label": "#77 LAL purple (Luka Doncic)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "7cdac7e13ad6",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 0.7,
+      "predicted_release_s": 0.47,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "- / 17.3",
+      "zone": "paint / midrange",
+      "shooter_label": "#77 LAL purple (Luka Doncic)",
+      "predicted_shooter_track": 11
+    },
+    {
+      "job_id": "7cdac7e13ad6",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 3.5,
+      "predicted_release_s": 3.4,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "8.0 / 11.6",
+      "zone": "paint / midrange",
+      "shooter_label": "#77 LAL purple (Luka Doncic)",
+      "predicted_shooter_track": 11
+    },
+    {
+      "job_id": "1f7b454d20a0",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 0.3,
+      "predicted_release_s": 0.1,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "- / 12.5",
+      "zone": "midrange / midrange",
+      "shooter_label": "#9 LAL purple (Bronny James)",
+      "predicted_shooter_track": 8
+    },
+    {
+      "job_id": "1f7b454d20a0",
+      "game": "SAS@LAL 2025-11-05",
+      "label_release_s": 5.9,
+      "predicted_release_s": 5.87,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / layup or dunk",
+      "distance_ft": "1.0 / 2.1",
+      "zone": "paint / paint",
+      "shooter_label": "#5 LAL purple (Deandre Ayton)",
+      "predicted_shooter_track": 5
+    },
+    {
+      "job_id": "3461b9bc14b8",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 0.7,
+      "predicted_release_s": 0.73,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "25.0 / 26.8",
+      "zone": "above_break_three / above_break_three",
+      "shooter_label": "#11 NYK white (Jalen Brunson)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "cedf386d26a4",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 3.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "floater / -",
+      "distance_ft": "11.0 / -",
+      "zone": "midrange / -",
+      "shooter_label": "PHX dark (Oso Ighodaro per pbp; number not legible)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "cedf386d26a4",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 4.6,
+      "predicted_release_s": 4.5,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "tip / layup or dunk",
+      "distance_ft": "- / 1.2",
+      "zone": "paint / paint",
+      "shooter_label": "#0 PHX dark (Ryan Dunn)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "563d23e389a8",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 1.9,
+      "predicted_release_s": 2.04,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "4.0 / 1.0",
+      "zone": "paint / paint",
+      "shooter_label": "#8 NYK white (OG Anunoby)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "563d23e389a8",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 3.2,
+      "predicted_release_s": 3.2,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / layup or dunk",
+      "distance_ft": "- / 3.6",
+      "zone": "paint / paint",
+      "shooter_label": "#00 NYK white (Jordan Clarkson)",
+      "predicted_shooter_track": 4
+    },
+    {
+      "job_id": "b2eb8adb5213",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 2.8,
+      "predicted_release_s": 2.84,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "23.0 / 22.8",
+      "zone": "corner_three / corner_three",
+      "shooter_label": "#25 NYK white (Mikal Bridges)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "c4cdb8040e63",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 3.4,
+      "predicted_release_s": 3.34,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "25.0 / 25.5",
+      "zone": "above_break_three / above_break_three",
+      "shooter_label": "#12 PHX dark (Collin Gillespie)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "ca09a6ffec96",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 3.0,
+      "predicted_release_s": 3.0,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": "paint / -",
+      "shooter_label": "#2 NYK white (Miles McBride)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "ca09a6ffec96",
+      "game": "NYK@PHX 2026-01-09",
+      "label_release_s": 3.9,
+      "predicted_release_s": 3.97,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "tip / layup or dunk",
+      "distance_ft": "- / 1.6",
+      "zone": "paint / paint",
+      "shooter_label": "#23 NYK white (Mitchell Robinson)",
+      "predicted_shooter_track": 8
+    },
+    {
+      "job_id": "ffed2e7c3d7c",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 0.7,
+      "predicted_release_s": 0.67,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "26.0 / 27.2",
+      "zone": "above_break_three / above_break_three",
+      "shooter_label": "#11 NYK white (Jalen Brunson)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "ffed2e7c3d7c",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 5.3,
+      "predicted_release_s": 5.21,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "22.0 / 23.3",
+      "zone": "corner_three / corner_three",
+      "shooter_label": "#11 NYK white (Jalen Brunson)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "81d4a129c6d2",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 2.6,
+      "predicted_release_s": 2.67,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "27.0 / 28.1",
+      "zone": "above_break_three / above_break_three",
+      "shooter_label": "#0 PHI black (Tyrese Maxey)",
+      "predicted_shooter_track": 1
+    },
+    {
+      "job_id": "81d4a129c6d2",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 4.9,
+      "predicted_release_s": 4.64,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "dunk / tip",
+      "distance_ft": "- / 6.6",
+      "zone": "paint / paint",
+      "shooter_label": "#30 PHI black (Adem Bona)",
+      "predicted_shooter_track": 8
+    },
+    {
+      "job_id": "eb8ba28d0670",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 3.9,
+      "predicted_release_s": 3.84,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "19.0 / 13.8",
+      "zone": "midrange / paint",
+      "shooter_label": "#3 NYK white (Josh Hart)",
+      "predicted_shooter_track": 5
+    },
+    {
+      "job_id": "524958476f82",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 3.2,
+      "predicted_release_s": 3.2,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / floater",
+      "distance_ft": "13.0 / 14.5",
+      "zone": "midrange / midrange",
+      "shooter_label": "#11 NYK white (Jalen Brunson)",
+      "predicted_shooter_track": 9
+    },
+    {
+      "job_id": "7f19b7627508",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 4.5,
+      "predicted_release_s": 4.47,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "floater / floater",
+      "distance_ft": "5.0 / 6.1",
+      "zone": "paint / paint",
+      "shooter_label": "#9 PHI black (Kelly Oubre Jr.)",
+      "predicted_shooter_track": 7
+    },
+    {
+      "job_id": "b0d1bff5210c",
+      "game": "NYK@PHI 2026-01-24",
+      "label_release_s": 4.6,
+      "predicted_release_s": 4.47,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / 4.1",
+      "zone": "paint / paint",
+      "shooter_label": "#3 NYK white (Josh Hart)",
+      "predicted_shooter_track": 2
+    }
+  ]
+}

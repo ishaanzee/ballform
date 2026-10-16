@@ -26,7 +26,25 @@ Scored against hand labels of NBA broadcast possessions (`eval/`, timings from t
 | distance, median error | n/a | 1.6 ft (24 shots) | n/a | 1.3 ft (26 shots) |
 | zone / two vs three | n/a | 81% / 94% | n/a | 93% / 100% (54/54) |
 
-On the dev set itself (then the first 101 clips) the same code gets recall 87%, precision 94%, make/miss 100% right when called and shot type 90%, so the dev numbers overstate accuracy by roughly 10 points. "Before" is the code at `0ba3d67`; no clip had distances before automatic court calibration. Fixed-camera pickup, gym and form footage have not been labeled yet. The table is for the code before the 2026-10-15 rules below, which have not been scored on either holdout yet.
+On the dev set itself (then the first 101 clips) the same code gets recall 87%, precision 94%, make/miss 100% right when called and shot type 90%, so the dev numbers overstate accuracy by roughly 10 points. "Before" is the code at `0ba3d67`; no clip had distances before automatic court calibration. Fixed-camera pickup, gym and form footage have not been labeled yet. The table is for the code before the 2026-10-15 rules below; the next paragraph scores those.
+
+**2026-10-16: all three holdouts, a new frame loop and fixed cameras.** Every labeled clip was re-measured with the current frame loop (low-confidence poses a player box vouches for, flash-aware cut detection), so "before" below is the code at `77e494f`, before the 2026-10-15 rules, and "after" the current code, both on the same measurements. Holdout 3 is new: 61 clips (90 shots) from 10 more 2025-26 games including two playoff games, labeled from the frames before any Ballform output existed for them and scored once. The dev set gained 16 games (98 clips, 145 shots, 3 of them playoff games) labeled the same day; they took no part in the 2026-10-15 tuning, so they are a fourth fresh check.
+
+| | holdout 1 | holdout 2 | holdout 3 (new) | 16 new dev games |
+|---|---|---|---|---|
+| shots found (recall) | 77% → 82% (50/61) | 82% → 83% (68/82) | 79% → 80% (72/90) | 79% → 81% (118/145) |
+| predicted shots that are real | 90% → 93% (50/54) | 84% → 85% (68/80) | 84% → 83% (72/87) | 81% → 83% (118/143) |
+| make/miss called | 94% → 92% | 91% → 90% | 90% → 90% | 82% → 83% |
+| make/miss right when called | 95% → 96% (44/46) | 93% → 95% (58/61) | 91% → 92% (60/65) | 91% → 92% (90/98) |
+| misses called made | 2 → 1 | 4 → 3 | 5 → 3 | 6 → 4 |
+| shot type (five types) | 70% → 71% | 81% → 78% | 67% → 73% | 78% → 81% |
+| shot vs rim finish | 93% → 94% | 91% → 92% | 83% → 86% | 88% → 90% |
+| distance, median error | 1.7 → 1.5 ft | 1.1 → 1.2 ft | 1.6 → 1.6 ft | 1.65 → 1.6 ft |
+| zone | 82% → 84% | 93% → 95% | 88% → 91% | 93% → 92% |
+
+The rules generalize, but by much less than the dev gain (dev recall 86% → 90%, misses called made 12 → 2 on the 201 clips they were tuned on): one or two points of recall and precision, one or two fewer misses called made per holdout, and shot type mixed. On the whole 300-clip dev set the current code finds 87% of 428 shots at 89% precision, right on 96% of its make/miss calls.
+
+Fixed cameras were measured for the first time on `eval/fixed.csv`: 35 clips (33 shots) from four public adult videos (a half-court pickup run and an outdoor 4v4 from tripods at court level, a college club game and a rec game from the stands), labeled from the frames. Ballform finds 17 of the 33 shots (52%), 17 of its 22 shots are real, and it calls 9 of the 17 (8 right). The arc-reach rule of 2026-10-15 had dropped six of those jump shots, since on fixed footage no basket event caught their ball; it now runs only on the moving profile. Nothing has been tuned on fixed footage yet.
 
 **2026-10-15: tuning on the doubled dev set.** The 100 clips labeled on 2026-10-09 brought the dev set to 201 clips (283 shots, 40 games). On them the rules above did worse than on the first 101: recall 83% against 87%, precision 84% against 94%, and all 12 dev misses called made were there. Five branches were tuned against the 201 clips, one per weakness, each threshold swept and checked leave-one-game-out over the 40 games, and merged in this order: make/miss (below), rim-attempt touches and arc detection (which shots game mode finds), shot type (the same section), and the take-off and court following behind distances (`docs/court-calibration.md`). At the merges two tips found by the new fingertip reach were typed putbacks by the new put-down rule; that rule now needs the ball in the hands (below). Dev replay, 201 clips:
 

@@ -1,0 +1,605 @@
+{
+  "summary": {
+    "clips": 35,
+    "clips_failed": 0,
+    "labeled_shots": 33,
+    "predicted_shots": 22,
+    "matched": 17,
+    "detection": {
+      "recall": "17/33 (52%)",
+      "precision": "17/22 (77%)"
+    },
+    "release_error_s_median": 0.05,
+    "outcome": {
+      "coverage": "9/17 (53%)",
+      "accuracy_when_called": "8/9 (89%)",
+      "labeled_vs_predicted": {
+        "missed": {
+          "missed": 5,
+          "unknown": 4
+        },
+        "made": {
+          "made": 3,
+          "unknown": 4,
+          "missed": 1
+        }
+      },
+      "misses_called_made": 0
+    },
+    "shot_type": {
+      "accuracy": "13/17 (76%)",
+      "shot_vs_rim": "15/17 (88%)",
+      "shot_vs_rim_labeled_vs_predicted": {
+        "shot": {
+          "shot": 10,
+          "rim": 1
+        },
+        "rim": {
+          "rim": 5,
+          "shot": 1
+        }
+      }
+    },
+    "distance_ft": {
+      "coverage": "0/0"
+    },
+    "zone": {
+      "accuracy": "0/0",
+      "two_vs_three": "0/0"
+    }
+  },
+  "by_game": {
+    "youtube:AXZdluPH6s8": {
+      "clips": 9,
+      "labeled_shots": 8,
+      "predicted_shots": 11,
+      "matched": 8,
+      "detection": {
+        "recall": "8/8 (100%)",
+        "precision": "8/11 (73%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "7/7 (100%)",
+        "misses_called_made": 0
+      }
+    },
+    "youtube:RghuA5Af5LI": {
+      "clips": 9,
+      "labeled_shots": 9,
+      "predicted_shots": 4,
+      "matched": 3,
+      "detection": {
+        "recall": "3/9 (33%)",
+        "precision": "3/4 (75%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "0/0",
+        "misses_called_made": 0
+      }
+    },
+    "youtube:bKA6hf_vg3c": {
+      "clips": 9,
+      "labeled_shots": 9,
+      "predicted_shots": 3,
+      "matched": 3,
+      "detection": {
+        "recall": "3/9 (33%)",
+        "precision": "3/3 (100%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "1/2 (50%)",
+        "misses_called_made": 0
+      }
+    },
+    "youtube:jzIBSgQpt-Q": {
+      "clips": 8,
+      "labeled_shots": 7,
+      "predicted_shots": 4,
+      "matched": 3,
+      "detection": {
+        "recall": "3/7 (43%)",
+        "precision": "3/4 (75%)"
+      },
+      "outcome": {
+        "accuracy_when_called": "0/0",
+        "misses_called_made": 0
+      }
+    }
+  },
+  "shots": [
+    {
+      "job_id": "bf348488b949",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.05,
+      "predicted_release_s": 4.0,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / floater",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#2 Elon white",
+      "predicted_shooter_track": 13
+    },
+    {
+      "job_id": "385bf04c3052",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.65,
+      "predicted_release_s": 4.54,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "Duke blue (number not legible)",
+      "predicted_shooter_track": 12
+    },
+    {
+      "job_id": "e51166434eb9",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.3,
+      "predicted_release_s": 4.24,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#1 Elon white",
+      "predicted_shooter_track": 9
+    },
+    {
+      "job_id": "a451aaf39913",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": null,
+      "predicted_release_s": 0.1,
+      "problem": "false shot",
+      "outcome": "- / missed",
+      "shot_type": "- / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 7
+    },
+    {
+      "job_id": "a451aaf39913",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 2.9,
+      "predicted_release_s": 2.87,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#1 Elon white",
+      "predicted_shooter_track": 14
+    },
+    {
+      "job_id": "17fce2221406",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.05,
+      "predicted_release_s": 4.04,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "jump shot / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#1 Elon white",
+      "predicted_shooter_track": 17
+    },
+    {
+      "job_id": "a9a8b1101879",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.85,
+      "predicted_release_s": 4.84,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#30 Elon white",
+      "predicted_shooter_track": 10
+    },
+    {
+      "job_id": "0ba47124b408",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": null,
+      "predicted_release_s": 2.37,
+      "problem": "false shot",
+      "outcome": "- / missed",
+      "shot_type": "- / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "0ba47124b408",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.3,
+      "predicted_release_s": 4.2,
+      "problem": "",
+      "outcome": "made / made",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "Duke blue (number not legible)",
+      "predicted_shooter_track": 13
+    },
+    {
+      "job_id": "f01840d5c48e",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": null,
+      "predicted_release_s": 2.14,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / floater",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 7
+    },
+    {
+      "job_id": "f01840d5c48e",
+      "game": "youtube:AXZdluPH6s8",
+      "label_release_s": 4.2,
+      "predicted_release_s": 3.97,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#5 Duke blue",
+      "predicted_shooter_track": 15
+    },
+    {
+      "job_id": "59a2c9e0e14f",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.05,
+      "predicted_release_s": 4.03,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "navy T-shirt, red shorts (big man)",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "d25321b4394c",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.2,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "grey tank top, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "a1cdd98cf977",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": null,
+      "predicted_release_s": 3.63,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / jump shot",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "a1cdd98cf977",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.25,
+      "predicted_release_s": 4.27,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "layup / layup or dunk",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "grey tank top, black shorts",
+      "predicted_shooter_track": 2
+    },
+    {
+      "job_id": "24791ec6e3b1",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "grey T-shirt, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "52bbc548f89d",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.15,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "black T-shirt, black shorts, red shoes",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "de09d2db7ff5",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 4.0,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "light-blue T-shirt, purple shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "50aad445307e",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 3.4,
+      "predicted_release_s": 3.47,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "grey tank top, black shorts",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "6f23568a8799",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 3.9,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "black T-shirt, black shorts, black shoes",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "6f23568a8799",
+      "game": "youtube:RghuA5Af5LI",
+      "label_release_s": 5.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "tip / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "grey tank top, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "f90046acfe2b",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 3.35,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "black T-shirt, black shorts (bald)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "0bbf45b3f0b0",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 2.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "#6 blue (PORZINGIS jersey, floral shorts)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "fa7fcd5a9a2d",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 3.3,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "black top, black shorts (stocky)",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "d06339fdd5d6",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 2.75,
+      "predicted_release_s": 2.76,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "black T-shirt with red-white chest logo, black shorts (long dark hair)",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "16d700d06cc7",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 2.2,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "light-grey sleeveless top, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "16d700d06cc7",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 6.1,
+      "predicted_release_s": 6.12,
+      "problem": "",
+      "outcome": "made / missed",
+      "shot_type": "floater / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#6 blue (PORZINGIS jersey, floral shorts)",
+      "predicted_shooter_track": 13
+    },
+    {
+      "job_id": "17189801d367",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 3.4,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "grey sleeveless top, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "b636a470fe93",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 3.75,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "light-grey sleeveless top, black shorts",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "e4407a539c96",
+      "game": "youtube:bKA6hf_vg3c",
+      "label_release_s": 3.65,
+      "predicted_release_s": 3.56,
+      "problem": "",
+      "outcome": "missed / missed",
+      "shot_type": "layup / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "charcoal sleeveless top with white back print, grey shorts",
+      "predicted_shooter_track": 4
+    },
+    {
+      "job_id": "6740416d5e12",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.8,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "made / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "#3 GUEST dark",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "9c5586c3d708",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "layup / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "#9 GUEST dark",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "8ae09675fb98",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": null,
+      "predicted_release_s": 0.03,
+      "problem": "false shot",
+      "outcome": "- / unknown",
+      "shot_type": "- / jump shot",
+      "distance_ft": "- / None",
+      "zone": "- / -",
+      "shooter_label": "",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "8ae09675fb98",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.5,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "floater / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "#1 HOME white",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "73491e2e4af2",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.45,
+      "predicted_release_s": null,
+      "problem": "missed shot",
+      "outcome": "missed / -",
+      "shot_type": "jump shot / -",
+      "distance_ft": "- / -",
+      "zone": " / -",
+      "shooter_label": "#52 GUEST dark",
+      "predicted_shooter_track": null
+    },
+    {
+      "job_id": "8b6bb1a2ace5",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.5,
+      "predicted_release_s": 4.52,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#1 HOME white",
+      "predicted_shooter_track": 6
+    },
+    {
+      "job_id": "347b46e32aa2",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 4.5,
+      "predicted_release_s": 4.39,
+      "problem": "",
+      "outcome": "made / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#9 GUEST dark",
+      "predicted_shooter_track": 3
+    },
+    {
+      "job_id": "bbcb9778ed5b",
+      "game": "youtube:jzIBSgQpt-Q",
+      "label_release_s": 3.45,
+      "predicted_release_s": 3.38,
+      "problem": "",
+      "outcome": "missed / unknown",
+      "shot_type": "jump shot / jump shot",
+      "distance_ft": "- / None",
+      "zone": " / -",
+      "shooter_label": "#25 HOME white",
+      "predicted_shooter_track": 4
+    }
+  ]
+}
