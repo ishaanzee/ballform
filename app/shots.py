@@ -146,6 +146,13 @@ SETTLE_S = .15
 # 1.27 rim widths above the rim; three-point shots whose rise crossed the rim's
 # area 2.2 and 3.9 (fff8, fd5d).
 HIGH_APEX_RIM_WIDTHS = 1.5
+# A tip pushes the ball up at the rim or lets it roll in; a dunk or a putback laid
+# in puts it down through the rim at once. A ball falling more than this many rim
+# widths in the PUT_DOWN_S after the touch was put down: labeled tips fell at most
+# 0.58 (699d; 3b4f, tapped in from above the rim, 0.55), the putback dunks and
+# layups typed tips 0.8-1.5 (a0e5, 1185: through the net 0.1 s after the touch).
+PUT_DOWN_RIM_WIDTHS = .7
+PUT_DOWN_S = .3
 
 
 @dataclass
@@ -407,6 +414,18 @@ def _held_since(contacts: list[Contact], contact: Contact, frame: int, fps: floa
     return held <= frame
 
 
+def _put_down(balls: list[Detection], frame: int, rim: RimInput, fps: float, aspect: float) -> float | None:
+    """How far the ball fell in the PUT_DOWN_S after leaving the hand at ``frame``, in rim
+    widths (confident detections; None without a rim or the ball seen around the release)."""
+    box = _rim_at(rim, frame)
+    at = min((b for b in balls if abs(b.frame - frame) <= .05 * fps and b.confidence >= .45),
+             key=lambda b: abs(b.frame - frame), default=None)
+    later = [b.y for b in balls if frame < b.frame <= frame + PUT_DOWN_S * fps and b.confidence >= .45]
+    if box is None or at is None or not later:
+        return None
+    return (max(later) - at.y) / (box[2] * aspect)
+
+
 def _gathered(contacts: list[Contact], balls: list[Detection], frame: int, rim: RimInput, fps: float,
               aspect: float) -> str | None:
     """How the player in contact at ``frame`` gathered the ball before letting it go, or None
@@ -605,7 +624,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         gathered = _gathered(contacts, balls, release, rim, fps, aspect) if follow_up else None
         arrived = _arrival(balls, rim, reach, apex, aspect)
         flight = None if arrived is None else f"the ball reached the basket {max(0, arrived - release) / fps:.2f} s after release"
-        if follow_up and gathered is None and arrived - release <= TIP_FLIGHT_S * fps:
+        fall = _put_down(balls, release, rim, fps, aspect) if follow_up and gathered is None else None
+        put_down = fall is not None and fall > PUT_DOWN_RIM_WIDTHS
+        if follow_up and gathered is None and not put_down and arrived - release <= TIP_FLIGHT_S * fps:
             # Nobody shoots a jump shot this soon after the previous shot got to
             # the basket: a single touch on the rebound is a tip, even one lofted
             # back up for longer than a finish at the rim (fffe, 0.47 s).
@@ -618,6 +639,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             if gathered is not None:
                 notes.append(f"Putback, not a tip: {(release - previous_reach) / fps:.2f} s after the previous shot got "
                              f"there, but the shooter {gathered}")
+            elif put_down:
+                notes.append(f"Putback, not a tip: the ball fell {fall:.1f} rim widths in the {PUT_DOWN_S} s after the "
+                             "touch, put down through the rim")
         else:
             shot.shot_type, notes = _jump_type(release, c6, c7, fps, None if arrived is None else (arrived - release) / fps)
         shot.evidence += notes
@@ -723,8 +747,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         evidence = [f"Rim attempt: last hand contact by P{contact.track_id} at frame {contact.frame}; the ball reached the "
                     f"basket {max(0, event.frame - contact.frame) / fps:.2f} s later ({', '.join(event.sources).replace('_', '-')})"]
         gathered = _gathered(contacts, balls, contact.frame, rim, fps, aspect)
-        if (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
-                and at_rim and contact.raised and handler != contact.track_id and gathered is None):
+        follow_up = (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
+                     and at_rim and contact.raised and handler != contact.track_id and gathered is None)
+        fall = _put_down(balls, contact.frame, rim, fps, aspect) if follow_up else None
+        if follow_up and (fall is None or fall <= PUT_DOWN_RIM_WIDTHS):
             shot_type = "tip"
             evidence.append(f"Tip: raised-hand touch at the rim {(contact.frame - previous_reach) / fps:.2f} s after the "
                             "previous attempt reached the basket")
@@ -733,6 +759,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             # contact's height against the basket did not separate them.
             shot_type = "layup or dunk"
             evidence.append("Layup or dunk: last contact at the basket, reaching it within 0.35 s")
+            if follow_up:
+                evidence.append(f"Putback, not a tip: the ball fell {fall:.1f} rim widths in the {PUT_DOWN_S} s after "
+                                "the touch, put down through the rim")
         elif ((not at_rim and event.frame - contact.frame > RIM_FLIGHT_S * fps)
               or event.frame - contact.frame >= FLOATER_FLIGHT_S[0] * fps):
             # Let go away from the rim with as long a flight as an arc shot's: a
@@ -748,7 +777,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
                 evidence.append(f"Putback: {(contact.frame - previous_reach) / fps:.2f} s after the previous attempt "
                                 "reached the basket")
-        shooter = contact.track_id if shot_type == "tip" or handler in (None, contact.track_id) else None
+        # The decoded handler lags a one-touch follow-up at the rim (a tip, or a putback put
+        # straight down), so it does not withhold that shooter.
+        shooter = contact.track_id if follow_up or handler in (None, contact.track_id) else None
         evidence.append(f"Shooter P{contact.track_id} is the last player in hand contact" +
                         (", matching the decoded ball handler" if handler == contact.track_id else
                          "" if shooter is not None else f", but the decoded ball handler was P{handler}; shooter withheld"))

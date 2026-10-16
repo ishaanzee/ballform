@@ -143,6 +143,25 @@ def test_tip_after_the_ball_reaches_the_basket():
     assert shots[1].attempt["shooter_track_id"] == 2 and shots[1].number == 2
 
 
+@pytest.mark.parametrize("after_touch, expected", [
+    ((.5, 0.), "tip"),             # pushed up for 0.2 s, then back down onto the rim
+    ((.5, .2), "layup or dunk"),   # a0e5, 1185: put straight down through the rim
+])
+def test_follow_up_put_down_through_the_rim_is_not_a_tip(after_touch, expected):
+    rim = (.48, .09, .04, .02)
+    # A jump shot peaks at frame 12 and gets to the rim at 20; P2 touches the ball over the rim at 26.
+    path = {f: lerp((.3, .3), (.45, 0.), f / 12) for f in range(13)}
+    path.update({f: lerp((.45, 0.), (.5, .08), (f - 12) / 8) for f in range(13, 21)})
+    path.update({f: lerp((.5, .08), (.52, .03), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.52, .03), after_touch, (f - 26) / 6) for f in range(27, 33)})
+    path.update({f: lerp(after_touch, (.5, .1), (f - 32) / 8) for f in range(33, 41)})
+    path.update({f: lerp((.5, .1), (.5, .3), (f - 40) / 6) for f in range(41, 47)})
+    balls, frames = scene(path, {26: (2, (.52, .03))}, n=47)
+    first, follow = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert follow.shot_type == expected and follow.attempt["shooter_track_id"] == 2
+    assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
+
+
 def test_hand_over_the_ball_near_the_rim_in_flight_is_not_a_new_attempt():
     # 2fcb: the falling jump shot passed over a raised hand behind the baseline
     # just before reaching the rim, which read as a dunk.
