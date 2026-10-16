@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.court import (ANKLE_HEIGHT_FT, STANDARDS, airborne_at, apply, camera_from_homography, fit, floor_point,
-                       general_position, parse_landmarks, template, template_json, three_point_margin, takeoff,
-                       under_raised_point, vertical_plane_distance, zone)
+from app.court import (ANKLE_HEIGHT_FT, MAX_RISE_S, STANDARDS, airborne_at, apply, camera_from_homography, fit,
+                       floor_point, general_position, parse_landmarks, template, template_json, three_point_margin,
+                       takeoff, under_raised_point, vertical_plane_distance, zone)
 
 from tests_support_court import synthetic_camera
 
@@ -181,6 +181,18 @@ def test_takeoff_walks_back_over_the_top_of_a_jump_released_on_the_way_down():
     # Reversed (landing back to release), the same walk finds the landing.
     landing = [460, 470, 490, 505, 505, 504][::-1]
     assert takeoff(landing, torso_px=100, airborne=True).grounded == [0, 1, 2]
+
+
+def test_takeoff_does_not_walk_back_over_a_player_moving_away_from_the_camera():
+    # 0.8 s at 30 samples/s: the foot rises 2 px per sample as the player runs away from the
+    # camera, plants for 0.2 s (samples 12-17), then jumps 15 px per sample until release.
+    ys = [600 - 2 * i for i in range(12)] + [576] * 6 + [576 - 15 * k for k in range(1, 7)]
+    times = [i / 30 for i in range(len(ys))]
+    # Every earlier sample is lower, never higher, so the walk alone runs back to the start of the run.
+    assert takeoff(ys, torso_px=100).grounded == [2, 3, 4]
+    jump = takeoff(ys, torso_px=100, times=times, max_rise_s=MAX_RISE_S)
+    assert jump.jumped and jump.grounded == [15, 16, 17]
+    assert times[-1] - times[min(jump.grounded)] <= MAX_RISE_S
 
 
 def test_airborne_needs_the_foot_lower_on_both_sides_of_release():

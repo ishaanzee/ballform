@@ -29,7 +29,8 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
-from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
+from app import scoring
+from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -40,6 +41,14 @@ CONTACT_MARGIN = .2
 # wrist: tippers' wrists were 0.7-0.97 torso lengths from the ball (3b4f,
 # 699d, ec07).
 FINGERTIP_REACH = .9
+# At the rim, players reaching up for the ball (a tip, a rebound) are at full
+# stretch, and the pose model puts the wrist of a fully extended arm short of
+# the hand: tippers' wrists were up to 1.2 torso lengths from a ball over their
+# raised hand (f797, 1472, 8046, f644). With the ball within RIM_REACH_WIDTHS
+# rim widths of the rim box, such a touch counts out to RIM_FINGERTIP_REACH. It
+# only finds the touch: a hold and a gather still need the ball in the hands.
+RIM_FINGERTIP_REACH = 1.25
+RIM_REACH_WIDTHS = 1.
 # A layup, dunk or tip reaches the basket this soon after the last touch.
 CONTACT_TO_BASKET_S = 1.2
 # A single low-confidence ball-in-basket frame fires on an empty net (3074e
@@ -55,8 +64,10 @@ EMPTY_NET_S = .1
 SHOT_WINDOW_S = .7
 # A shot's flight can claim basket events for this long after release.
 FLIGHT_S = 3.0
-# A contact this close to the basket (torso lengths) is at the rim.
-AT_RIM = 1.2
+# A contact this close to the basket (torso lengths) is at the rim. A dunker's
+# last visible contact as he carried the ball over the rim was 1.26 torso
+# lengths from it (d96f), where a ball let go needs no rise to drop in.
+AT_RIM = 1.3
 TIP_WINDOW_S = 2.5
 # The ball can reach the rim's area still in the shooter's hands (a dunk, a
 # layup carried up). The same player's contacts up to this long after it, with
@@ -69,7 +80,10 @@ HOLD_GAP_S = .2
 SAME_ATTEMPT_S = .5
 # A shot in flight stops claiming basket events once one player has this many
 # sampled contacts with the ball after it (caught, not brushed: the 2fcb fan
-# pass-overs touched it on two).
+# pass-overs touched it on two). Held that long between a shot's flight to the
+# basket and the crossing it is credited with, the ball was caught and the shot
+# was over (held_before_make): labeled makes had at most 3 such contacts (2fcb's
+# fans again), the misses credited with a putback's basket 4 to 9.
 CAUGHT_CONTACTS = 4
 # Labeled tips touched the ball 0.80-0.90 s after the previous attempt reached
 # the basket, so a rim attempt's make seen later than this may be a follow-up's.
@@ -93,6 +107,30 @@ FLOATER_FLIGHT_S = (.6, .8)
 # jump shots 7.0 ft (a 10 ft pull-up) and then 10.7 ft or more.
 JUMP_SHOT_MIN_FT = 10.
 FLOATER_MAX_FT = 16.
+# An arc shot taken off inside the restricted area (4 ft from the point under
+# the rim) is a finish at the rim: from there nobody floats it or shoots a jump
+# shot, the rim is a step and a reach away. Labeled floaters took off 4.9 ft out
+# or farther; three layups and putbacks typed floaters took off 3.1-3.7 ft out
+# (2fd5, b868, d731), their high soft arcs read as floaters.
+RIM_FINISH_FT = 4.
+# A floater is let go on the move toward the basket; a jump shooter stops first
+# (a pull-up, a turnaround, a catch and shoot). On the dev labels every jump shot
+# or floater taken off inside 20 ft whose shooter came at the basket at 10 ft/s
+# or more over the second before release was a floater (11 of 11), and no jump
+# shot from inside 20 ft came faster than 7.4 ft/s (18 of them; threes from 20.8
+# and 25.6 ft came at 10.2-10.5 ft/s, so the distance cap matters). On a
+# calibrated court an arc shot from up to DRIVE_FLOATER_MAX_FT whose shooter
+# approached at DRIVE_FT_S or more is a floater: four driving floaters measured
+# 15.6-16.6 ft out had been called jump shots (041f, 4c19, 913a, e9d0). Three of
+# those take-offs are measured too far out (ESPN's shot chart puts 041f at 8 ft,
+# 4c19 and e9d0 near 10 and 12): on a drive the take-off is found too early, and
+# a cap above FLOATER_MAX_FT partly absorbs that.
+DRIVE_FT_S = 9.
+DRIVE_FLOATER_MAX_FT = 18.
+# The approach compares the shooter's floor position this long before release
+# (medians) with the position just before it.
+APPROACH_FROM_S = (.45, 1.)
+APPROACH_TO_S = (.05, .35)
 # Such a finish within this long of the previous shot reaching the basket is a
 # tip: labeled tips came 0.80-0.90 s after, a gathered putback dunk 1.48 s.
 TIP_AFTER_REACH_S = 1.
@@ -118,9 +156,19 @@ ARC_APEX_S = 1.5
 # A ball coming down this many rim widths to the side of the rim's centre is
 # beside the basket, not at it.
 AWAY_RIM_WIDTHS = 1.
-# A blocked shot never reaches the basket either: a confident shot-block class
-# between release and apex keeps such an arc (76d9, Durant's block).
+# A blocked shot can come down away from the rim before the ball gets to the
+# basket: a confident shot-block class between release and apex keeps such an
+# arc (76d9, Durant's block).
 BLOCK_CONFIDENCE = .8
+# A shot's ball gets to the basket, entering the rim's area or seen in it by the
+# detector, within this long of release: dev arc shots took 1.57 s at most (from a
+# release estimate 0.5 s early). The one that never got there in view was a layup
+# at the far end of a full-court pan with no rim or ball-in-basket detection
+# (d731). Nine dev false shots never got there in time: passes in transition with
+# no rim in frame (6), an inbound pass and a contested jump pass (bd73e4, whose
+# shot-block class fired as confidently as on a real block), and a rebound batted
+# around (45f83d) whose first arrival was the putback 2.6 s later.
+ARC_REACH_S = 2.
 # An arc's rise must be seen: the ball going up this many of its radii between
 # confident detections at most 0.1 s apart, from release to apex. Labeled shots
 # were seen rising 2.5 radii or more; arcs drawn from stray detections across a
@@ -140,6 +188,29 @@ LAYUP_CLASS_PEAK = .7
 # ball has to come off the rim first. The earliest labeled follow-up touched
 # it 0.25 s after (883b, a miss caught short of the rim).
 SETTLE_S = .15
+# A jump shot or floater comes down onto the rim from its arc. On the dev labels
+# every one that went in crossed the rim plane within 0.20 s of first coming down
+# to the rim (within BOUNCE_REACH rim-box heights above its top); the misses called
+# made had sat on the rim 0.33-0.58 s first (887d rolled off the front rim, 1c45
+# bounced and came down in front of it, 87a8 was tipped in). A ball that sits on
+# the rim longer can roll in or off, and in 2D the two cross the rim plane alike.
+RATTLE_S = .25
+# A ball that goes on to peak this many rim widths above the rim is still
+# rising when it passes the rim's area in 2D, so it has not reached the basket
+# yet: the flight is timed from the apex on. Labeled rim finishes peaked at most
+# 1.27 rim widths above the rim; three-point shots whose rise crossed the rim's
+# area 2.2 and 3.9 (fff8, fd5d).
+HIGH_APEX_RIM_WIDTHS = 1.5
+# A tip pushes the ball up at the rim or lets it roll in; a dunk or a putback laid
+# in puts it down through the rim at once. A ball falling more than this many rim
+# widths in the PUT_DOWN_S after the touch was put down: labeled tips fell at most
+# 0.58 (699d; 3b4f, tapped in from above the rim, 0.55), the putback dunks and
+# layups typed tips 0.8-1.5 (a0e5, 1185: through the net 0.1 s after the touch).
+# Only a ball that was in the hands is put down: tips found at full stretch by the
+# rim (RIM_FINGERTIP_REACH, the wrist past FINGERTIP_REACH) fell up to 0.74 (87a8,
+# f797, tipped in), as far as a putback dunk (1fb2, 0.75), whose ball was held.
+PUT_DOWN_RIM_WIDTHS = .7
+PUT_DOWN_S = .3
 
 
 @dataclass
@@ -174,6 +245,12 @@ class Anchor:
     release: int
     reached: int | None
     shot: ShotResult
+    # From this frame the shot's ball is on its way to the basket: the arc's apex,
+    # or a rim attempt's release.
+    flight: int | None = None
+    # An arc shot's own basket event and the arrival its flight was timed to.
+    reach: int | None = None
+    arrived: int | None = None
 
 
 def event_runs(frames: list[dict], name: str, fps: float, gap_s: float = .2) -> list[Run]:
@@ -194,14 +271,26 @@ def event_runs(frames: list[dict], name: str, fps: float, gap_s: float = .2) -> 
     return runs
 
 
-def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> list[Contact]:
-    """Frames where exactly one tracked player's wrist is on a confident ball."""
+def _by_the_rim(ball: Detection, rim: RimInput, aspect: float) -> bool:
+    """The ball is within RIM_REACH_WIDTHS rim widths of the rim box (x, y, w, h)."""
+    box = _rim_at(rim, ball.frame) if rim is not None else None
+    if box is None:
+        return False
+    margin = RIM_REACH_WIDTHS * box[2]
+    return (box[0] - margin <= ball.x <= box[0] + box[2] + margin
+            and box[1] - margin * aspect <= ball.y <= box[1] + box[3] + margin * aspect)
+
+
+def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float, rim: RimInput = None) -> list[Contact]:
+    """Frames where exactly one tracked player's wrist is on a confident ball. With ``rim``,
+    a fingertip touch at full stretch by the rim counts too (RIM_FINGERTIP_REACH)."""
     by_frame = {ball.frame: ball for ball in balls}
     contacts = []
     for frame in frames:
         ball = by_frame.get(frame["frame"])
         if ball is None or ball.confidence < .45:
             continue
+        fingertip = RIM_FINGERTIP_REACH if _by_the_rim(ball, rim, aspect) else FINGERTIP_REACH
         point = (ball.x * aspect, ball.y)
         ranked = []
         for pose in frame["players"]:
@@ -214,7 +303,7 @@ def hand_contacts(frames: list[dict], balls: list[Detection], aspect: float) -> 
                 wrist = min(wrists, key=lambda w: math.dist(w, point))
                 ranked.append((math.dist(wrist, point) / geometry[1], pose, geometry[1], wrist))
         ranked.sort(key=lambda item: item[0])
-        if not ranked or ranked[0][0] > FINGERTIP_REACH:
+        if not ranked or ranked[0][0] > fingertip:
             continue
         if len(ranked) > 1 and ranked[1][0] - ranked[0][0] < CONTACT_MARGIN:
             continue
@@ -359,6 +448,25 @@ def came_down_away(balls: list[Detection], apex: int | None, rim: RimInput, fps:
     return False
 
 
+def _arrival(balls: list[Detection], rim: RimInput, reach: int, apex: int | None, aspect: float) -> int:
+    """When an arc's ball got to the basket, for timing its flight: the basket event
+    ``reach``, unless that came before an apex more than HIGH_APEX_RIM_WIDTHS above the rim.
+
+    Such a ball was still rising: in 2D it crossed the rim's area on the way up (fff8), or
+    the ball-in-basket class fired while it was in the air elsewhere (fd5d, 0.1 s after a
+    corner three was let go). It gets there after the apex, when it is first seen in the
+    rim's area (at the apex itself if it is not seen there).
+    """
+    if apex is None or reach >= apex:
+        return reach
+    top = next((b for b in balls if b.frame == apex), None)
+    box = _rim_at(rim, apex) if top is not None else None
+    if box is None or (box[1] - top.y) / (box[2] * aspect) <= HIGH_APEX_RIM_WIDTHS:
+        return reach
+    return next((b.frame for b in balls if b.frame >= apex and b.confidence >= .45
+                 and (box := _rim_at(rim, b.frame)) is not None and _in_rim_area(b, box)), apex)
+
+
 def _seen_rising(balls: list[Detection], start: int, end: int, fps: float) -> float:
     """How far the ball was seen going up between two frames, in ball radii: upward steps
     between confident detections at most 0.1 s apart (a radius of 0.01 frame heights when
@@ -379,6 +487,18 @@ def _held_since(contacts: list[Contact], contact: Contact, frame: int, fps: floa
             break
         held = earlier.frame
     return held <= frame
+
+
+def _put_down(balls: list[Detection], frame: int, rim: RimInput, fps: float, aspect: float) -> float | None:
+    """How far the ball fell in the PUT_DOWN_S after leaving the hand at ``frame``, in rim
+    widths (confident detections; None without a rim or the ball seen around the release)."""
+    box = _rim_at(rim, frame)
+    at = min((b for b in balls if abs(b.frame - frame) <= .05 * fps and b.confidence >= .45),
+             key=lambda b: abs(b.frame - frame), default=None)
+    later = [b.y for b in balls if frame < b.frame <= frame + PUT_DOWN_S * fps and b.confidence >= .45]
+    if box is None or at is None or not later:
+        return None
+    return (max(later) - at.y) / (box[2] * aspect)
 
 
 def _gathered(contacts: list[Contact], balls: list[Detection], frame: int, rim: RimInput, fps: float,
@@ -407,10 +527,10 @@ def _gathered(contacts: list[Contact], balls: list[Detection], frame: int, rim: 
 
 
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
-    """The arc path's rule: apex 0.75 torso above the shoulders and 0.75 torso of rise."""
+    """The arc path's rule: apex FLIGHT_ABOVE torso lengths above the shoulders after FLIGHT_RISE of rise."""
     shoulders = [contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")]
-    return (apex.y < sum(shoulders) / 2 - .75 * contact.torso
-            and contact.ball.y - apex.y >= .75 * contact.torso)
+    return (apex.y < sum(shoulders) / 2 - scoring.FLIGHT_ABOVE * contact.torso
+            and contact.ball.y - apex.y >= scoring.FLIGHT_RISE * contact.torso)
 
 
 def _class_note(run: Run | None, label: str) -> list[str]:
@@ -446,7 +566,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
 
 
 def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
-               flight_s: float | None = None) -> tuple[str, list[str]]:
+               flight_s: float) -> tuple[str, list[str]]:
     """Floater when the detector's layup-dunk class matches or beats jump-shot around release,
     or when the ball got to the basket sooner than any jump shot's (``flight_s``, release to basket)."""
     window = round(.4 * fps)
@@ -455,21 +575,74 @@ def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
     if rim is not None and rim.peak >= .5 and rim.peak >= (jump.peak if jump else 0.):
         return "floater", ["Floater: arc shot with the detector's layup-dunk class at least as confident as jump-shot around release",
                            *_class_note(rim, "layup-dunk"), *_class_note(jump, "jump-shot")]
-    if flight_s is not None and FLOATER_FLIGHT_S[0] <= flight_s <= FLOATER_FLIGHT_S[1]:
+    if FLOATER_FLIGHT_S[0] <= flight_s <= FLOATER_FLIGHT_S[1]:
         return "floater", [f"Floater: the ball reached the basket {flight_s:.2f} s after release, sooner than a jump "
                            f"shot's (more than {FLOATER_FLIGHT_S[1]} s) and later than a finish at the rim",
                            *_class_note(jump, "jump-shot")]
     return "jump shot", _class_note(jump, "jump-shot")
 
 
-def type_by_distance(shots: list[ShotResult]) -> None:
+def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> float | None:
+    """The shooter's speed toward the basket on the calibrated floor in the second before
+    release, in ft/s (negative going away), or None without the shooter's feet mapped in
+    both windows (APPROACH_FROM_S, then APPROACH_TO_S before release).
+
+    Airborne feet are not left out, unlike for the take-off spot: the late window overlaps
+    the jump for most shots, and a raised foot maps beyond the player as seen from the
+    camera. On the dev labels, leaving out frames after the take-off kept every floater
+    that came at DRIVE_FT_S or more above it (10.8-19.7 ft/s), where any grounded frame was
+    left in the late window (041f, 2267 and bba1 have a take-off found 0.35 s or more
+    before release)."""
+    from app.court import floor_point, near_half
+
+    game = shot.game or {}
+    shooter = (game.get("players") or {}).get("shooter_track_id")
+    near = next((f for f in player_frames if f["frame"] == game.get("release_frame")), None)
+    if shooter is None or near is None:
+        return None
+    windows: tuple[list, list] = ([], [])
+    for frame in player_frames:
+        before = near["time_s"] - frame["time_s"]
+        window = next((windows[i] for i, (low, high) in enumerate((APPROACH_FROM_S, APPROACH_TO_S))
+                       if low <= before <= high), None)
+        pose = next((p for p in frame["players"] if p.track_id == shooter), None) if window is not None else None
+        found = floor_point(pose, court_map.width, court_map.height) if pose is not None else None
+        point = court_map.to_court(frame["frame"], found[0]) if found else None
+        if point is not None:
+            window.append((frame["time_s"], near_half(point, court_map.court)))
+    if not all(windows):
+        return None
+    elapsed = float(np.median([t for t, _ in windows[1]]) - np.median([t for t, _ in windows[0]]))
+    start, end = (math.dist(np.median([p for _, p in w], axis=0), court_map.court.rim) for w in windows)
+    return (start - end) / elapsed if elapsed > 0 else None
+
+
+def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> bool:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
-    ``shot_distance_ft``, the take-off spot), which says more than the detector classes
-    or the flight time. Rim finishes are left alone: their distance is where the path
-    passes the basket, and changing them would change how that distance is measured."""
+    ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
+    which say more than the detector classes or the flight time. Rim finishes are left
+    alone: their distance is where the path passes the basket, and changing them would
+    change how that distance is measured.
+
+    Returns True when a shot became a rim finish: its score and distance are then
+    measured on the wrong basis and have to be measured again."""
+    rim_finishes = False
     for shot in shots:
         distance = ((shot.game or {}).get("metrics") or {}).get("shot_distance_ft")
         if distance is None or shot.shot_type not in {"jump shot", "floater"}:
+            continue
+        if distance < RIM_FINISH_FT:
+            shot.evidence.append(f"Layup or dunk: taken off {distance:.1f} ft from the basket on the calibrated court, "
+                                 f"inside the restricted area ({RIM_FINISH_FT:.0f} ft); a {shot.shot_type} comes from "
+                                 "farther out")
+            shot.shot_type, rim_finishes = "layup or dunk", True
+            continue
+        speed = approach_speed(shot, player_frames, court_map) if court_map is not None else None
+        if speed is not None and speed >= DRIVE_FT_S and distance <= DRIVE_FLOATER_MAX_FT:
+            if shot.shot_type == "jump shot" or distance > FLOATER_MAX_FT:
+                shot.evidence.append(f"Floater: the shooter came at the basket at {speed:.0f} ft/s and let go "
+                                     f"{distance:.1f} ft out; jump shooters stop first")
+            shot.shot_type = "floater"
             continue
         if shot.shot_type == "jump shot" and distance < JUMP_SHOT_MIN_FT:
             shot.shot_type = "floater"
@@ -479,6 +652,7 @@ def type_by_distance(shots: list[ShotResult]) -> None:
             shot.shot_type = "jump shot"
             shot.evidence.append(f"Jump shot: taken {distance:.1f} ft from the basket on the calibrated court, "
                                  f"farther out than a floater (up to {FLOATER_MAX_FT} ft)")
+    return rim_finishes
 
 
 def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_type: str,
@@ -527,13 +701,75 @@ def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:
                              f"the basket, went through the rim: this one stayed out")
 
 
+def held_before_make(anchors: list[Anchor], contacts: list[Contact]) -> list[int]:
+    """Call a make missed when a player held the ball between the shot's flight to the basket and
+    the crossing it was credited with; returns those crossings, which are still baskets.
+
+    Nobody touches a shot on its way down to the rim, so a player holding the ball
+    in between (CAUGHT_CONTACTS sampled contacts: caught, not brushed) means the shot
+    ended there: blocked or rebounded, and the crossing was a putback's or a tip's
+    that was not found as its own attempt (d96f, f208: a dunk off the miss; 928c:
+    a tip-in credited to the layup it followed).
+    """
+    baskets = []
+    for anchor in anchors:
+        shot = anchor.shot
+        if shot.outcome not in {"made", "likely made"} or shot.outcome_frame is None or anchor.flight is None:
+            continue
+        held: dict[int, list[int]] = {}
+        for contact in contacts:
+            if anchor.flight < contact.frame < shot.outcome_frame:
+                held.setdefault(contact.track_id, []).append(contact.frame)
+        player, frames = max(held.items(), key=lambda item: len(item[1]), default=(None, []))
+        if len(frames) < CAUGHT_CONTACTS:
+            continue
+        shot.evidence.append(f"P{player} had the ball ({len(frames)} sampled contacts from frame {frames[0]}) after the "
+                             f"shot was on its way to the basket and before the ball went through the rim at frame "
+                             f"{shot.outcome_frame}: the shot stayed out, and that basket was a later touch's")
+        if shot.outcome == "made":
+            baskets.append(shot.outcome_frame)
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "missed", .6, frames[0]
+    return baskets
+
+
+def rattles_not_called(anchors: list[Anchor], balls: list[Detection], rim: RimInput, fps: float) -> None:
+    """Leave a jump shot's or floater's make uncalled when the ball sat on the rim (RATTLE_S) before
+    it dropped through: a rattle-in, a roll off the front or a tip look alike in 2D.
+
+    A rim finish is let go at the rim and often rolls off the fingertips onto it, so
+    only shots that came down onto the rim from an arc are timed.
+    """
+    for anchor in anchors:
+        shot = anchor.shot
+        if (shot.outcome != "made" or shot.outcome_frame is None or anchor.flight is None
+                or shot.shot_type not in {"jump shot", "floater"}):
+            continue
+        flight = [b for b in balls if anchor.flight <= b.frame <= shot.outcome_frame and b.confidence >= .45]
+        if not flight:
+            continue
+        top = min(flight, key=lambda b: b.y)
+        arrived = next((b.frame for b in flight if b.frame >= top.frame and (box := _rim_at(rim, b.frame)) is not None
+                        and box[0] - .5 * box[2] <= b.x <= box[0] + 1.5 * box[2]
+                        and b.y >= box[1] - BOUNCE_REACH * box[3]), None)
+        if arrived is None or shot.outcome_frame - arrived <= RATTLE_S * fps:
+            continue
+        shot.evidence.append(f"The ball sat on the rim {(shot.outcome_frame - arrived) / fps:.2f} s before it dropped "
+                             f"through: a rattle-in, a roll off the front of the rim or a tip, which look alike in 2D, "
+                             f"so it is not called")
+        shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
+
+
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
                   rim: RimInput, aspect: float, net_motion=None) -> list[ShotResult]:
     """Type the arc shots and add the attempts they miss, sorted by release (one camera segment)."""
     balls = sorted(balls, key=lambda b: b.frame)
     frames = sorted(frames, key=lambda f: f["frame"])
     contacts = hand_contacts(frames, balls, aspect)
-    events = basket_events(frames, balls, rim, fps, [c.frame for c in contacts])
+    # Touches that can start a rim attempt include a fingertip at full stretch by
+    # the rim; a hold or a gather (contacts) needs the ball in the hands.
+    touches = hand_contacts(frames, balls, aspect, rim)
+    in_hands = {c.frame for c in contacts}
+    events = basket_events(frames, balls, rim, fps, [c.frame for c in touches])
     c6, c7, c8 = (event_runs(frames, name, fps) for name in ("jump_shot", "layup_dunk", "shot_block"))
     window = round(SHOT_WINDOW_S * fps)
     by_frame = {b.frame: b for b in balls}
@@ -560,42 +796,53 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
+        if reach is None or reach - release > ARC_REACH_S * fps:
+            # Nothing shows the ball going to a basket: a pass, most often in
+            # transition with no rim in frame, or a ball batted around.
+            previous_reach = reach if reach is not None else previous_reach
+            continue
         if came_down_away(balls, apex, rim, fps, reach):
             block = _overlapping(c8, release, apex or release)
             if block is None or block.peak < BLOCK_CONFIDENCE:
                 # A pass. The ball still reached the basket later (some other
                 # attempt), which a tip right after it is measured from.
-                previous_reach = reach if reach is not None else previous_reach
+                previous_reach = reach
                 continue
             shot.evidence += ["Blocked: the ball came down away from the rim, with the detector's shot-block class "
                               "firing between release and apex", *_class_note(block, "shot-block")]
-        if reach is not None and reach == kept_reach:
+        if reach == kept_reach:
             # One attempt reaching the basket once: the previous arc (e.g. a
             # dunk's gather and its slam read as two arcs).
             continue
         kept_reach = reach
-        follow_up = (reach is not None and previous_reach is not None and previous_reach < reach
+        follow_up = (previous_reach is not None and previous_reach < reach
                      and release - previous_reach <= TIP_AFTER_REACH_S * fps)
         gathered = _gathered(contacts, balls, release, rim, fps, aspect) if follow_up else None
-        flight = None if reach is None else f"the ball reached the basket {max(0, reach - release) / fps:.2f} s after release"
-        if follow_up and gathered is None and reach - release <= TIP_FLIGHT_S * fps:
+        arrived = _arrival(balls, rim, reach, apex, aspect)
+        flight = f"the ball reached the basket {max(0, arrived - release) / fps:.2f} s after release"
+        fall = _put_down(balls, release, rim, fps, aspect) if follow_up and gathered is None else None
+        put_down = fall is not None and fall > PUT_DOWN_RIM_WIDTHS
+        if follow_up and gathered is None and not put_down and arrived - release <= TIP_FLIGHT_S * fps:
             # Nobody shoots a jump shot this soon after the previous shot got to
             # the basket: a single touch on the rebound is a tip, even one lofted
             # back up for longer than a finish at the rim (fffe, 0.47 s).
             shot.shot_type = "tip"
             notes = [f"Tip: {flight}, {(release - previous_reach) / fps:.2f} s after the previous shot got there"]
-        elif reach is not None and reach - release <= RIM_FLIGHT_S * fps:
+        elif arrived - release <= RIM_FLIGHT_S * fps:
             shot.shot_type = "layup or dunk"
             notes = [f"Rim finish: {flight}; a jump shot or floater takes longer",
                      *_class_note(_overlapping(c7, release - window, reach), "layup-dunk")]
             if gathered is not None:
                 notes.append(f"Putback, not a tip: {(release - previous_reach) / fps:.2f} s after the previous shot got "
                              f"there, but the shooter {gathered}")
+            elif put_down:
+                notes.append(f"Putback, not a tip: the ball fell {fall:.1f} rim widths in the {PUT_DOWN_S} s after the "
+                             "touch, put down through the rim")
         else:
-            shot.shot_type, notes = _jump_type(release, c6, c7, fps, None if reach is None else (reach - release) / fps)
+            shot.shot_type, notes = _jump_type(release, c6, c7, fps, (arrived - release) / fps)
         shot.evidence += notes
-        previous_reach = reach if reach is not None else previous_reach
-        anchors.append(Anchor(release, None, shot))
+        previous_reach = reach
+        anchors.append(Anchor(release, None, shot, flight=apex, reach=reach, arrived=arrived))
 
     # Hidden-release jump shots: jump-shot class plus a supported arc, no known shot nearby.
     for run in c6:
@@ -609,12 +856,12 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             continue
         contact = prior[-1]
         reach = next((e.frame for e in events if contact.frame <= e.frame <= contact.frame + FLIGHT_S * fps), None)
-        if came_down_away(balls, apex, rim, fps, reach):
+        if reach is None or reach - contact.frame > ARC_REACH_S * fps or came_down_away(balls, apex, rim, fps, reach):
             continue
         handler = _handler_before(frames, contact.frame, fps)
         shooter = contact.track_id if handler in (None, contact.track_id) else None
-        shot_type, notes = _jump_type(contact.frame, c6, c7, fps,
-                                      None if reach is None else (reach - contact.frame) / fps)
+        arrived = _arrival(balls, rim, reach, apex, aspect)
+        shot_type, notes = _jump_type(contact.frame, c6, c7, fps, (arrived - contact.frame) / fps)
         evidence = ["Ball arc detected",
                     f"Release contact hidden: release time is the last visible hand contact (frame {contact.frame}), "
                     f"{(apex - contact.frame) / fps:.2f} s before the arc apex, and may precede the actual release",
@@ -625,7 +872,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
                      _outcome(balls, contact.frame, None, apex, rim, net_motion, fps), shot_type, evidence,
                      {"path": "hidden_release", "contact_frame": contact.frame, "apex_frame": apex,
                       "shooter_track_id": shooter})
-        anchors.append(Anchor(contact.frame, None, shot))
+        anchors.append(Anchor(contact.frame, None, shot, flight=apex))
     anchors.sort(key=lambda a: a.release)
 
     # Rim attempts: a basket event preceded by a new hand contact.
@@ -634,8 +881,13 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         if event.frame <= last_release:
             continue  # reached while the previous rim attempt's shooter still held the ball
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
-        recent = [c for c in contacts if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
-                  and (current is None or c.frame > current.release + .15 * fps)]
+        # A fingertip at full stretch beside a ball another player was the decoded
+        # handler of in the last second is a contest, not a touch on a loose ball
+        # (5213: Sengun's arms up under Giannis' dunk; 8743, 37cd: a defender's hand
+        # under a layup took over its release).
+        recent = [c for c in touches if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
+                  and (current is None or c.frame > current.release + .15 * fps)
+                  and (c.frame in in_hands or _handler_before(frames, c.frame, fps) in (None, c.track_id))]
         caught = bool(recent) and sum(c.track_id == recent[-1].track_id for c in recent) >= CAUGHT_CONTACTS
         if (current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps
                 and not caught):
@@ -659,7 +911,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # of 32 missed rim attempts and floaters; the pass-overs it was added for
         # are claimed by the shot in flight or dropped as empty-net detections.
         contact = recent[-1]
-        if current is not None and current.shot.attempt is not None and _held_since(contacts, contact, current.release, fps):
+        if current is not None and current.shot.attempt is not None and _held_since(touches, contact, current.release, fps):
             # The previous rim attempt's shooter never let go (1b06: the blocked
             # dunker held the ball on the rim, then came down with it).
             continue
@@ -695,8 +947,12 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         evidence = [f"Rim attempt: last hand contact by P{contact.track_id} at frame {contact.frame}; the ball reached the "
                     f"basket {max(0, event.frame - contact.frame) / fps:.2f} s later ({', '.join(event.sources).replace('_', '-')})"]
         gathered = _gathered(contacts, balls, contact.frame, rim, fps, aspect)
-        if (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
-                and at_rim and contact.raised and handler != contact.track_id and gathered is None):
+        follow_up = (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
+                     and at_rim and contact.raised and handler != contact.track_id and gathered is None)
+        # A touch found only by the fingertip reach at the rim never had the ball in the
+        # hands, so it did not put the ball down: a tip however far the ball then fell.
+        fall = _put_down(balls, contact.frame, rim, fps, aspect) if follow_up and contact.frame in in_hands else None
+        if follow_up and (fall is None or fall <= PUT_DOWN_RIM_WIDTHS):
             shot_type = "tip"
             evidence.append(f"Tip: raised-hand touch at the rim {(contact.frame - previous_reach) / fps:.2f} s after the "
                             "previous attempt reached the basket")
@@ -705,6 +961,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             # contact's height against the basket did not separate them.
             shot_type = "layup or dunk"
             evidence.append("Layup or dunk: last contact at the basket, reaching it within 0.35 s")
+            if follow_up:
+                evidence.append(f"Putback, not a tip: the ball fell {fall:.1f} rim widths in the {PUT_DOWN_S} s after "
+                                "the touch, put down through the rim")
         elif ((not at_rim and event.frame - contact.frame > RIM_FLIGHT_S * fps)
               or event.frame - contact.frame >= FLOATER_FLIGHT_S[0] * fps):
             # Let go away from the rim with as long a flight as an arc shot's: a
@@ -720,7 +979,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
                 evidence.append(f"Putback: {(contact.frame - previous_reach) / fps:.2f} s after the previous attempt "
                                 "reached the basket")
-        shooter = contact.track_id if shot_type == "tip" or handler in (None, contact.track_id) else None
+        # The decoded handler lags a one-touch follow-up at the rim (a tip, or a putback put
+        # straight down), so it does not withhold that shooter.
+        shooter = contact.track_id if follow_up or handler in (None, contact.track_id) else None
         evidence.append(f"Shooter P{contact.track_id} is the last player in hand contact" +
                         (", matching the decoded ball handler" if handler == contact.track_id else
                          "" if shooter is not None else f", but the decoded ball handler was P{handler}; shooter withheld"))
@@ -742,8 +1003,28 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot.evidence.append(f"The ball went through {(shot.outcome_frame - arrived) / fps:.2f} s after "
                                  "reaching the basket, as late as a follow-up tip, so the make is not credited")
             shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
-        anchors.append(Anchor(contact.frame, event.frame, shot))
+        anchors.append(Anchor(contact.frame, event.frame, shot, flight=contact.frame))
         anchors.sort(key=lambda a: a.release)
+
+    # The arc shots were typed before the rim attempts were found, so a follow-up to a
+    # rim attempt saw no previous shot get to the basket (d358, 8743: tips right after a
+    # missed layup). The same tip test, now with every earlier attempt's arrival known.
+    for anchor in anchors:
+        if (anchor.shot.attempt is not None or anchor.shot.shot_type == "tip" or anchor.reach is None
+                or anchor.arrived - anchor.release > TIP_FLIGHT_S * fps):
+            continue
+        previous = max((a.reached for a in anchors if a is not anchor and a.reached is not None
+                        and a.reached < anchor.reach), default=None)
+        if previous is None or anchor.release - previous > TIP_AFTER_REACH_S * fps:
+            continue
+        fall = _put_down(balls, anchor.release, rim, fps, aspect)
+        if _gathered(contacts, balls, anchor.release, rim, fps, aspect) is not None or (
+                fall is not None and fall > PUT_DOWN_RIM_WIDTHS):
+            continue
+        anchor.shot.shot_type = "tip"
+        anchor.shot.evidence.append(f"Tip: the ball reached the basket {max(0, anchor.arrived - anchor.release) / fps:.2f} s "
+                                    f"after release, {(anchor.release - previous) / fps:.2f} s after the previous attempt "
+                                    "got there")
 
     # Layup-dunk class without a basket event (no rim, ball-in-basket missed).
     for run in c7:
@@ -775,14 +1056,19 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         shot = _shot(balls, contact.frame - round(.5 * fps), contact.frame, round(contact.frame + 1.5 * fps), fps,
                      _outcome(balls, contact.frame, None, top.frame, rim, net_motion, fps), "layup or dunk", evidence,
                      {"path": "layup_dunk_class", "contact_frame": contact.frame, "shooter_track_id": shooter})
-        anchors.append(Anchor(contact.frame, None, shot))
+        anchors.append(Anchor(contact.frame, None, shot, flight=contact.frame))
 
+    baskets = held_before_make(anchors, contacts)
+    rattles_not_called(anchors, balls, rim, fps)
     kept = []
     for anchor in sorted(anchors, key=lambda a: a.release):
         # A make ends the possession: the ball drops through the net and has to be
         # inbounded, so a "release" right after it is a hand on the falling ball.
-        if any(made.shot.outcome == "made" and made.shot.outcome_frame is not None
-               and 0 <= anchor.release - made.shot.outcome_frame <= DEAD_BALL_S * fps for made in kept):
+        # That holds for a basket taken off the shot before it, too, except for the
+        # attempt that scored it (a dunk still in the hands as it went through).
+        made_at = [frame for frame in baskets if frame != anchor.shot.outcome_frame] + [
+            made.shot.outcome_frame for made in kept if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
+        if any(0 <= anchor.release - frame <= DEAD_BALL_S * fps for frame in made_at):
             continue
         kept.append(anchor)
     missed_before_follow_up(kept, fps)

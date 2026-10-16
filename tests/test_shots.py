@@ -143,6 +143,61 @@ def test_tip_after_the_ball_reaches_the_basket():
     assert shots[1].attempt["shooter_track_id"] == 2 and shots[1].number == 2
 
 
+@pytest.mark.parametrize("after_touch, expected", [
+    ((.5, 0.), "tip"),             # pushed up for 0.2 s, then back down onto the rim
+    ((.5, .2), "layup or dunk"),   # a0e5, 1185: put straight down through the rim
+])
+def test_follow_up_put_down_through_the_rim_is_not_a_tip(after_touch, expected):
+    rim = (.48, .09, .04, .02)
+    # A jump shot peaks at frame 12 and gets to the rim at 20; P2 touches the ball over the rim at 26.
+    path = {f: lerp((.3, .3), (.45, 0.), f / 12) for f in range(13)}
+    path.update({f: lerp((.45, 0.), (.5, .08), (f - 12) / 8) for f in range(13, 21)})
+    path.update({f: lerp((.5, .08), (.52, .03), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.52, .03), after_touch, (f - 26) / 6) for f in range(27, 33)})
+    path.update({f: lerp(after_touch, (.5, .1), (f - 32) / 8) for f in range(33, 41)})
+    path.update({f: lerp((.5, .1), (.5, .3), (f - 40) / 6) for f in range(41, 47)})
+    balls, frames = scene(path, {26: (2, (.52, .03))}, n=47)
+    first, follow = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert follow.shot_type == expected and follow.attempt["shooter_track_id"] == 2
+    assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
+
+
+@pytest.mark.parametrize("wrist, expected", [
+    ((.52, .06), "layup or dunk"),  # the ball in the hand, put down through the rim
+    ((.52, .28), "tip"),            # 87a8, f797: fingertips at full stretch, the wrist 1.1 torso lengths below
+])
+def test_only_a_ball_in_the_hands_is_put_down(wrist, expected):
+    # The jump shot bounces up off the rim to (.52, .06), where P2 touches it at frame
+    # 26, and it drops through the rim. A touch found only by the fingertip reach by
+    # the rim never had the ball in the hand: tips like that fell 0.73-0.74 rim widths,
+    # as far as a putback dunk.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.52, .06), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.52, .06), (.5, .3), (f - 26) / 10) for f in range(27, 40)})
+    balls, frames = scene(path, {26: (2, wrist)}, [(20, *basket_box(.8)), (28, *basket_box(.8))], n=40)
+    jump, follow = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert follow.shot_type == expected and follow.release_s == round(26 / FPS, 2)
+    assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
+
+
+def test_arc_tip_right_after_a_rim_attempt_got_there_is_a_tip():
+    # d358, 8743: the arc shots are typed before the rim attempts are found, so the
+    # missed layup before the tip was not known yet.
+    path = {f: (.42, .35) for f in range(11)}
+    path.update({f: lerp((.42, .35), BASKET, (f - 10) / 10) for f in range(11, 21)})
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 10) for f in range(21, 31)})
+    path.update({f: lerp((.55, .14), (.52, .02), (f - 30) / 6) for f in range(31, 37)})
+    path.update({f: lerp((.52, .02), BASKET, (f - 36) / 4) for f in range(37, 41)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 40) / 6) for f in range(41, 47)})
+    holders = {**{f: (1, (.42, .35)) for f in range(11)}, 30: (2, (.55, .14))}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8)), (40, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=47)
+    tip_arc = ShotResult(1, 0., 30 / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
+    layup, tip = find_attempts([tip_arc], balls, frames, FPS, None, 1.)
+    assert (layup.shot_type, tip.shot_type) == ("layup", "tip")
+    assert any(item.endswith("0.33 s after the previous attempt got there") for item in tip.evidence)
+
+
 def test_hand_over_the_ball_near_the_rim_in_flight_is_not_a_new_attempt():
     # 2fcb: the falling jump shot passed over a raised hand behind the baseline
     # just before reaching the rim, which read as a dunk.
@@ -181,16 +236,21 @@ def test_layup_dunk_class_needs_the_ball_to_leave_upward():
 def test_hidden_release_jump_shot_uses_the_jump_shot_class_and_arc():
     path = {f: (.4, .45) for f in range(6)}
     path.update({f: lerp((.4, .45), (.5, .05), (f - 5) / 15) for f in range(6, 21)})
-    path.update({f: lerp((.5, .05), (.6, .3), (f - 20) / 15) for f in range(21, 36)})
+    path.update({f: lerp((.5, .05), BASKET, (f - 20) / 10) for f in range(21, 31)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 30) / 5) for f in range(31, 36)})
     holders = {f: (1, (.4, .45)) for f in range(6)}
     events = [(f, "jump_shot", .9, (.35, .3, .45, .7)) for f in range(9)]
-    balls, frames = scene(path, holders, events, {f: 1 for f in range(6)})
+    basket = [(30, *basket_box(.8)), (31, *basket_box(.8))]
+    balls, frames = scene(path, holders, events + basket, {f: 1 for f in range(6)})
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
     assert shot.shot_type == "jump shot"
     assert shot.attempt == {"path": "hidden_release", "contact_frame": 5, "apex_frame": 20, "shooter_track_id": 1}
     assert any(item.startswith("Release contact hidden") for item in shot.evidence)
-    # Without the detector's jump-shot class the same arc is left to the raised-hand path.
-    balls, frames = scene(path, holders, [], {f: 1 for f in range(6)})
+    # Without the detector's jump-shot class the same arc is left to the other paths.
+    balls, frames = scene(path, holders, basket, {f: 1 for f in range(6)})
+    assert all(shot.attempt["path"] != "hidden_release" for shot in find_attempts([], balls, frames, FPS, None, 1.))
+    # Nor is it a shot when nothing shows the ball getting to a basket.
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(6)})
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
 
 
@@ -198,7 +258,7 @@ def test_hidden_release_jump_shot_uses_the_jump_shot_class_and_arc():
 def test_floater_needs_layup_dunk_class_at_least_as_confident_as_jump_shot(layup_conf, expected):
     events = ([(f, "layup_dunk", layup_conf, (.35, .3, .45, .7)) for f in range(5, 13)]
               + [(f, "jump_shot", .6, (.35, .3, .45, .7)) for f in range(5, 13)])
-    balls, frames = scene({f: (.9, .9) for f in range(20)}, {}, events)
+    balls, frames = scene({**{f: (.9, .9) for f in range(20)}, 30: BASKET}, {}, [*events, (30, *basket_box(.8))])
     shot = ShotResult(1, 0., 10 / FPS, 1., "unknown", 0., [], {})
     assert find_attempts([shot], balls, frames, FPS, None, 1.)[0].shot_type == expected
 
@@ -218,6 +278,21 @@ def test_arc_shot_reaching_the_basket_right_after_release_is_a_rim_finish():
     shot, = arc_shots_reaching([(10, 16)])
     assert shot.shot_type == "layup or dunk"
     assert any(item.startswith("Rim finish: the ball reached the basket 0.20 s") for item in shot.evidence)
+
+
+@pytest.mark.parametrize("apex_y, peak_frame, expected", [
+    (.1, 15, "jump shot"),     # 5 rim widths above the rim: still rising as it crossed the rim's area
+    (.26, 9, "layup or dunk"),  # 1 rim width above: a finish laid up over the rim
+])
+def test_ball_rising_past_the_rim_to_a_high_apex_has_not_reached_the_basket(apex_y, peak_frame, expected):
+    # fff8: a corner three let go below the rim in 2D crossed the rim's area 0.33 s after release.
+    rim = (.48, .3, .04, .02)
+    start = (.5, .6) if peak_frame == 15 else (.5, .42)
+    path = {f: lerp(start, (.5, apex_y), f / peak_frame) for f in range(peak_frame + 1)}
+    path.update({f: lerp((.5, apex_y), (.5, .32), (f - peak_frame) / 15) for f in range(peak_frame + 1, peak_frame + 16)})
+    balls, frames = scene(path, {})
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert shot.shot_type == expected
 
 
 def test_quick_rim_finish_right_after_the_previous_shot_got_there_is_a_tip():
@@ -287,8 +362,8 @@ def test_pass_coming_down_beside_the_rim_is_not_a_shot():
     # The ball peaks at rim height and comes down in a teammate's hands, far from the basket.
     balls, frames = scene(arc((.35, .2), (.5, .5)), {})
     assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
-    # Without a rim nothing says where the basket is, so the arc stays a shot.
-    assert len(find_attempts([arc_shot()], balls, frames, FPS, None, 1.)) == 1
+    # Without a rim or a ball-in-basket detection nothing shows the ball getting to a basket either.
+    assert find_attempts([arc_shot()], balls, frames, FPS, None, 1.) == []
     # A shot gets to the basket before it comes down.
     balls, frames = scene(arc((.42, .02), (.5, .12)), {})
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
@@ -318,10 +393,26 @@ def test_hand_on_the_ball_after_the_release_estimate_moves_the_release():
 
 
 def test_blocked_shot_coming_down_away_stays_a_shot():
+    # 76d9: the blocked ball came down away from the rim, then got to the basket.
     events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
-    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    path = arc((.35, .2), (.5, .5))
+    path.update({f: lerp((.5, .5), (.5, .1), (f - 30) / 15) for f in range(31, 46)})
+    balls, frames = scene(path, {}, events)
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
     assert any(item.startswith("Blocked") for item in shot.evidence)
+
+
+def test_arc_whose_ball_never_gets_to_the_basket_is_not_a_shot():
+    # A pass in transition with no rim in frame, or a ball batted around: nothing
+    # shows it going to a basket. A confident shot-block class does not keep it
+    # either (bd73e4: a contested jump pass).
+    events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
+    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
+    # The ball first gets to the basket too late for this arc: some later attempt's arrival.
+    assert arc_shots_reaching([(10, 10 + round(2.5 * FPS))]) == []
+    shot, = arc_shots_reaching([(10, 10 + round(1.5 * FPS))])
+    assert shot.shot_type == "jump shot"
 
 
 def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
@@ -416,6 +507,63 @@ def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
     assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
 
 
+def tip_scene(holders, n=40):
+    """The jump shot reaches the basket at frame 20 and bounces to (.55, .14) by frame 26,
+    where it is tipped back to the basket (frame 30)."""
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, n)})
+    return scene(path, holders, [(20, *basket_box(.8)), (30, *basket_box(.8))], n=n)
+
+
+@pytest.mark.parametrize("rim, wrist, found", [(RIM, (.55, .36), True), (None, (.55, .36), False),
+                                                (RIM, (.55, .41), False)])
+def test_tip_at_full_stretch_by_the_rim(rim, wrist, found):
+    # f797, 1472, 8046: by the rim the tipper's wrist was up to 1.2 torso lengths
+    # below the ball (here 1.1); 1.35 is not a touch, nor is 1.1 away from a rim.
+    balls, frames = tip_scene({26: (2, wrist)})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
+
+
+def test_fingertips_under_the_ball_on_the_rim_do_not_hold_it():
+    # 699d, 9a92: the tipper's raised hand stayed a stretch below the ball as it
+    # sat on the rim; that is not the ball in his hands, so the tip ends at the touch.
+    holders = {26: (2, (.55, .30)), **{f: (2, (.5, .32)) for f in range(31, 40)}}
+    balls, frames = tip_scene(holders)
+    jump, tip = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert tip.shot_type == "tip" and tip.release_s == round(26 / FPS, 2)
+
+
+@pytest.mark.parametrize("handler, release, shooter", [(1, 10, 1), (None, 14, 2)])
+def test_fingertips_beside_a_ball_the_handler_has_are_a_contest(handler, release, shooter):
+    # 8743, 37cd: a defender's raised hand 1.1 torso lengths under a layup let go
+    # at the rim took over its release; 5213: Sengun's arms went up under the
+    # ball Giannis was carrying up for a dunk. With no ball handler decoded, the
+    # same reach is a touch on a loose ball.
+    path = {f: (.45, .2) for f in range(11)}
+    path.update({f: lerp((.45, .2), BASKET, (f - 10) / 8) for f in range(11, 19)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 18) / 7) for f in range(19, 26)})
+    holders = {**{f: (1, (.45, .2)) for f in range(11)}, 14: (2, (.475, .37))}
+    balls, frames = scene(path, holders, [(18, *basket_box(.8))],
+                          {f: handler for f in range(15)} if handler else None, n=26)
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.release_s == round(release / FPS, 2) and shot.attempt["shooter_track_id"] == shooter
+
+
+@pytest.mark.parametrize("offset, found", [(.25, True), (.3, False)])
+def test_ball_carried_level_into_the_rim_from_beside_it_is_a_finish(offset, found):
+    # d96f: the dunker's last contact was 1.26 torso lengths beside the basket and
+    # the ball barely rose before dropping in. 1.5 torso lengths out it must rise.
+    start = (BASKET[0] - offset, .098)
+    path = {f: start for f in range(11)}
+    path.update({f: lerp(start, BASKET, (f - 10) / 5) for f in range(11, 16)})
+    path.update({f: (BASKET[0], BASKET[1] + .02 * (f - 15)) for f in range(16, 25)})
+    balls, frames = scene(path, {f: (1, start) for f in range(11)}, n=25)
+    shots = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert [shot.shot_type for shot in shots] == (["layup or dunk"] if found else [])
+
+
 def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
     # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
     path = {f: (.42, .35) for f in range(11)}
@@ -443,6 +591,76 @@ def test_attempt_followed_by_a_made_tip_missed(tip_release, outcome):
     missed_before_follow_up([first, tip], FPS)
     assert first.shot.outcome == outcome
     assert tip.shot.outcome == "made"
+
+
+@pytest.mark.parametrize("held, outcome", [
+    (range(30, 39), "missed"),  # d96f, f208: caught off the rim, then dunked
+    (range(30, 33), "made"),    # 2fcb: hands brushing the ball on its way down
+])
+def test_make_after_a_player_held_the_ball_was_not_the_shots(held, outcome):
+    # The shot got to the basket (ball-in-basket fired as it came down to the rim)
+    # and came off it, a player had the ball under the basket, and the ball's later
+    # trip through the rim was credited to the shot.
+    path = arc((.42, .02), (.55, .25))
+    path.update({f: (.55, .25) for f in range(31, 39)})
+    path.update({f: lerp((.55, .25), BASKET, (f - 38) / 6) for f in range(39, 50)})
+    balls, frames = scene(path, {f: (2, (.55, .25)) for f in held}, [(21, *basket_box(.8))])
+    made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=45)
+    shot, = find_attempts([made], balls, frames, FPS, None, 1.)
+    assert shot.outcome == outcome
+    if outcome == "missed":
+        assert shot.outcome_frame == 30 and any("a later touch's" in item for item in shot.evidence)
+
+
+def test_dunk_that_scored_a_basket_taken_off_the_shot_before_it_is_kept():
+    # 2e68: the layup was blocked, a teammate caught the loose ball and dunked it, his
+    # hands still on the ball as it went through, so his release came after the crossing.
+    path = arc((.47, .02), (.49, .4))
+    path.update({f: (.49, .4) for f in range(31, 39)})
+    path.update({f: lerp((.49, .4), (.5, .06), (f - 38) / 12) for f in range(39, 51)})
+    path.update({f: lerp((.5, .06), (.5, .4), (f - 50) / 14) for f in range(51, 70)})
+    holders = {f: (2, path[f]) for f in range(30, 55)}
+    balls, frames = scene(path, holders, handlers={f: 2 for f in range(30, 55)})
+    missed = ShotResult(1, 0., 0., 1., "missed", .7, ["Ball arc detected"], {})
+    dunk = find_attempts([missed], balls, frames, FPS, RIM, 1.)[-1]
+    assert dunk.attempt["path"] == "rim_attempt" and dunk.outcome == "made"
+    assert round(dunk.release_s * FPS) > dunk.outcome_frame
+    made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=dunk.outcome_frame)
+    first, second = find_attempts([made], balls, frames, FPS, RIM, 1.)
+    assert first.outcome == "missed" and second.outcome == "made"
+
+
+def test_basket_taken_off_a_shot_still_ends_the_possession():
+    from app.shots import Contact, held_before_make
+    first = attempt(10, None, "made", 60)
+    first.flight = 25
+    caught = [Contact(frame, 2, None, .2, None, True) for frame in range(40, 48, 2)]
+    assert held_before_make([first], caught) == [60]
+    assert first.shot.outcome == "missed" and first.shot.outcome_frame == 40
+    # Contacts before the flight (a follow-through) or after the crossing do not count.
+    second = attempt(10, None, "made", 60)
+    second.flight = 25
+    assert held_before_make([second], [Contact(f, 1, None, .2, None, True) for f in (12, 14, 16, 18, 61, 63)]) == []
+    assert second.shot.outcome == "made"
+
+
+@pytest.mark.parametrize("shot_type, crossing, outcome", [
+    ("jump shot", 42, "unknown"),    # 887d, 1c45, 87a8: sat on the rim, then dropped
+    ("floater", 42, "unknown"),
+    ("jump shot", 26, "made"),       # through the rim as it came down
+    ("layup or dunk", 42, "made"),   # a finish rolls off the fingertips onto the rim
+])
+def test_jump_shot_that_sat_on_the_rim_before_dropping_is_not_called(shot_type, crossing, outcome):
+    from app.shots import rattles_not_called
+    path = arc((.45, .0), (.5, .07))
+    path.update({f: (.5, .07) for f in range(31, 41)})
+    path.update({f: (.5, .07 + .03 * (f - 40)) for f in range(41, 50)})
+    balls = [Detection(f, f / FPS, x, y, .9) for f, (x, y) in sorted(path.items())]
+    shot = attempt(0, None, "made", crossing)
+    shot.flight = 15
+    shot.shot.shot_type = shot_type
+    rattles_not_called([shot], balls, RIM, FPS)
+    assert shot.shot.outcome == outcome
 
 
 def test_follow_up_that_did_not_go_in_says_nothing():
@@ -546,13 +764,58 @@ def court_shot(shot_type, distance):
     ("layup or dunk", 7., "layup or dunk"),  # rim finishes keep their type
     ("tip", 20., "tip"),
     ("jump shot", None, "jump shot"),  # uncalibrated
+    ("floater", 3.5, "layup or dunk"),    # 2fd5: a putback from under the rim with a soft high arc
+    ("jump shot", 3.1, "layup or dunk"),  # d731
+    ("jump shot", 4.5, "floater"),        # outside the restricted area
 ])
 def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance, expected):
     from app.shots import type_by_distance
     shot = court_shot(shot_type, distance)
-    type_by_distance([shot])
+    # A shot that became a rim finish has to be scored and measured again.
+    assert type_by_distance([shot]) == (expected == "layup or dunk" != shot_type)
     assert shot.shot_type == expected
     assert bool(shot.evidence) == (expected != shot_type)
+
+
+class FlatCourt:
+    """A court map whose image is the floor seen from above: pixel = court feet (100 x 100 px)."""
+    width = height = 100
+
+    def __init__(self):
+        from app.court import template
+        self.court = template("nba")
+
+    def to_court(self, frame, pixel):
+        return float(pixel[0]), float(pixel[1])
+
+
+def walking_shooter(speed_ft_s, distance_ft):
+    """P1's feet for the second before a release at frame 30, coming at the basket at ``speed_ft_s``
+    and letting go ``distance_ft`` out; a jump shot measured at that distance."""
+    rim_y = FlatCourt().court.rim[1]
+    frames = []
+    for frame in range(31):
+        y = rim_y + distance_ft + speed_ft_s * (30 - frame) / FPS
+        feet = (0., y / 100, .9)  # in line with the basket (court x 0)
+        frames.append({"frame": frame, "time_s": frame / FPS,
+                       "players": [PoseFrame(frame, frame / FPS, {"left_ankle": feet, "right_ankle": feet}, track_id=1)]})
+    shot = ShotResult(1, 0., 1., 2., "unknown", 0., [], {}, shot_type="jump shot",
+                      game={"players": {"shooter_track_id": 1}, "release_frame": 30,
+                            "metrics": {"shot_distance_ft": distance_ft}})
+    return shot, frames
+
+
+@pytest.mark.parametrize("speed, distance, expected", [
+    (12., 15., "floater"),     # 913a, 4c19: runners measured 16.2 ft out at 13-17 ft/s
+    (2., 15., "jump shot"),    # a pull-up stops first
+    (12., 20., "jump shot"),   # too far out for a floater
+])
+def test_shooter_driving_at_the_basket_lets_go_a_floater(speed, distance, expected):
+    from app.shots import approach_speed, type_by_distance
+    shot, frames = walking_shooter(speed, distance)
+    assert approach_speed(shot, frames, FlatCourt()) == pytest.approx(speed)
+    type_by_distance([shot], frames, FlatCourt())
+    assert shot.shot_type == expected
 
 
 def test_single_touch_lofted_back_up_soon_after_the_previous_shot_is_a_tip():

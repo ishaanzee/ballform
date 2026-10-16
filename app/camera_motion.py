@@ -7,6 +7,8 @@ static broadcast graphics. Features are tracked from a keyframe with
 Lucas-Kanade flow, checked forward-backward, and fitted with RANSAC; a new
 keyframe is taken when too few survive. Chaining runs forward and backward
 from the marked frame, as rim tracking does, and stops at cuts and on loss.
+A frame that loses the features because an arena camera flash washed it out
+is skipped: the next frames are tracked from the last good one.
 """
 from __future__ import annotations
 
@@ -27,6 +29,16 @@ LOST_INLIERS = 15
 REKEY_INLIERS = 80
 APRON_FT = 6.              # floor beyond the lines (painted apron) that is still usable
 MAX_STEP_FT = 6.           # image-centre movement on the floor between analyzed frames
+# Analyzed frames in a row that may lose the floor features before a direction is lost. A
+# photographer's flash washes out one video frame (the mean brightness of the labeled clips'
+# flash frames jumps from about 100 to 150-165 and straight back), which broke the optical flow
+# and ended the chain there although the camera had not moved; two flashes can come a few
+# frames apart. Three analyzed frames are 0.1 s at the usual 60 fps / stride 2.
+MAX_SKIPPED = 3
+# Mean gray-level rise over the last good frame that marks a lost frame as a flash. The labeled
+# clips' flash frames rose 41-65 levels. Frames lost for other reasons changed by under 1, and
+# skipping them resumed chains that had already drifted off the court (d731, 1561).
+FLASH_RISE = 20.
 BACKWARD_CHUNK = 90
 LK = {"winSize": (21, 21), "maxLevel": 3,
       "criteria": (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, .01)}
@@ -208,12 +220,13 @@ def _follow(sequence, anchor_frame: int, anchor_gray: np.ndarray, anchor_h: np.n
     current = key_pts.copy()
     previous, last_h = anchor_gray, anchor_h
     centre = np.array([[masker.size[0] / 2, masker.size[1] / 2]])
-    lost = False
+    lost, skipped = False, 0
     for frame, gray in sequence:
         if lost:
             out[frame] = FrameMapping(frame, None, "lost")
             continue
         status = None
+        good = key_pts, current
         if len(current) >= LOST_INLIERS:
             moved, ok, _ = cv2.calcOpticalFlowPyrLK(previous, gray, current.reshape(-1, 1, 2), None, **LK)
             back, ok_back, _ = cv2.calcOpticalFlowPyrLK(gray, previous, moved, None, **LK)
@@ -239,8 +252,14 @@ def _follow(sequence, anchor_frame: int, anchor_gray: np.ndarray, anchor_h: np.n
                     status = "lost"
         if status == "lost":
             out[frame] = FrameMapping(frame, None, "lost", keyframe=key_frame)
-            lost = True
+            # A flash is skipped: the next frame is tracked from the last good one (`previous`). Any other
+            # loss, or more than MAX_SKIPPED flashes in a row, ends the direction.
+            skipped += 1
+            flash = float(gray.mean()) - float(previous.mean()) > FLASH_RISE
+            lost = not flash or skipped > MAX_SKIPPED
+            key_pts, current = good
             continue
+        skipped = 0
         reliable = count >= RELIABLE_INLIERS and ratio >= RELIABLE_RATIO
         out[frame] = FrameMapping(frame, h, "tracked" if reliable else "weak", count, ratio, key_frame)
         key_pts, current = key_pts[inliers], current[inliers]
@@ -287,7 +306,8 @@ def follow_court(input_path: Path, frames: list[int], anchor_frame: int, anchor_
     """Image->court homography (full-resolution pixels -> feet) for each analyzed frame.
 
     Fixed cameras keep the marked mapping. Frames in another camera shot than
-    the anchor are marked "cut"; after a tracking failure a direction is "lost".
+    the anchor are marked "cut"; a frame where tracking fails is "lost", and so is
+    the rest of that direction unless the frame was a flash (at most MAX_SKIPPED in a row).
     """
     start, end = segment_bounds(anchor_frame, cuts, total)
     result = {f: FrameMapping(f, None, "cut") for f in frames if not start <= f < end}
