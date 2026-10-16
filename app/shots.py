@@ -187,6 +187,9 @@ class Anchor:
     release: int
     reached: int | None
     shot: ShotResult
+    # An arc shot's own basket event and the arrival its flight was timed to.
+    reach: int | None = None
+    arrived: int | None = None
 
 
 def event_runs(frames: list[dict], name: str, fps: float, gap_s: float = .2) -> list[Run]:
@@ -646,7 +649,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot.shot_type, notes = _jump_type(release, c6, c7, fps, None if arrived is None else (arrived - release) / fps)
         shot.evidence += notes
         previous_reach = reach if reach is not None else previous_reach
-        anchors.append(Anchor(release, None, shot))
+        anchors.append(Anchor(release, None, shot, reach, arrived))
 
     # Hidden-release jump shots: jump-shot class plus a supported arc, no known shot nearby.
     for run in c6:
@@ -803,6 +806,26 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
         anchors.append(Anchor(contact.frame, event.frame, shot))
         anchors.sort(key=lambda a: a.release)
+
+    # The arc shots were typed before the rim attempts were found, so a follow-up to a
+    # rim attempt saw no previous shot get to the basket (d358, 8743: tips right after a
+    # missed layup). The same tip test, now with every earlier attempt's arrival known.
+    for anchor in anchors:
+        if (anchor.shot.attempt is not None or anchor.shot.shot_type == "tip" or anchor.reach is None
+                or anchor.arrived - anchor.release > TIP_FLIGHT_S * fps):
+            continue
+        previous = max((a.reached for a in anchors if a is not anchor and a.reached is not None
+                        and a.reached < anchor.reach), default=None)
+        if previous is None or anchor.release - previous > TIP_AFTER_REACH_S * fps:
+            continue
+        fall = _put_down(balls, anchor.release, rim, fps, aspect)
+        if _gathered(contacts, balls, anchor.release, rim, fps, aspect) is not None or (
+                fall is not None and fall > PUT_DOWN_RIM_WIDTHS):
+            continue
+        anchor.shot.shot_type = "tip"
+        anchor.shot.evidence.append(f"Tip: the ball reached the basket {max(0, anchor.arrived - anchor.release) / fps:.2f} s "
+                                    f"after release, {(anchor.release - previous) / fps:.2f} s after the previous attempt "
+                                    "got there")
 
     # Layup-dunk class without a basket event (no rim, ball-in-basket missed).
     for run in c7:

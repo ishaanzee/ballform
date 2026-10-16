@@ -162,6 +162,24 @@ def test_follow_up_put_down_through_the_rim_is_not_a_tip(after_touch, expected):
     assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
 
 
+def test_arc_tip_right_after_a_rim_attempt_got_there_is_a_tip():
+    # d358, 8743: the arc shots are typed before the rim attempts are found, so the
+    # missed layup before the tip was not known yet.
+    path = {f: (.42, .35) for f in range(11)}
+    path.update({f: lerp((.42, .35), BASKET, (f - 10) / 10) for f in range(11, 21)})
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 10) for f in range(21, 31)})
+    path.update({f: lerp((.55, .14), (.52, .02), (f - 30) / 6) for f in range(31, 37)})
+    path.update({f: lerp((.52, .02), BASKET, (f - 36) / 4) for f in range(37, 41)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 40) / 6) for f in range(41, 47)})
+    holders = {**{f: (1, (.42, .35)) for f in range(11)}, 30: (2, (.55, .14))}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8)), (40, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=47)
+    tip_arc = ShotResult(1, 0., 30 / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
+    layup, tip = find_attempts([tip_arc], balls, frames, FPS, None, 1.)
+    assert (layup.shot_type, tip.shot_type) == ("layup", "tip")
+    assert any(item.endswith("0.33 s after the previous attempt got there") for item in tip.evidence)
+
+
 def test_hand_over_the_ball_near_the_rim_in_flight_is_not_a_new_attempt():
     # 2fcb: the falling jump shot passed over a raised hand behind the baseline
     # just before reaching the rim, which read as a dunk.
