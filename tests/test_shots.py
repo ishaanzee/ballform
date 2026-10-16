@@ -444,6 +444,22 @@ def test_fingertips_under_the_ball_on_the_rim_do_not_hold_it():
     assert tip.shot_type == "tip" and tip.release_s == round(26 / FPS, 2)
 
 
+@pytest.mark.parametrize("handler, release, shooter", [(1, 10, 1), (None, 14, 2)])
+def test_fingertips_beside_a_ball_the_handler_has_are_a_contest(handler, release, shooter):
+    # 8743, 37cd: a defender's raised hand 1.1 torso lengths under a layup let go
+    # at the rim took over its release; 5213: Sengun's arms went up under the
+    # ball Giannis was carrying up for a dunk. With no ball handler decoded, the
+    # same reach is a touch on a loose ball.
+    path = {f: (.45, .2) for f in range(11)}
+    path.update({f: lerp((.45, .2), BASKET, (f - 10) / 8) for f in range(11, 19)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 18) / 7) for f in range(19, 26)})
+    holders = {**{f: (1, (.45, .2)) for f in range(11)}, 14: (2, (.475, .37))}
+    balls, frames = scene(path, holders, [(18, *basket_box(.8))],
+                          {f: handler for f in range(15)} if handler else None, n=26)
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.release_s == round(release / FPS, 2) and shot.attempt["shooter_track_id"] == shooter
+
+
 @pytest.mark.parametrize("offset, found", [(.25, True), (.3, False)])
 def test_ball_carried_level_into_the_rim_from_beside_it_is_a_finish(offset, found):
     # d96f: the dunker's last contact was 1.26 torso lengths beside the basket and

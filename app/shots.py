@@ -558,6 +558,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     # Touches that can start a rim attempt include a fingertip at full stretch by
     # the rim; a hold or a gather (contacts) needs the ball in the hands.
     touches = hand_contacts(frames, balls, aspect, rim)
+    in_hands = {c.frame for c in contacts}
     events = basket_events(frames, balls, rim, fps, [c.frame for c in touches])
     c6, c7, c8 = (event_runs(frames, name, fps) for name in ("jump_shot", "layup_dunk", "shot_block"))
     window = round(SHOT_WINDOW_S * fps)
@@ -659,8 +660,13 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         if event.frame <= last_release:
             continue  # reached while the previous rim attempt's shooter still held the ball
         current = max((a for a in anchors if a.release <= event.frame), key=lambda a: a.release, default=None)
+        # A fingertip at full stretch beside a ball another player was the decoded
+        # handler of in the last second is a contest, not a touch on a loose ball
+        # (5213: Sengun's arms up under Giannis' dunk; 8743, 37cd: a defender's hand
+        # under a layup took over its release).
         recent = [c for c in touches if event.frame - CONTACT_TO_BASKET_S * fps <= c.frame <= event.frame
-                  and (current is None or c.frame > current.release + .15 * fps)]
+                  and (current is None or c.frame > current.release + .15 * fps)
+                  and (c.frame in in_hands or _handler_before(frames, c.frame, fps) in (None, c.track_id))]
         caught = bool(recent) and sum(c.track_id == recent[-1].track_id for c in recent) >= CAUGHT_CONTACTS
         if (current is not None and current.reached is None and event.frame - current.release <= FLIGHT_S * fps
                 and not caught):
