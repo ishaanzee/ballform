@@ -819,9 +819,10 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
     for anchor in sorted(anchors, key=lambda a: a.release):
         # A make ends the possession: the ball drops through the net and has to be
         # inbounded, so a "release" right after it is a hand on the falling ball.
-        # That holds for a basket taken off the shot before it, too.
-        made_at = baskets + [made.shot.outcome_frame for made in kept
-                             if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
+        # That holds for a basket taken off the shot before it, too, except for the
+        # attempt that scored it (a dunk still in the hands as it went through).
+        made_at = [frame for frame in baskets if frame != anchor.shot.outcome_frame] + [
+            made.shot.outcome_frame for made in kept if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
         if any(0 <= anchor.release - frame <= DEAD_BALL_S * fps for frame in made_at):
             continue
         kept.append(anchor)

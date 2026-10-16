@@ -463,6 +463,24 @@ def test_make_after_a_player_held_the_ball_was_not_the_shots(held, outcome):
         assert shot.outcome_frame == 30 and any("a later touch's" in item for item in shot.evidence)
 
 
+def test_dunk_that_scored_a_basket_taken_off_the_shot_before_it_is_kept():
+    # 2e68: the layup was blocked, a teammate caught the loose ball and dunked it, his
+    # hands still on the ball as it went through, so his release came after the crossing.
+    path = arc((.47, .02), (.49, .4))
+    path.update({f: (.49, .4) for f in range(31, 39)})
+    path.update({f: lerp((.49, .4), (.5, .06), (f - 38) / 12) for f in range(39, 51)})
+    path.update({f: lerp((.5, .06), (.5, .4), (f - 50) / 14) for f in range(51, 70)})
+    holders = {f: (2, path[f]) for f in range(30, 55)}
+    balls, frames = scene(path, holders, handlers={f: 2 for f in range(30, 55)})
+    missed = ShotResult(1, 0., 0., 1., "missed", .7, ["Ball arc detected"], {})
+    dunk = find_attempts([missed], balls, frames, FPS, RIM, 1.)[-1]
+    assert dunk.attempt["path"] == "rim_attempt" and dunk.outcome == "made"
+    assert round(dunk.release_s * FPS) > dunk.outcome_frame
+    made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=dunk.outcome_frame)
+    first, second = find_attempts([made], balls, frames, FPS, RIM, 1.)
+    assert first.outcome == "missed" and second.outcome == "made"
+
+
 def test_basket_taken_off_a_shot_still_ends_the_possession():
     from app.shots import Contact, held_before_make
     first = attempt(10, None, "made", 60)
