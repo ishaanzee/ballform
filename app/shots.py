@@ -63,8 +63,10 @@ EMPTY_NET_S = .1
 SHOT_WINDOW_S = .7
 # A shot's flight can claim basket events for this long after release.
 FLIGHT_S = 3.0
-# A contact this close to the basket (torso lengths) is at the rim.
-AT_RIM = 1.2
+# A contact this close to the basket (torso lengths) is at the rim. A dunker's
+# last visible contact as he carried the ball over the rim was 1.26 torso
+# lengths from it (d96f), where a ball let go needs no rise to drop in.
+AT_RIM = 1.3
 TIP_WINDOW_S = 2.5
 # The ball can reach the rim's area still in the shooter's hands (a dunk, a
 # layup carried up). The same player's contacts up to this long after it, with

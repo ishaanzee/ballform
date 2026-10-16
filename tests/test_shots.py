@@ -444,6 +444,19 @@ def test_fingertips_under_the_ball_on_the_rim_do_not_hold_it():
     assert tip.shot_type == "tip" and tip.release_s == round(26 / FPS, 2)
 
 
+@pytest.mark.parametrize("offset, found", [(.25, True), (.3, False)])
+def test_ball_carried_level_into_the_rim_from_beside_it_is_a_finish(offset, found):
+    # d96f: the dunker's last contact was 1.26 torso lengths beside the basket and
+    # the ball barely rose before dropping in. 1.5 torso lengths out it must rise.
+    start = (BASKET[0] - offset, .098)
+    path = {f: start for f in range(11)}
+    path.update({f: lerp(start, BASKET, (f - 10) / 5) for f in range(11, 16)})
+    path.update({f: (BASKET[0], BASKET[1] + .02 * (f - 15)) for f in range(16, 25)})
+    balls, frames = scene(path, {f: (1, start) for f in range(11)}, n=25)
+    shots = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert [shot.shot_type for shot in shots] == (["layup or dunk"] if found else [])
+
+
 def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
     # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
     path = {f: (.42, .35) for f in range(11)}
