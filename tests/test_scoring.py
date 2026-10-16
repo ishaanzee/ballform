@@ -299,3 +299,21 @@ def test_game_shot_with_broad_apex_and_visible_release():
 def test_monotonic_ball_path_is_not_an_apex():
     track = [Detection(f, f / 30, .2 + f / 200, .8 - f / 100, .9) for f in range(60)]
     assert analyze_shots(track, [], 30, None) == []
+
+
+@pytest.mark.parametrize("rise, found", [(.4, False), (.6, True)])
+def test_game_shot_needs_the_ball_to_rise_above_its_release(rise, found):
+    # A floater let go overhead, or a jump shot the camera zooms out from, rises
+    # little in the image after the release (d176ae, dd7635): 0.6 torso lengths
+    # is a shot, 0.4 is not.
+    fps, torso = 60, .2
+    release_y, apex_y = .25, .25 - rise * torso
+    track = [Detection(f, f / fps, .4 + .002 * (f - 30), apex_y + (release_y - apex_y) * ((f - 60) / 30) ** 2, .9)
+             for f in range(30, 91, 2)]
+    shooter = PoseFrame(30, 30 / fps, {
+        "left_shoulder": (.38, .4, .9), "right_shoulder": (.42, .4, .9),
+        "left_hip": (.38, .4 + torso, .9), "right_hip": (.42, .4 + torso, .9),
+        "right_wrist": (track[0].x, track[0].y, .9),
+    })
+    shots = analyze_shots(track, [shooter], fps, None, aspect_ratio=1., game_mode=True)
+    assert len(shots) == found

@@ -29,6 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
+from app import scoring
 from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
@@ -131,9 +132,19 @@ ARC_APEX_S = 1.5
 # A ball coming down this many rim widths to the side of the rim's centre is
 # beside the basket, not at it.
 AWAY_RIM_WIDTHS = 1.
-# A blocked shot never reaches the basket either: a confident shot-block class
-# between release and apex keeps such an arc (76d9, Durant's block).
+# A blocked shot can come down away from the rim before the ball gets to the
+# basket: a confident shot-block class between release and apex keeps such an
+# arc (76d9, Durant's block).
 BLOCK_CONFIDENCE = .8
+# A shot's ball gets to the basket, entering the rim's area or seen in it by the
+# detector, within this long of release: dev arc shots took 1.57 s at most (from a
+# release estimate 0.5 s early). The one that never got there in view was a layup
+# at the far end of a full-court pan with no rim or ball-in-basket detection
+# (d731). Nine dev false shots never got there in time: passes in transition with
+# no rim in frame (6), an inbound pass and a contested jump pass (bd73e4, whose
+# shot-block class fired as confidently as on a real block), and a rebound batted
+# around (45f83d) whose first arrival was the putback 2.6 s later.
+ARC_REACH_S = 2.
 # An arc's rise must be seen: the ball going up this many of its radii between
 # confident detections at most 0.1 s apart, from release to apex. Labeled shots
 # were seen rising 2.5 radii or more; arcs drawn from stray detections across a
@@ -442,10 +453,10 @@ def _gathered(contacts: list[Contact], balls: list[Detection], frame: int, rim: 
 
 
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
-    """The arc path's rule: apex 0.75 torso above the shoulders and 0.75 torso of rise."""
+    """The arc path's rule: apex FLIGHT_ABOVE torso lengths above the shoulders after FLIGHT_RISE of rise."""
     shoulders = [contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")]
-    return (apex.y < sum(shoulders) / 2 - .75 * contact.torso
-            and contact.ball.y - apex.y >= .75 * contact.torso)
+    return (apex.y < sum(shoulders) / 2 - scoring.FLIGHT_ABOVE * contact.torso
+            and contact.ball.y - apex.y >= scoring.FLIGHT_RISE * contact.torso)
 
 
 def _class_note(run: Run | None, label: str) -> list[str]:
@@ -657,6 +668,11 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         # From broadcast height a layup off the glass still draws a small arc,
         # so the arc path finds it; its flight time says it was a finish.
         reach = next((e.frame for e in events if release - .2 * fps <= e.frame <= release + FLIGHT_S * fps), None)
+        if reach is None or reach - release > ARC_REACH_S * fps:
+            # Nothing shows the ball going to a basket: a pass, most often in
+            # transition with no rim in frame, or a ball batted around.
+            previous_reach = reach if reach is not None else previous_reach
+            continue
         if came_down_away(balls, apex, rim, fps, reach):
             block = _overlapping(c8, release, apex or release)
             if block is None or block.peak < BLOCK_CONFIDENCE:
@@ -706,7 +722,7 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             continue
         contact = prior[-1]
         reach = next((e.frame for e in events if contact.frame <= e.frame <= contact.frame + FLIGHT_S * fps), None)
-        if came_down_away(balls, apex, rim, fps, reach):
+        if reach is None or reach - contact.frame > ARC_REACH_S * fps or came_down_away(balls, apex, rim, fps, reach):
             continue
         handler = _handler_before(frames, contact.frame, fps)
         shooter = contact.track_id if handler in (None, contact.track_id) else None

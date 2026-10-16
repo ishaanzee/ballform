@@ -50,6 +50,13 @@ BOUNCE_RISE = 2.
 NET_DEPTH = 2.2
 BESIDE_NET_S = .3
 BESIDE_NET_SEEN = 2
+# In game mode a shot's ball flies well above the shooter: its apex at least
+# FLIGHT_ABOVE of the shooter's torso lengths above the shoulders, after rising
+# at least FLIGHT_RISE torso lengths from the release contact. The image rise
+# can be small: a floater is let go overhead (d176ae rose 0.71), and broadcasts
+# zoom out from a close-up of the shooter as the ball flies (dd7635, 0.65).
+FLIGHT_ABOVE = .75
+FLIGHT_RISE = .55
 
 
 def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
@@ -523,7 +530,7 @@ def analyze_shots(
                 shoulder = tuple((body[0][i]+body[1][i])/2 for i in (0,1))
                 hip = tuple((body[2][i]+body[3][i])/2 for i in (0,1))
                 torso = distance(shoulder, hip)
-                if apex_ball.y < shoulder[1] - .75*torso and release_ball.y-apex_ball.y >= .75*torso:
+                if apex_ball.y < shoulder[1] - FLIGHT_ABOVE*torso and release_ball.y-apex_ball.y >= FLIGHT_RISE*torso:
                     flight_supported = True
                     break
             if not flight_supported:
