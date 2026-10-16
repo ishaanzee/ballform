@@ -100,13 +100,17 @@ FLOATER_MAX_FT = 16.
 # (2fd5, b868, d731), their high soft arcs read as floaters.
 RIM_FINISH_FT = 4.
 # A floater is let go on the move toward the basket; a jump shooter stops first
-# (a pull-up, a turnaround, a catch and shoot). On the dev labels every floater
-# whose shooter came at the basket at 10 ft/s or more over the second before
-# release was a floater (11 of 11), and no jump shot from inside 20 ft came
-# faster than 7.4 ft/s. On a calibrated court an arc shot from up to
-# DRIVE_FLOATER_MAX_FT whose shooter approached at DRIVE_FT_S or more is a
-# floater: four driving floaters measured 15.6-16.6 ft out had been called
-# jump shots (041f, 4c19, 913a, e9d0).
+# (a pull-up, a turnaround, a catch and shoot). On the dev labels every jump shot
+# or floater taken off inside 20 ft whose shooter came at the basket at 10 ft/s
+# or more over the second before release was a floater (11 of 11), and no jump
+# shot from inside 20 ft came faster than 7.4 ft/s (18 of them; threes from 20.8
+# and 25.6 ft came at 10.2-10.5 ft/s, so the distance cap matters). On a
+# calibrated court an arc shot from up to DRIVE_FLOATER_MAX_FT whose shooter
+# approached at DRIVE_FT_S or more is a floater: four driving floaters measured
+# 15.6-16.6 ft out had been called jump shots (041f, 4c19, 913a, e9d0). Three of
+# those take-offs are measured too far out (ESPN's shot chart puts 041f at 8 ft,
+# 4c19 and e9d0 near 10 and 12): on a drive the take-off is found too early, and
+# a cap above FLOATER_MAX_FT partly absorbs that.
 DRIVE_FT_S = 9.
 DRIVE_FLOATER_MAX_FT = 18.
 # The approach compares the shooter's floor position this long before release
@@ -533,7 +537,14 @@ def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
 def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> float | None:
     """The shooter's speed toward the basket on the calibrated floor in the second before
     release, in ft/s (negative going away), or None without the shooter's feet mapped in
-    both windows (APPROACH_FROM_S, then APPROACH_TO_S before release)."""
+    both windows (APPROACH_FROM_S, then APPROACH_TO_S before release).
+
+    Airborne feet are not left out, unlike for the take-off spot: the late window overlaps
+    the jump for most shots, and a raised foot maps beyond the player as seen from the
+    camera. On the dev labels, leaving out frames after the take-off kept every floater
+    that came at DRIVE_FT_S or more above it (10.8-19.7 ft/s), where any grounded frame was
+    left in the late window (041f, 2267 and bba1 have a take-off found 0.35 s or more
+    before release)."""
     from app.court import floor_point, near_half
 
     game = shot.game or {}
