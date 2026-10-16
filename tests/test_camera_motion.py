@@ -40,13 +40,15 @@ def floor_texture(seed=0, sparse=False):
     return texture, to_court
 
 
-def write_video(path, frames=40, blank_after=None, overlay=False, cut_at=None, sparse=False, flash_at=()):
+def write_video(path, frames=40, blank_after=None, overlay=False, cut_at=None, sparse=False, flash_at=(),
+                swap_at=()):
     texture, to_court = floor_texture(sparse=sparse)
     graphic = np.random.default_rng(5).integers(0, 255, (140, 520), dtype=np.uint8)
     other, _ = floor_texture(seed=1)
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30, (W, H))
     for frame in range(frames):
-        source = other if cut_at is not None and frame >= cut_at else texture
+        # A swapped frame shows another floor as bright as this one: the features fail without a flash.
+        source = other if (cut_at is not None and frame >= cut_at) or frame in swap_at else texture
         image = cv2.warpPerspective(source, camera(frame) @ to_court, (W, H), borderValue=30)
         if blank_after is not None and frame > blank_after:
             image[:] = 128
@@ -131,6 +133,16 @@ def test_a_flash_frame_does_not_end_the_mapping(tmp_path):
         steady = [f for f in frames if f != 20]
         assert all(mappings[f].reliable for f in steady)
         assert worst_error_ft(mappings, steady) < .5
+
+
+def test_a_loss_that_is_not_a_flash_still_ends_the_mapping(tmp_path):
+    # On the labeled clips such losses came where the chain had already drifted off the court;
+    # tracking on from the last good frame carried the drifted mapping on as reliable.
+    path = tmp_path / "swap.mp4"
+    write_video(path, frames=40, swap_at=(20,))
+    mappings = follow_court(path, list(range(40)), 5, np.linalg.inv(camera(5)), template("nba"), {}, [], W, H, 40)
+    assert all(mappings[f].reliable for f in range(20))
+    assert all(mappings[f].status == "lost" and not mappings[f].reliable for f in range(20, 40))
 
 
 def test_fixed_cameras_keep_the_marked_mapping(pan_video):
