@@ -220,6 +220,21 @@ def test_arc_shot_reaching_the_basket_right_after_release_is_a_rim_finish():
     assert any(item.startswith("Rim finish: the ball reached the basket 0.20 s") for item in shot.evidence)
 
 
+@pytest.mark.parametrize("apex_y, peak_frame, expected", [
+    (.1, 15, "jump shot"),     # 5 rim widths above the rim: still rising as it crossed the rim's area
+    (.26, 9, "layup or dunk"),  # 1 rim width above: a finish laid up over the rim
+])
+def test_ball_rising_past_the_rim_to_a_high_apex_has_not_reached_the_basket(apex_y, peak_frame, expected):
+    # fff8: a corner three let go below the rim in 2D crossed the rim's area 0.33 s after release.
+    rim = (.48, .3, .04, .02)
+    start = (.5, .6) if peak_frame == 15 else (.5, .42)
+    path = {f: lerp(start, (.5, apex_y), f / peak_frame) for f in range(peak_frame + 1)}
+    path.update({f: lerp((.5, apex_y), (.5, .32), (f - peak_frame) / 15) for f in range(peak_frame + 1, peak_frame + 16)})
+    balls, frames = scene(path, {})
+    shot, = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert shot.shot_type == expected
+
+
 def test_quick_rim_finish_right_after_the_previous_shot_got_there_is_a_tip():
     first, tip = arc_shots_reaching([(0, 20), (40, 44)])
     assert (first.shot_type, tip.shot_type) == ("jump shot", "tip")
