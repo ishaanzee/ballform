@@ -565,13 +565,16 @@ def _floor_spot(samples: list, used: list[int], court_map):
         frame, pose = samples[index]
         found = floor_point(pose, court_map.width, court_map.height)
         court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        # A floor mapping that no camera could produce (no plausible focal length or pose behind it)
+        # has drifted while following the camera: on the labeled clips such frames put shots 12-51 ft out.
+        camera = court_map.camera(frame["frame"]) if court_point is not None else None
+        if camera is None:
+            continue
         # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
-        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
-        if camera is not None:
+        if found[1] != "pose box":
             court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
-        if court_point is not None:
-            points.append(court_point)
-            methods.add(found[1])
+        points.append(court_point)
+        methods.add(found[1])
     if not points:
         return None
     return tuple(float(v) for v in np.median(np.asarray(points), axis=0)), " / ".join(sorted(methods))
@@ -587,7 +590,7 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
     the floor at release is followed back over the top of the jump (a dunk is
     released on the way down) and the landing spot is found too.
     """
-    from app.court import airborne_at, floor_point, lowest_foot_y, takeoff
+    from app.court import MAX_RISE_S, airborne_at, floor_point, lowest_foot_y, takeoff
 
     width, height = court_map.width, court_map.height
     samples = sorted(((frame, pose) for frame in player_frames
@@ -608,7 +611,9 @@ def _grounded_position(player_frames: list[dict], track_id: int, near: dict, cou
             torso.append(length)
     torso_px = float(np.median(torso)) if torso else 0.
     airborne = airborne_at(foot_y, release, torso_px)
-    jump = takeoff(foot_y[:release + 1], torso_px, airborne=airborne)
+    # A jump rises for at most MAX_RISE_S; a foot rising for longer was moving away on the floor.
+    jump = takeoff(foot_y[:release + 1], torso_px, airborne=airborne,
+                   times=[frame["time_s"] for frame, _ in samples[:release + 1]], max_rise_s=MAX_RISE_S)
     if jump is None:
         return "the feet were not visible before release"
     used = jump.grounded if jump.jumped else [release]
