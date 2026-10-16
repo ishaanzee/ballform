@@ -636,13 +636,32 @@ def _court_summary(court_map, court_landmarks: dict, fps: float) -> dict:
             "landmarks": [{"id": key, "image": [round(x, 5), round(y, 5)]} for key, (x, y) in court_landmarks["points"]]}
 
 
+def _cached_court_map(path: Path):
+    try:
+        with path.open("rb") as handle:
+            return pickle.load(handle)
+    except (OSError, EOFError, pickle.UnpicklingError, AttributeError):
+        return None
+
+
+def _save_court_map(court_map, path: Path) -> None:
+    """Write atomically: parallel replays may build the same map at once."""
+    temporary = path.with_name(f".{path.name}.{os.getpid()}")
+    with temporary.open("wb") as handle:
+        pickle.dump(court_map, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(temporary, path)
+
+
 def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
-               report: Callable[[float, str], None] = lambda _value, _message: None) -> dict:
+               report: Callable[[float, str], None] = lambda _value, _message: None,
+               court_map_cache: Path | None = None) -> dict:
     """Everything after per-frame inference: identities, rims, shots, game and court metrics.
 
     ``inputs`` holds the frame loop's measurements, so a saved copy (``save_scoring_inputs``)
     can be scored again with changed scoring code and no model inference. With
-    ``output_dir`` None nothing is written.
+    ``output_dir`` None nothing is written. ``court_map_cache`` is a file for the court
+    followed through camera motion, read when present and written otherwise; the caller
+    keys its name on everything the map depends on (``evaluation.replay`` does).
     """
     fps, width, height, total, frame_no = (inputs[k] for k in ("fps", "width", "height", "total", "frame_no"))
     analyzed_fps, stride, mode, handedness, profile, game_mode = (
@@ -731,13 +750,18 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     if calibration is not None:
         report(.9, "Following the calibrated court through camera motion")
         court_started = time.perf_counter()
-        court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total), player_frames,
-                                    cut_frames, width, height, total, fixed=profile in COURT_PROFILES)
+        court_map = _cached_court_map(court_map_cache) if court_map_cache else None
+        if court_map is None:
+            court_map = build_court_map(input_path, calibration, anchor_frame(court_landmarks, fps, total),
+                                        player_frames, cut_frames, width, height, total,
+                                        fixed=profile in COURT_PROFILES)
+            if court_map_cache:
+                _save_court_map(court_map, court_map_cache)
         add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
         type_by_distance(shots)
-        # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
-        trajectories = floor_trajectories(player_frames, court_map, cut_frames)
         if output_dir is not None:
+            # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
+            trajectories = floor_trajectories(player_frames, court_map, cut_frames)
             (output_dir / "court.json").write_text(json.dumps({**court_json(court_map),
                                                                "trajectories": trajectories_json(trajectories)}))
         court_seconds = time.perf_counter() - court_started

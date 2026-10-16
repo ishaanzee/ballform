@@ -85,3 +85,28 @@ def test_automatic_court_landmarks_fill_in_only_where_settings_have_none(tmp_pat
 def test_a_missing_job_is_reported_not_fatal(tmp_path):
     summary = summarize(evaluate(read_labels_from(tmp_path, "gone,1.0,made,,,,,,\n"), tmp_path, .75))
     assert summary["clips_failed"] == 1 and summary["labeled_shots"] == 0
+
+
+def test_committed_label_files_have_one_value_per_column():
+    import csv
+    from pathlib import Path
+
+    for path in sorted((Path(__file__).resolve().parents[1] / "eval").glob("*.csv")):
+        with path.open(newline="") as handle:
+            rows = list(csv.reader(handle))
+        widths = {line: len(row) for line, row in enumerate(rows, start=1) if len(row) != len(rows[0])}
+        assert not widths, f"{path.name}: rows with the wrong number of columns (an unquoted comma?): {widths}"
+        read_labels(path)
+
+
+def test_the_court_map_cache_key_follows_the_landmarks_and_the_rerun(tmp_path):
+    from app.evaluation import _court_map_key
+
+    saved, video = tmp_path / "scoring_inputs.pkl.gz", tmp_path / "input.mp4"
+    saved.write_bytes(b"a")
+    video.write_bytes(b"v")
+    key = _court_map_key({"points": [1, 2]}, saved, video)
+    assert key == _court_map_key({"points": [1, 2]}, saved, video)
+    assert key != _court_map_key({"points": [1, 3]}, saved, video)
+    saved.write_bytes(b"ab")
+    assert key != _court_map_key({"points": [1, 2]}, saved, video)

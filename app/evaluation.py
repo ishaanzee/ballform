@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import statistics
@@ -259,13 +260,35 @@ def replay(job_id: str, jobs_dir: Path, runs_dir: Path, court_landmarks: Path | 
     from app.analyzer import SCORING_INPUTS, fit_calibration, load_scoring_inputs, score_clip
 
     job_dir = jobs_dir / job_id
-    inputs = load_scoring_inputs(runs_dir / job_id / SCORING_INPUTS)
+    saved = runs_dir / job_id / SCORING_INPUTS
+    inputs = load_scoring_inputs(saved)
     landmarks = _court_landmarks(job_id, _settings(job_dir), court_landmarks)
     if landmarks and inputs["game_mode"]:
         inputs["court_landmarks"], inputs["calibration"] = fit_calibration(landmarks, inputs["width"], inputs["height"])
     source = next(iter(sorted(job_dir.glob("input.*"))), None)
-    scored = score_clip(inputs, None, source)
+    cache = None
+    if inputs["calibration"] is not None and source is not None:
+        cache = runs_dir / job_id / f"court_map-{_court_map_key(inputs['court_landmarks'], saved, source)}.pkl"
+    scored = score_clip(inputs, None, source, court_map_cache=cache)
     return {"shots": [shot.to_dict() for shot in scored["shots"]]}
+
+
+def _court_map_key(landmarks: dict, saved: Path, source: Path) -> str:
+    """Everything the court followed through camera motion depends on: the landmarks, the
+    rerun's measurements (player boxes, cuts), the video and the court-following code."""
+    digest = hashlib.sha1(json.dumps(landmarks, sort_keys=True, default=str).encode())
+    for path in (saved, source):
+        stat = path.stat()
+        digest.update(f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    for module in ("camera_motion.py", "court.py", "vision.py"):
+        digest.update((Path(__file__).parent / module).read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _one_thread() -> None:
+    """Parallel replays each get one thread; OpenCV and BLAS otherwise oversubscribe the cores."""
+    import cv2
+    cv2.setNumThreads(1)
 
 
 def _load(job_id: str, jobs_dir: Path, how: str, runs_dir: Path, court_landmarks: Path | None = None) -> dict:
@@ -286,7 +309,10 @@ def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: 
     by_job: dict[str, list[Label]] = {}
     for label in labels:
         by_job.setdefault(label.job_id, []).append(label)
-    with ProcessPoolExecutor(workers) if workers > 1 else nullcontext() as pool:
+    if workers > 1:
+        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(name, "1")  # read by the worker processes as they start
+    with ProcessPoolExecutor(workers, initializer=_one_thread) if workers > 1 else nullcontext() as pool:
         if pool is None:
             pending = {job_id: None for job_id in by_job}
         else:
