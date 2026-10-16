@@ -521,8 +521,18 @@ class Takeoff:
     jumped: bool
 
 
+# Seconds from take-off to the top of a jump at most. Rising for t s lifts the feet
+# g t^2 / 2: 0.45 s is a 3.3 ft jump, above any jump shot and about the highest dunk.
+# A foot that kept rising in the image for longer was a player moving away from the
+# camera on the floor (a drive, a closeout, a drift to the corner), not a jump. On the
+# labeled clips, capping the walk back from release at 0.4-0.5 s gave the most right
+# zones; 0.25-0.3 s measured distances closer but put pull-ups and corner threes short.
+MAX_RISE_S = .45
+
+
 def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
-            min_rise: float = .2, keep: int = 3, airborne: bool = False) -> Takeoff | None:
+            min_rise: float = .2, keep: int = 3, airborne: bool = False,
+            times: list[float] | None = None, max_rise_s: float | None = None) -> Takeoff | None:
     """Find the last grounded samples before a jump.
 
     foot_y holds the lower foot's image y (larger is lower), with camera motion
@@ -538,6 +548,12 @@ def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
     the walk first goes back up to the top of the jump: a dunk is released at
     the rim on the way down, after the feet's highest point. Reversing foot_y
     (samples from the landing back to release) finds the landing the same way.
+
+    With the samples' `times` and `max_rise_s`, the walk also stops more than
+    max_rise_s before the release (or before the top of the jump, when airborne).
+    A player moving away from the camera on the floor has a foot that rises in the
+    image as steadily as in a jump, and earlier samples are lower rather than higher,
+    so without the limit the walk ran back over the whole drive or closeout.
     """
     if not torso_px or torso_px <= 0:
         return None
@@ -556,6 +572,8 @@ def takeoff(foot_y: list[float | None], torso_px: float, tolerance: float = .08,
     floor = foot_y[last]
     walked = [last]
     for i in indices[top + 1:]:
+        if times is not None and max_rise_s is not None and times[last] - times[i] > max_rise_s:
+            break
         if foot_y[i] < floor - tol:
             break
         floor = max(floor, foot_y[i])

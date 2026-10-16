@@ -370,6 +370,25 @@ def test_airborne_feet_are_not_mapped_as_the_shot_spot():
     assert game["metrics"]["shooter_court_y_ft"] == pytest.approx(29., abs=.15)
 
 
+def test_a_drive_away_from_the_camera_is_not_taken_for_the_jump():
+    from app.game import add_court_metrics
+    court_map, court_to_image = _court_map()
+    frames = []
+    for frame in range(25):
+        # Away from the camera (+x) at 15 ft/s from (-10, 29) to the plant at (-5, 29) over frames 0-10,
+        # then the jump after frame 18 and the release at 24. On the floor the drive raises the feet in
+        # the image the way a jump does; walking back over it put the spot at the start of the drive.
+        spot = (-10. + 5. * min(frame, 10) / 10, 29.)
+        frames.append({"frame": frame, "time_s": frame / 30, "players": [
+            _standing(frame, 1, spot, court_to_image, 12. * max(0, frame - 18))]})
+    game = {"release_frame": 24, "players": {"shooter_track_id": 1, "defender_track_id": None},
+            "metrics": {}, "evidence": [], "limitations": []}
+    add_court_metrics([ShotResult(1, 0., .8, 1.5, "unknown", 0., [], {}, game=game)], frames, [], court_map)
+    assert (game["metrics"]["shooter_court_x_ft"], game["metrics"]["shooter_court_y_ft"]) == pytest.approx(
+        (-5., 29.), abs=.3)
+    assert game["metrics"]["shot_distance_ft"] == pytest.approx(math.dist((-5., 29.), (0., 5.25)), abs=.3)
+
+
 def test_set_shot_uses_the_release_frame_feet():
     game, _ = _court_shot(jump=False)
     assert game["metrics"]["shot_distance_ft"] == pytest.approx(24.3, abs=.15)
