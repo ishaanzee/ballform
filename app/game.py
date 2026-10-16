@@ -565,13 +565,16 @@ def _floor_spot(samples: list, used: list[int], court_map):
         frame, pose = samples[index]
         found = floor_point(pose, court_map.width, court_map.height)
         court_point = court_map.to_court(frame["frame"], found[0]) if found else None
+        # A floor mapping that no camera could produce (no plausible focal length or pose behind it)
+        # has drifted while following the camera: on the labeled clips such frames put shots 12-51 ft out.
+        camera = court_map.camera(frame["frame"]) if court_point is not None else None
+        if camera is None:
+            continue
         # Ankle keypoints sit above the floor, so they map beyond the feet as seen from the camera.
-        camera = court_map.camera(frame["frame"]) if court_point is not None and found[1] != "pose box" else None
-        if camera is not None:
+        if found[1] != "pose box":
             court_point = under_raised_point(court_point, camera, ANKLE_HEIGHT_FT)
-        if court_point is not None:
-            points.append(court_point)
-            methods.add(found[1])
+        points.append(court_point)
+        methods.add(found[1])
     if not points:
         return None
     return tuple(float(v) for v in np.median(np.asarray(points), axis=0)), " / ".join(sorted(methods))

@@ -389,6 +389,24 @@ def test_a_drive_away_from_the_camera_is_not_taken_for_the_jump():
     assert game["metrics"]["shot_distance_ft"] == pytest.approx(math.dist((-5., 29.), (0., 5.25)), abs=.3)
 
 
+def test_a_mapping_no_camera_could_take_measures_nothing():
+    from app.court import camera_from_homography
+    from app.game import add_court_metrics
+    court_map, court_to_image = _court_map()
+    # A followed mapping that drifted into an affine one: no focal length or pose produces it.
+    drifted = np.array([[.02, .001, -10.], [.0005, .03, -5.], [0., 0., 1.]])
+    assert camera_from_homography(np.linalg.inv(drifted), 1920, 1080) is None
+    for mapping in court_map.frames.values():
+        mapping.image_to_court = drifted
+    frames = [{"frame": frame, "time_s": frame / 30, "players": [
+        _standing(frame, 1, (-5., 29.), court_to_image, 12. * max(0, frame - 18))]} for frame in range(25)]
+    game = {"release_frame": 24, "players": {"shooter_track_id": 1, "defender_track_id": None},
+            "metrics": {}, "evidence": [], "limitations": []}
+    add_court_metrics([ShotResult(1, 0., .8, 1.5, "unknown", 0., [], {}, game=game)], frames, [], court_map)
+    assert game["metrics"]["shot_distance_ft"] is None and game["metrics"]["shot_zone"] is None
+    assert "no grounded frame had a reliable court mapping" in " ".join(game["evidence"])
+
+
 def test_set_shot_uses_the_release_frame_feet():
     game, _ = _court_shot(jump=False)
     assert game["metrics"]["shot_distance_ft"] == pytest.approx(24.3, abs=.15)
