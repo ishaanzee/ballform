@@ -181,16 +181,21 @@ def test_layup_dunk_class_needs_the_ball_to_leave_upward():
 def test_hidden_release_jump_shot_uses_the_jump_shot_class_and_arc():
     path = {f: (.4, .45) for f in range(6)}
     path.update({f: lerp((.4, .45), (.5, .05), (f - 5) / 15) for f in range(6, 21)})
-    path.update({f: lerp((.5, .05), (.6, .3), (f - 20) / 15) for f in range(21, 36)})
+    path.update({f: lerp((.5, .05), BASKET, (f - 20) / 10) for f in range(21, 31)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 30) / 5) for f in range(31, 36)})
     holders = {f: (1, (.4, .45)) for f in range(6)}
     events = [(f, "jump_shot", .9, (.35, .3, .45, .7)) for f in range(9)]
-    balls, frames = scene(path, holders, events, {f: 1 for f in range(6)})
+    basket = [(30, *basket_box(.8)), (31, *basket_box(.8))]
+    balls, frames = scene(path, holders, events + basket, {f: 1 for f in range(6)})
     shot, = find_attempts([], balls, frames, FPS, None, 1.)
     assert shot.shot_type == "jump shot"
     assert shot.attempt == {"path": "hidden_release", "contact_frame": 5, "apex_frame": 20, "shooter_track_id": 1}
     assert any(item.startswith("Release contact hidden") for item in shot.evidence)
-    # Without the detector's jump-shot class the same arc is left to the raised-hand path.
-    balls, frames = scene(path, holders, [], {f: 1 for f in range(6)})
+    # Without the detector's jump-shot class the same arc is left to the other paths.
+    balls, frames = scene(path, holders, basket, {f: 1 for f in range(6)})
+    assert all(shot.attempt["path"] != "hidden_release" for shot in find_attempts([], balls, frames, FPS, None, 1.))
+    # Nor is it a shot when nothing shows the ball getting to a basket.
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(6)})
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
 
 
@@ -198,7 +203,7 @@ def test_hidden_release_jump_shot_uses_the_jump_shot_class_and_arc():
 def test_floater_needs_layup_dunk_class_at_least_as_confident_as_jump_shot(layup_conf, expected):
     events = ([(f, "layup_dunk", layup_conf, (.35, .3, .45, .7)) for f in range(5, 13)]
               + [(f, "jump_shot", .6, (.35, .3, .45, .7)) for f in range(5, 13)])
-    balls, frames = scene({f: (.9, .9) for f in range(20)}, {}, events)
+    balls, frames = scene({**{f: (.9, .9) for f in range(20)}, 30: BASKET}, {}, [*events, (30, *basket_box(.8))])
     shot = ShotResult(1, 0., 10 / FPS, 1., "unknown", 0., [], {})
     assert find_attempts([shot], balls, frames, FPS, None, 1.)[0].shot_type == expected
 
@@ -287,8 +292,8 @@ def test_pass_coming_down_beside_the_rim_is_not_a_shot():
     # The ball peaks at rim height and comes down in a teammate's hands, far from the basket.
     balls, frames = scene(arc((.35, .2), (.5, .5)), {})
     assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
-    # Without a rim nothing says where the basket is, so the arc stays a shot.
-    assert len(find_attempts([arc_shot()], balls, frames, FPS, None, 1.)) == 1
+    # Without a rim or a ball-in-basket detection nothing shows the ball getting to a basket either.
+    assert find_attempts([arc_shot()], balls, frames, FPS, None, 1.) == []
     # A shot gets to the basket before it comes down.
     balls, frames = scene(arc((.42, .02), (.5, .12)), {})
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
@@ -318,10 +323,26 @@ def test_hand_on_the_ball_after_the_release_estimate_moves_the_release():
 
 
 def test_blocked_shot_coming_down_away_stays_a_shot():
+    # 76d9: the blocked ball came down away from the rim, then got to the basket.
     events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
-    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    path = arc((.35, .2), (.5, .5))
+    path.update({f: lerp((.5, .5), (.5, .1), (f - 30) / 15) for f in range(31, 46)})
+    balls, frames = scene(path, {}, events)
     shot, = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
     assert any(item.startswith("Blocked") for item in shot.evidence)
+
+
+def test_arc_whose_ball_never_gets_to_the_basket_is_not_a_shot():
+    # A pass in transition with no rim in frame, or a ball batted around: nothing
+    # shows it going to a basket. A confident shot-block class does not keep it
+    # either (bd73e4: a contested jump pass).
+    events = [(f, "shot_block", .9, (.3, .1, .4, .3)) for f in range(5, 12)]
+    balls, frames = scene(arc((.35, .2), (.5, .5)), {}, events)
+    assert find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.) == []
+    # The ball first gets to the basket too late for this arc: some later attempt's arrival.
+    assert arc_shots_reaching([(10, 10 + round(2.5 * FPS))]) == []
+    shot, = arc_shots_reaching([(10, 10 + round(1.5 * FPS))])
+    assert shot.shot_type == "jump shot"
 
 
 def test_two_arcs_reaching_the_basket_at_the_same_moment_are_one_attempt():
