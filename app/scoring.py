@@ -41,6 +41,15 @@ EDGE_FALL_SEEN = 3
 # never rises again near the hoop.
 BOUNCE_REACH = 1.
 BOUNCE_RISE = 2.
+# A ball through the hoop stays inside the net until it drops out of the net's
+# bottom, about NET_DEPTH rim-box heights below the rim's top (a net is about
+# as long as the rim is wide). Seen beyond either edge of the rim at that depth
+# (BESIDE_NET_SEEN confident detections within BESIDE_NET_S of the crossing),
+# it went past the rim instead: in 2D a ball falling in front of or behind the
+# rim, rolling off it, or knocked away also crosses the plane inside the rim.
+NET_DEPTH = 2.2
+BESIDE_NET_S = .3
+BESIDE_NET_SEEN = 2
 
 
 def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
@@ -285,6 +294,23 @@ def fell_beside(track: Sequence[Detection], frame: int, left: bool, rim: RimInpu
     return seen >= EDGE_FALL_SEEN
 
 
+def beside_net(track: Sequence[Detection], frame: int, rim: RimInput, fps: float) -> bool:
+    """True when the ball, after crossing the rim plane at ``frame``, is seen beyond either edge of
+    the rim at net depth: it fell past the rim, not through the net."""
+    seen = 0
+    for b in track:
+        if not frame <= b.frame <= frame + BESIDE_NET_S * fps or b.confidence < .45:
+            continue
+        box = _rim_at(rim, b.frame)
+        if (box is None or not box[1] + .5 * box[3] <= b.y <= box[1] + NET_DEPTH * box[3]
+                or box[0] <= b.x <= box[0] + box[2]):
+            continue
+        seen += 1
+        if seen >= BESIDE_NET_SEEN:
+            return True
+    return False
+
+
 def rim_bounce(track: Sequence[Detection], start: int, end: float, rim: RimInput, fps: float) -> int | None:
     """Frame where the descending ball reached the rim between ``start`` and ``end`` and then bounced back up."""
     seen = [b for b in track if start <= b.frame <= end + REBOUND_S * fps and b.confidence >= .45]
@@ -361,6 +387,10 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
             # It may still have rolled in or out unseen, so this is not called.
             evidence.append("Ball centre crossed the rim plane over the rim's edge, too close to it to pass through "
                             "cleanly: it hit the rim, and whether it then dropped in was not seen")
+    elif inside and beside_net(track or segment, inside[0][0], rim, fps):
+        outcome, confidence, outcome_frame = "missed", .66, inside[0][0]
+        evidence.append("Ball crossed the rim plane inside the rim, then was seen beside the rim at net depth: it "
+                        "fell past the rim (in front of or behind it, or knocked away) instead of through the net")
     elif inside:
         crossing_frame = inside[0][0]
         motion_score, motion_frame = motion_event(crossing_frame, round(crossing_frame + .35 * fps))
