@@ -528,12 +528,13 @@ def test_attempt_followed_by_a_made_tip_missed(tip_release, outcome):
     (range(30, 33), "made"),    # 2fcb: hands brushing the ball on its way down
 ])
 def test_make_after_a_player_held_the_ball_was_not_the_shots(held, outcome):
-    # The shot came down short, a player had the ball under the basket, and the
-    # ball's later trip through the rim was credited to the shot.
+    # The shot got to the basket (ball-in-basket fired as it came down to the rim)
+    # and came off it, a player had the ball under the basket, and the ball's later
+    # trip through the rim was credited to the shot.
     path = arc((.42, .02), (.55, .25))
     path.update({f: (.55, .25) for f in range(31, 39)})
     path.update({f: lerp((.55, .25), BASKET, (f - 38) / 6) for f in range(39, 50)})
-    balls, frames = scene(path, {f: (2, (.55, .25)) for f in held})
+    balls, frames = scene(path, {f: (2, (.55, .25)) for f in held}, [(21, *basket_box(.8))])
     made = ShotResult(1, 0., 0., 1., "made", .9, ["Ball arc detected"], {}, outcome_frame=45)
     shot, = find_attempts([made], balls, frames, FPS, None, 1.)
     assert shot.outcome == outcome
