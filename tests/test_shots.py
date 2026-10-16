@@ -598,11 +598,15 @@ def court_shot(shot_type, distance):
     ("layup or dunk", 7., "layup or dunk"),  # rim finishes keep their type
     ("tip", 20., "tip"),
     ("jump shot", None, "jump shot"),  # uncalibrated
+    ("floater", 3.5, "layup or dunk"),    # 2fd5: a putback from under the rim with a soft high arc
+    ("jump shot", 3.1, "layup or dunk"),  # d731
+    ("jump shot", 4.5, "floater"),        # outside the restricted area
 ])
 def test_calibrated_distance_retypes_floaters_and_jump_shots(shot_type, distance, expected):
     from app.shots import type_by_distance
     shot = court_shot(shot_type, distance)
-    type_by_distance([shot])
+    # A shot that became a rim finish has to be scored and measured again.
+    assert type_by_distance([shot]) == (expected == "layup or dunk" != shot_type)
     assert shot.shot_type == expected
     assert bool(shot.evidence) == (expected != shot_type)
 

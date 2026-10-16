@@ -758,7 +758,12 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
             if court_map_cache:
                 _save_court_map(court_map, court_map_cache)
         add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
-        type_by_distance(shots, player_frames, court_map)
+        if type_by_distance(shots, player_frames, court_map) and game_summary is not None:
+            # A shot retyped as a finish at the rim is scored (contest only) and measured
+            # (where the shooter's path passes the basket) as one.
+            game_summary = analyze_game_shots(shots, player_frames, observed_balls, fps, width / height,
+                                              min_torso=10 / height)
+            add_court_metrics(shots, player_frames, observed_balls, court_map, game_summary)
         if output_dir is not None:
             # Smoothed per-player floor trajectories; saved for review, not used by any shot metric.
             trajectories = floor_trajectories(player_frames, court_map, cut_frames)

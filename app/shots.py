@@ -93,6 +93,12 @@ FLOATER_FLIGHT_S = (.6, .8)
 # jump shots 7.0 ft (a 10 ft pull-up) and then 10.7 ft or more.
 JUMP_SHOT_MIN_FT = 10.
 FLOATER_MAX_FT = 16.
+# An arc shot taken off inside the restricted area (4 ft from the point under
+# the rim) is a finish at the rim: from there nobody floats it or shoots a jump
+# shot, the rim is a step and a reach away. Labeled floaters took off 4.9 ft out
+# or farther; three layups and putbacks typed floaters took off 3.1-3.7 ft out
+# (2fd5, b868, d731), their high soft arcs read as floaters.
+RIM_FINISH_FT = 4.
 # A floater is let go on the move toward the basket; a jump shooter stops first
 # (a pull-up, a turnaround, a catch and shoot). On the dev labels every floater
 # whose shooter came at the basket at 10 ft/s or more over the second before
@@ -552,15 +558,25 @@ def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> fl
     return (start - end) / elapsed if elapsed > 0 else None
 
 
-def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> None:
+def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> bool:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
     ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
     which say more than the detector classes or the flight time. Rim finishes are left
     alone: their distance is where the path passes the basket, and changing them would
-    change how that distance is measured."""
+    change how that distance is measured.
+
+    Returns True when a shot became a rim finish: its score and distance are then
+    measured on the wrong basis and have to be measured again."""
+    rim_finishes = False
     for shot in shots:
         distance = ((shot.game or {}).get("metrics") or {}).get("shot_distance_ft")
         if distance is None or shot.shot_type not in {"jump shot", "floater"}:
+            continue
+        if distance < RIM_FINISH_FT:
+            shot.evidence.append(f"Layup or dunk: taken off {distance:.1f} ft from the basket on the calibrated court, "
+                                 f"inside the restricted area ({RIM_FINISH_FT:.0f} ft); a {shot.shot_type} comes from "
+                                 "farther out")
+            shot.shot_type, rim_finishes = "layup or dunk", True
             continue
         speed = approach_speed(shot, player_frames, court_map) if court_map is not None else None
         if speed is not None and speed >= DRIVE_FT_S and distance <= DRIVE_FLOATER_MAX_FT:
@@ -577,6 +593,7 @@ def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), co
             shot.shot_type = "jump shot"
             shot.evidence.append(f"Jump shot: taken {distance:.1f} ft from the basket on the calibrated court, "
                                  f"farther out than a floater (up to {FLOATER_MAX_FT} ft)")
+    return rim_finishes
 
 
 def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_type: str,
