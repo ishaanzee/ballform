@@ -562,6 +562,19 @@ def _sampled_frames(capture, stride: int, detector=None, executor=None,
         current, current_future = following, following_future
 
 
+def _retrack_since_cut(player_frames: list[dict], cut_frame: int, pose_tracker: PoseTracker) -> None:
+    """Give the frames from a camera cut on fresh identities.
+
+    A cut is confirmed one sampled frame late, or later after a brightening that might have been
+    a flash (CutDetector), so those frames were matched against the previous shot's tracks.
+    """
+    pose_tracker.reset()
+    for since_cut in (f for f in player_frames if f["frame"] >= cut_frame):
+        for pose in since_cut["players"]:
+            pose.track_id = None
+        pose_tracker.update(since_cut["players"])
+
+
 def _wait_summary(samples: list[float]) -> dict:
     """Summarize time the frame thread was blocked, not total worker runtime."""
     if not samples:
@@ -934,13 +947,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             cut_frame = cut_detector.observe(frame_no, gray) if cut_detector else None
             if cut_frame is not None:
                 cut_frames.append(cut_frame)
-                pose_tracker.reset()
-                # The cut is confirmed one sample late, so its first frame was matched
-                # against the previous shot's tracks; give it fresh identities.
-                if player_frames and player_frames[-1]["frame"] == cut_frame:
-                    for pose in player_frames[-1]["players"]:
-                        pose.track_id = None
-                    pose_tracker.update(player_frames[-1]["players"])
+                _retrack_since_cut(player_frames, cut_frame, pose_tracker)
                 if handler_tracker:
                     handler_tracker.reset()
                 previous_ball = None

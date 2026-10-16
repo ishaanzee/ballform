@@ -225,13 +225,61 @@ def test_cut_detection_and_profiles():
             camera_profile(removed)
 
 
-def test_single_frame_flash_is_not_a_cut_but_a_persistent_edit_is():
-    old = np.full((100, 100), 100, dtype=np.uint8)
-    flash = np.full((100, 100), 160, dtype=np.uint8)
-    new = np.full((100, 100), 200, dtype=np.uint8)
+def gray(level):
+    return np.full((100, 100), level, dtype=np.uint8)
+
+
+def cuts(frames):
     detector = CutDetector()
-    assert [detector.observe(i, frame) for i, frame in
-            enumerate((old, flash, old, new, new))] == [None, None, None, None, 3]
+    return [detector.observe(i, frame) for i, frame in enumerate(frames)]
+
+
+def test_single_frame_flash_is_not_a_cut_but_a_persistent_edit_is():
+    old, flash, new = gray(100), gray(160), gray(30)
+    assert cuts((old, flash, old, new, new)) == [None, None, None, None, 3]
+
+
+def test_frame_after_a_flash_is_compared_with_the_frame_before_it():
+    # The flash is under the cut threshold against the frame before it but over it against the
+    # (slightly changed) frames after it, which used to split the clip at the frame after the flash.
+    assert scene_cut(gray(140), gray(90)) and scene_cut(gray(140), gray(88)) and not scene_cut(gray(100), gray(140))
+    assert cuts((gray(100), gray(140), gray(90), gray(88))) == [None] * 4
+
+
+def test_two_flash_frames_in_a_row_are_not_cuts():
+    assert cuts((gray(100), gray(150), gray(160), gray(100), gray(100))) == [None] * 5
+
+
+def test_cut_to_a_brighter_image_is_confirmed_once_it_outlasts_a_flash():
+    bright, dark = gray(200), gray(20)
+    assert cuts((gray(100), gray(100), bright, bright, bright, bright)) == [None, None, None, None, 2, None]
+    assert cuts((gray(100), gray(100), dark, dark)) == [None, None, None, 2]
+
+
+def test_clip_opening_on_a_flash_is_not_cut_after_it():
+    assert cuts((gray(160), gray(100), gray(100), gray(100))) == [None] * 4
+
+
+def halves(left, right):
+    # scene_cut's own 96x54 size, so the differences are exactly the halves' means.
+    image = np.full((54, 96), left, dtype=np.uint8)
+    image[:, 48:] = right
+    return image
+
+
+def test_brightening_that_does_not_come_back_is_compared_frame_by_frame():
+    # A bright jersey passing the lens: each frame is close to the one before it, but the
+    # frame after the bright ones is unlike the frame before them, so they were no flash.
+    frames = (halves(100, 100), halves(150, 110), halves(170, 100), halves(170, 40), halves(170, 40))
+    assert not any(scene_cut(a, b) for a, b in zip(frames, frames[1:]))
+    assert scene_cut(frames[0], frames[3])
+    assert cuts(frames) == [None] * 5
+
+
+def test_brightening_that_starts_a_new_shot_is_cut_at_its_first_frame():
+    # The new shot's first frame is just over FLASH_RISE brighter, its second just under.
+    old, first, second = halves(100, 100), halves(40, 210), halves(40, 200)
+    assert cuts((old, old, first, second, second)) == [None, None, None, 2, None]
 
 
 def test_basketball_detector_rgb_normalization_and_box_decode():
@@ -266,6 +314,55 @@ def test_each_detector_player_box_vouches_for_one_pose():
     other = Person((.70, .30, .76, .70), .9, {})
     objects = [(4, .9, (.40, .30, .46, .70)), (5, .8, (.70, .30, .76, .70))]
     assert players_only([spectator, player, other], objects) == [player, other]
+
+
+def test_a_less_certain_pose_cannot_take_a_confident_players_box():
+    # The tipper's confident pose fits his detector box a little worse than a 0.2 fragment does.
+    tipper = Person((.40, .28, .47, .70), .6, {})
+    fragment = Person((.40, .30, .46, .70), .2, {})
+    box = (4, .9, (.40, .30, .46, .70))
+    assert players_only([fragment, tipper], [box]) == [tipper]
+    # A box no confident pose claimed still vouches for the less certain one.
+    assert players_only([fragment, tipper], [box, (4, .9, (.40, .29, .46, .71))]) == [fragment, tipper]
+
+
+def test_low_confidence_pose_is_kept_only_where_a_detector_player_box_vouches_for_it(monkeypatch):
+    class BallDetector:
+        def detect(self, frame):
+            return []
+
+    class Pose:
+        parallel_sides = False
+
+        def __init__(self, confidence):
+            self.confidence = confidence
+
+        def infer(self, image, size, side=False):
+            if image.shape[:2] != (600, 1000):
+                return None  # side crops
+            points = np.zeros((1, 17, 3))
+            points[0, :, 2] = .9
+            points[0, 5], points[0, 6] = (220, 200, .9), (260, 200, .9)
+            points[0, 11], points[0, 12] = (220, 260, .9), (260, 260, .9)
+            return np.array([[200, 180, 280, 300]]), np.array([self.confidence]), points
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    frame = np.zeros((600, 1000, 3), dtype=np.uint8)
+    ball = (1, .9, (.6, .6, .62, .62))
+
+    def kept(confidence, profile, objects):
+        vision = CourtVision(Pose(confidence), BallDetector(), "mps", profile)
+        try:
+            return len(vision.detect(frame, 0, 0.0, prefetched_objects=objects)[0])
+        finally:
+            vision.close()
+
+    # The shooter going up at the rim (pose confidence 0.2) is kept when his player box matches.
+    assert kept(.2, "moving", [(4, .9, (.2, .3, .28, .5)), ball]) == 1
+    assert kept(.2, "moving", [(4, .9, (.6, .3, .68, .5)), ball]) == 0
+    # A fixed camera has no player-box check, so it still needs a confident pose.
+    assert kept(.2, "courtside", [(4, .9, (.2, .3, .28, .5)), ball]) == 0
+    assert kept(.35, "courtside", [(4, .9, (.2, .3, .28, .5)), ball]) == 1
 
 
 def test_game_release_rejects_dribble_and_checks_left_hand():

@@ -11,6 +11,8 @@ import numpy as np
 from app.models import Detection, PoseFrame
 from app.basketball import (BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS,
                             SHOT_EVENT_CLASSES)
+from app import pose as pose_settings
+from app.camera_motion import FLASH_RISE
 from app.rim import rim_candidates
 
 # COCO-17 -> the MediaPipe indices used by the existing drawing/scoring code.
@@ -210,6 +212,10 @@ class CourtVision:
             self.ball_crop_overlap_frames += 1
         pose_regions = list(regions(width, height, self.tiled))
         crops = [frame[y1:y2, x1:x2] for x1, y1, x2, y2 in pose_regions]
+        # Below POSE_CONF a pose is kept only where a detector player box will vouch for it
+        # (players_only, broadcast footage): the shooter going up at the rim, airborne or half
+        # hidden behind a defender, is often 0.1-0.3. Without that check it needs POSE_CONF.
+        vouched = basketball_objects is not None and self.profile == "moving"
         pose_results = self._pose_passes(crops, gpu_busy=side_ball_future is not None)
         for index, (region, crop, pose_data) in enumerate(zip(pose_regions, crops, pose_results)):
             x1, y1, x2, y2 = region
@@ -218,6 +224,8 @@ class CourtVision:
                 for box, confidence, keypoints in zip(*pose_data):
                     if keypoints.shape != (17, 3):
                         raise ValueError("Game pose model must use COCO's 17 keypoints with confidence.")
+                    if confidence <= pose_settings.POSE_CONF and not vouched:
+                        continue
                     mapped = map_keypoints(keypoints, region, width, height)
                     normalized_box = ((box[0] + x1) / width, (box[1] + y1) / height,
                                       (box[2] + x1) / width, (box[3] + y1) / height)
@@ -324,21 +332,26 @@ def players_only(people: list[Person], objects) -> list[Person]:
     Each detector player/referee box vouches for at most one pose (highest
     IoU x confidence first), so a spectator or a duplicate pose overlapping a
     real player's box cannot borrow that player's box to pass the filter.
+    Poses the pose model is sure of (above POSE_CONF) claim boxes first; a
+    less certain pose only gets a box none of them took, so it can never push
+    a confident player out.
     """
     roles = [(cls, conf, box) for cls, conf, box in objects
              if (cls in PLAYER_CLASSES or cls == REFEREE_CLASS) and conf >= .4]
-    pairs = sorted(((iou(person.box, box) * conf, p, r) for p, person in enumerate(people)
-                    for r, (_, conf, box) in enumerate(roles)), reverse=True)
     used_people, used_roles, kept = set(), set(), set()
-    for score, p, r in pairs:
-        if score < .25:
-            break
-        if p in used_people or r in used_roles:
-            continue
-        used_people.add(p)
-        used_roles.add(r)
-        if roles[r][0] in PLAYER_CLASSES:
-            kept.add(p)
+    for confident in (True, False):
+        tier = [p for p, person in enumerate(people) if (person.confidence > pose_settings.POSE_CONF) == confident]
+        pairs = sorted(((iou(people[p].box, box) * conf, p, r) for p in tier
+                        for r, (_, conf, box) in enumerate(roles)), reverse=True)
+        for score, p, r in pairs:
+            if score < .25:
+                break
+            if p in used_people or r in used_roles:
+                continue
+            used_people.add(p)
+            used_roles.add(r)
+            if roles[r][0] in PLAYER_CLASSES:
+                kept.add(p)
     return [person for p, person in enumerate(people) if p in kept]
 
 
@@ -350,25 +363,68 @@ def scene_cut(previous, current) -> bool:
     return float(np.mean(np.abs(old-new))) > 45.
 
 
+# Sampled frames in a row that may be a photographer's flash. A flash brightens one video frame
+# and leaves the scene as it was; at stride 2, flashes on alternate source frames show as two
+# bright sampled frames in a row (d358: f124 and f126, not f125). No labeled clip had three.
+MAX_FLASH_FRAMES = 2
+
+
 class CutDetector:
-    """Confirm a cut only if the new image persists past one sampled frame."""
+    """Confirm a cut only if the new image persists past one sampled frame.
+
+    A frame more than FLASH_RISE gray levels brighter than the last frame before it may be a
+    photographer's flash, so it is held back. When the next frame shows the scene from before
+    it again, it was a flash and is dropped: it is not tested as a cut, and that next frame is
+    compared with the frame before the flash, never with the flash. On the labeled clips a
+    flash differed from the frames either side of it by 42-48 gray levels, right at the cut
+    threshold, so the frame after it, compared with the flash, read as a new image (86e9,
+    6b6b, 01f0); two bright frames in a row were read as two cuts (d358). When the scene did
+    not come back (a bright jersey passing the lens), or the brightness lasts longer than
+    MAX_FLASH_FRAMES (a cut to a brighter image, confirmed MAX_FLASH_FRAMES sampled frames
+    later than other cuts), the held frames are tested in order after all. A clip that opens on a
+    flash has no frame before it, so the next frame starts the comparison instead.
+    """
 
     def __init__(self):
         self.previous = None
+        self.brightness = 0.  # mean gray level of `previous`
+        self.observed = 0
         self.pending_frame = None
         self.reference = None
+        self.held: list[tuple[int, np.ndarray, float]] = []
+        self.found: list[int] = []
 
     def observe(self, frame: int, gray: np.ndarray) -> int | None:
-        cut = None
+        brightness = cv2.mean(gray)[0]  # 13x faster than gray.mean() on a 1080p frame
+        self.observed += 1
+        if self.previous is not None and brightness - self.brightness > FLASH_RISE:
+            self.held.append((frame, gray, brightness))
+            if len(self.held) > MAX_FLASH_FRAMES:
+                self._replay_held()
+        elif self.observed == 2 and self.brightness - brightness > FLASH_RISE:
+            self.previous, self.brightness = gray, brightness
+        else:
+            if self.held and scene_cut(self.previous, gray):
+                # The image before the brightening did not come back, so it was no flash.
+                self._replay_held()
+            self.held = []
+            self._step(frame, gray, brightness)
+        return self.found.pop(0) if self.found else None
+
+    def _replay_held(self) -> None:
+        held, self.held = self.held, []
+        for args in held:
+            self._step(*args)
+
+    def _step(self, frame: int, gray: np.ndarray, brightness: float) -> None:
         if self.pending_frame is not None:
-            # A one-frame flash differs from its neighbors twice, but the
-            # image after it still resembles the image before it.
+            # A one-frame glitch (or a flash too faint to hold back) differs from
+            # its neighbors twice, but the image after it resembles the image before it.
             if scene_cut(self.reference, gray):
-                cut = self.pending_frame
+                self.found.append(self.pending_frame)
             self.pending_frame = None
             self.reference = None
         elif scene_cut(self.previous, gray):
             self.pending_frame = frame
             self.reference = self.previous
-        self.previous = gray
-        return cut
+        self.previous, self.brightness = gray, brightness

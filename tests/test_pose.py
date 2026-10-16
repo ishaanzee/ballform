@@ -28,7 +28,7 @@ def test_decode_suppresses_overlaps_and_maps_back_to_source_pixels():
     raw = np.zeros((1, 56, 3), dtype=np.float32)
     raw[0, :5, 0] = (100, 120, 40, 80, .9)
     raw[0, :5, 1] = (102, 121, 40, 80, .8)
-    raw[0, :5, 2] = (300, 300, 40, 80, .2)
+    raw[0, :5, 2] = (300, 300, 40, 80, .05)
     raw[0, 5::3, 0] = 110
     raw[0, 6::3, 0] = 140
     raw[0, 7::3, 0] = .7
@@ -37,6 +37,15 @@ def test_decode_suppresses_overlaps_and_maps_back_to_source_pixels():
     assert boxes[0].tolist() == pytest.approx([160, 120, 240, 280])
     assert keypoints.shape == (1, 17, 3)
     assert keypoints[0, 0].tolist() == pytest.approx([220, 240, .7])
+
+
+def test_decode_reports_people_down_to_the_floor_for_the_game_filters_to_judge():
+    # A shooter half hidden at the rim comes out at 0.1-0.3; vision.py decides whether to keep it.
+    raw = np.zeros((1, 56, 2), dtype=np.float32)
+    raw[0, :5, 0] = (100, 120, 40, 80, .2)
+    raw[0, :5, 1] = (300, 300, 40, 80, .08)
+    boxes, scores, keypoints = decode(raw, gain=1., pad=(0, 0), height=1000, width=1000)
+    assert scores.tolist() == pytest.approx([.2])
 
 
 def test_coreml_pose_uses_torch_for_shapes_it_was_not_exported_for():

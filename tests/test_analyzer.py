@@ -6,9 +6,10 @@ import numpy as np
 import pytest
 
 import app.analyzer as analyzer
-from app.analyzer import _render_review_video, _review_highlight, _sampled_frames, _shooter_intervals, _wait_summary
-from app.models import ShotResult
-from app.tracking import HandlerDecision
+from app.analyzer import (_render_review_video, _retrack_since_cut, _review_highlight, _sampled_frames,
+                          _shooter_intervals, _wait_summary)
+from app.models import PoseFrame, ShotResult
+from app.tracking import HandlerDecision, PoseTracker
 
 
 def test_shooter_overlay_runs_from_release_through_rim_event():
@@ -69,6 +70,24 @@ def test_frame_prefetch_preserves_source_order_and_stride():
     assert all(seconds >= 0 for _, _, _, seconds in [first, *rest])
     assert set(waits) == {0, 2, 4}
     assert all(seconds >= 0 for seconds in waits.values())
+
+
+def test_frames_since_a_late_confirmed_cut_get_fresh_identities():
+    def player(frame):
+        return PoseFrame(frame, frame / 30, {"left_shoulder": (.47, .35, .95), "right_shoulder": (.53, .35, .95),
+                                             "left_hip": (.475, .60, .95), "right_hip": (.525, .60, .95)})
+
+    tracker = PoseTracker(1., max_gap_frames=10)
+    frames = [{"frame": frame, "players": [player(frame)]} for frame in (0, 2, 4)]
+    for entry in frames:
+        tracker.update(entry["players"])
+    before = frames[0]["players"][0].track_id
+    assert {entry["players"][0].track_id for entry in frames} == {before}
+    # A cut at frame 2 confirmed two sampled frames late (after a brightening that was not a flash).
+    _retrack_since_cut(frames, 2, tracker)
+    after = frames[1]["players"][0].track_id
+    assert frames[0]["players"][0].track_id == before
+    assert after != before and frames[2]["players"][0].track_id == after
 
 
 def test_pipeline_wait_summary_reports_blocked_time_and_tail():

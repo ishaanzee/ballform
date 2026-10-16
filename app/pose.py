@@ -9,7 +9,11 @@ import numpy as np
 # Fixed input shape (h, w) per requested size, matching Ultralytics' rect letterbox
 # for 16:9 full frames at 1280 and the 60%-width side crops at 960.
 EXPORT_SHAPES = {1280: (736, 1280), 960: (928, 960)}
-POSE_CONF, POSE_IOU, POSE_MAX_DET = .3, .65, 60
+# People the pose model is at least POSE_CONF sure of are kept on any footage. The backends
+# report people down to POSE_CONF_FLOOR: a shooter stretched at the rim, in the air or half
+# hidden behind a defender comes out at 0.1-0.3, and on broadcast footage the basketball
+# detector's player box vouches for each kept pose instead (app/vision.py).
+POSE_CONF, POSE_CONF_FLOOR, POSE_IOU, POSE_MAX_DET = .3, .1, .65, 60
 
 
 def export_path(models_dir: Path, pose_model: str, size: int) -> Path:
@@ -44,7 +48,7 @@ def decode(output: np.ndarray, gain: float, pad: tuple[int, int], height: int, w
     import torchvision
 
     prediction = output[0].T
-    prediction = prediction[prediction[:, 4] > POSE_CONF]
+    prediction = prediction[prediction[:, 4] > POSE_CONF_FLOOR]
     if not len(prediction):
         return None
     cx, cy, bw, bh = prediction[:, 0], prediction[:, 1], prediction[:, 2], prediction[:, 3]
@@ -72,7 +76,7 @@ class TorchPose:
         self.model, self.device = model, device
 
     def infer(self, image: np.ndarray, size: int, side: bool = False):
-        result = self.model.predict(image, imgsz=size, conf=POSE_CONF, iou=POSE_IOU,
+        result = self.model.predict(image, imgsz=size, conf=POSE_CONF_FLOOR, iou=POSE_IOU,
                                     max_det=POSE_MAX_DET, device=self.device, verbose=False)[0]
         if result.keypoints is None or result.boxes is None:
             return None
