@@ -206,6 +206,9 @@ HIGH_APEX_RIM_WIDTHS = 1.5
 # widths in the PUT_DOWN_S after the touch was put down: labeled tips fell at most
 # 0.58 (699d; 3b4f, tapped in from above the rim, 0.55), the putback dunks and
 # layups typed tips 0.8-1.5 (a0e5, 1185: through the net 0.1 s after the touch).
+# Only a ball that was in the hands is put down: tips found at full stretch by the
+# rim (RIM_FINGERTIP_REACH, the wrist past FINGERTIP_REACH) fell up to 0.74 (87a8,
+# f797, tipped in), as far as a putback dunk (1fb2, 0.75), whose ball was held.
 PUT_DOWN_RIM_WIDTHS = .7
 PUT_DOWN_S = .3
 
@@ -948,7 +951,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
         gathered = _gathered(contacts, balls, contact.frame, rim, fps, aspect)
         follow_up = (previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps
                      and at_rim and contact.raised and handler != contact.track_id and gathered is None)
-        fall = _put_down(balls, contact.frame, rim, fps, aspect) if follow_up else None
+        # A touch found only by the fingertip reach at the rim never had the ball in the
+        # hands, so it did not put the ball down: a tip however far the ball then fell.
+        fall = _put_down(balls, contact.frame, rim, fps, aspect) if follow_up and contact.frame in in_hands else None
         if follow_up and (fall is None or fall <= PUT_DOWN_RIM_WIDTHS):
             shot_type = "tip"
             evidence.append(f"Tip: raised-hand touch at the rim {(contact.frame - previous_reach) / fps:.2f} s after the "

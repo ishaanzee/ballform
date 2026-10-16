@@ -162,6 +162,24 @@ def test_follow_up_put_down_through_the_rim_is_not_a_tip(after_touch, expected):
     assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
 
 
+@pytest.mark.parametrize("wrist, expected", [
+    ((.52, .06), "layup or dunk"),  # the ball in the hand, put down through the rim
+    ((.52, .28), "tip"),            # 87a8, f797: fingertips at full stretch, the wrist 1.1 torso lengths below
+])
+def test_only_a_ball_in_the_hands_is_put_down(wrist, expected):
+    # The jump shot bounces up off the rim to (.52, .06), where P2 touches it at frame
+    # 26, and it drops through the rim. A touch found only by the fingertip reach by
+    # the rim never had the ball in the hand: tips like that fell 0.73-0.74 rim widths,
+    # as far as a putback dunk.
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.52, .06), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.52, .06), (.5, .3), (f - 26) / 10) for f in range(27, 40)})
+    balls, frames = scene(path, {26: (2, wrist)}, [(20, *basket_box(.8)), (28, *basket_box(.8))], n=40)
+    jump, follow = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert follow.shot_type == expected and follow.release_s == round(26 / FPS, 2)
+    assert any(item.startswith("Putback, not a tip: the ball fell") for item in follow.evidence) == (expected != "tip")
+
+
 def test_arc_tip_right_after_a_rim_attempt_got_there_is_a_tip():
     # d358, 8743: the arc shots are typed before the rim attempts are found, so the
     # missed layup before the tip was not known yet.
