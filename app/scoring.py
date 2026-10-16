@@ -408,12 +408,15 @@ def rim_outcome(segment: Sequence[Detection], apex_frame: int, rim: RimInput,
         # the rim or backboard, or was hidden); the ball came down later.
         frame, through = late[0]
         delay = f"{(frame - apex_frame) / fps:.2f} s after the arc's apex, too late for the shot's first arrival"
-        if through and not bounced_out(track or segment, frame, rim, fps):
+        how = ("outside the rim" if not through else
+               "through the rim and bounced back up" if bounced_out(track or segment, frame, rim, fps) else
+               "through the rim's plane and then beside the net" if beside_net(track or segment, frame, rim, fps) else
+               None)
+        if how is None:
             evidence.append(f"The ball dropped through the rim {delay}: a rattle-in, a rebound or a putback, "
                             "so it is not called")
         else:
             outcome, confidence, outcome_frame = "missed", .66, frame
-            how = "through the rim and bounced back up" if through else "outside the rim"
             evidence.append(f"The ball came down {how} {delay}, with no earlier crossing through the rim")
     elif (bounce := rim_bounce(track or segment, apex_frame, arrival, rim, fps)) is not None:
         outcome, confidence, outcome_frame = "missed", .66, bounce

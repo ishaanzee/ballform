@@ -86,6 +86,21 @@ def test_late_drop_through_rim_after_hitting_it_is_not_a_make():
     assert shots[0].outcome == "unknown"
 
 
+def test_late_drop_through_the_rim_plane_that_falls_beside_the_net_is_a_miss():
+    # 913a, f29: the ball sat on the rim's edge and rolled off beside the net long after the apex.
+    track = [
+        ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
+        ball(4, .51, .18), ball(5, .53, .23), ball(6, .54, .30), ball(7, .55, .37),
+        ball(8, .56, .30), ball(9, .56, .25), ball(10, .56, .23), ball(11, .57, .26),
+        ball(12, .58, .30), ball(13, .59, .34), ball(14, .60, .36), ball(15, .61, .38),
+        ball(16, .62, .42), ball(17, .65, .47), ball(18, .68, .52),
+    ]
+    shots = analyze_shots(track, [], 10, (.48, .36, .14, .08), {16: 3.0})
+    assert len(shots) == 1
+    assert shots[0].outcome == "missed"
+    assert any("beside the net" in item for item in shots[0].evidence)
+
+
 def test_late_drop_outside_rim_after_hitting_it_is_a_miss():
     track = [
         ball(0, .30, .70), ball(1, .35, .56), ball(2, .40, .40), ball(3, .46, .25),
