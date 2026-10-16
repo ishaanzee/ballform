@@ -29,6 +29,7 @@ import numpy as np
 
 from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
+from app import scoring
 from app.scoring import RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
 from app.tracking import body_geometry
 
@@ -417,10 +418,10 @@ def _gathered(contacts: list[Contact], balls: list[Detection], frame: int, rim: 
 
 
 def _flight_supported(contact: Contact, apex: Detection) -> bool:
-    """The arc path's rule: apex 0.75 torso above the shoulders and 0.75 torso of rise."""
+    """The arc path's rule: apex FLIGHT_ABOVE torso lengths above the shoulders after FLIGHT_RISE of rise."""
     shoulders = [contact.pose.landmarks[name][1] for name in ("left_shoulder", "right_shoulder")]
-    return (apex.y < sum(shoulders) / 2 - .75 * contact.torso
-            and contact.ball.y - apex.y >= .75 * contact.torso)
+    return (apex.y < sum(shoulders) / 2 - scoring.FLIGHT_ABOVE * contact.torso
+            and contact.ball.y - apex.y >= scoring.FLIGHT_RISE * contact.torso)
 
 
 def _class_note(run: Run | None, label: str) -> list[str]:
