@@ -46,11 +46,13 @@ class Label:
     line: int = 0
 
 
-GAME = re.compile(r"\b([A-Z]{2,4}@[A-Z]{2,4} \d{4}-\d{2}-\d{2})")
+# A broadcast game ("LAL@HOU 2026-03-18"), or the source video of a non-broadcast one ("youtube:dQw4w9WgXcQ").
+GAME = re.compile(r"\b([A-Z]{2,4}@[A-Z]{2,4} \d{4}-\d{2}-\d{2}|youtube:[A-Za-z0-9_-]{11})")
 
 
 def game_of(notes: str) -> str:
-    """The game a label's notes name ("LAL@HOU 2026-03-18"), or "" when they name none.
+    """The game a label's notes name ("LAL@HOU 2026-03-18", or "youtube:<video id>" for footage
+    with no play-by-play), or "" when they name none.
 
     Clips from one game share an arena, a broadcast and players, so tuning checks
     hold out whole games (leave-one-game-out), not single clips."""

@@ -116,4 +116,5 @@ def test_the_game_comes_from_the_label_notes():
     from app.evaluation import game_of
 
     assert game_of("MIN@DEN 2025-12-25 ESPN event 401809242 Q4 9:55 'Rudy Gobert blocks ...'") == "MIN@DEN 2025-12-25"
+    assert game_of("FIXED youtube:dQw4w9WgXcQ pickup run, baseline GoPro") == "youtube:dQw4w9WgXcQ"
     assert game_of("no shot: passes around the arc") == ""
