@@ -416,6 +416,63 @@ def test_tip_on_the_fingertips_above_a_raised_hand(wrist, found):
     assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
 
 
+def tip_scene(holders, n=40):
+    """The jump shot reaches the basket at frame 20 and bounces to (.55, .14) by frame 26,
+    where it is tipped back to the basket (frame 30)."""
+    path = {f: lerp((.3, .3), BASKET, f / 20) for f in range(21)}
+    path.update({f: lerp(BASKET, (.55, .14), (f - 20) / 6) for f in range(21, 27)})
+    path.update({f: lerp((.55, .14), BASKET, (f - 26) / 4) for f in range(27, n)})
+    return scene(path, holders, [(20, *basket_box(.8)), (30, *basket_box(.8))], n=n)
+
+
+@pytest.mark.parametrize("rim, wrist, found", [(RIM, (.55, .36), True), (None, (.55, .36), False),
+                                                (RIM, (.55, .41), False)])
+def test_tip_at_full_stretch_by_the_rim(rim, wrist, found):
+    # f797, 1472, 8046: by the rim the tipper's wrist was up to 1.2 torso lengths
+    # below the ball (here 1.1); 1.35 is not a touch, nor is 1.1 away from a rim.
+    balls, frames = tip_scene({26: (2, wrist)})
+    shots = find_attempts([arc_shot()], balls, frames, FPS, rim, 1.)
+    assert [shot.shot_type for shot in shots] == (["jump shot", "tip"] if found else ["jump shot"])
+
+
+def test_fingertips_under_the_ball_on_the_rim_do_not_hold_it():
+    # 699d, 9a92: the tipper's raised hand stayed a stretch below the ball as it
+    # sat on the rim; that is not the ball in his hands, so the tip ends at the touch.
+    holders = {26: (2, (.55, .30)), **{f: (2, (.5, .32)) for f in range(31, 40)}}
+    balls, frames = tip_scene(holders)
+    jump, tip = find_attempts([arc_shot()], balls, frames, FPS, RIM, 1.)
+    assert tip.shot_type == "tip" and tip.release_s == round(26 / FPS, 2)
+
+
+@pytest.mark.parametrize("handler, release, shooter", [(1, 10, 1), (None, 14, 2)])
+def test_fingertips_beside_a_ball_the_handler_has_are_a_contest(handler, release, shooter):
+    # 8743, 37cd: a defender's raised hand 1.1 torso lengths under a layup let go
+    # at the rim took over its release; 5213: Sengun's arms went up under the
+    # ball Giannis was carrying up for a dunk. With no ball handler decoded, the
+    # same reach is a touch on a loose ball.
+    path = {f: (.45, .2) for f in range(11)}
+    path.update({f: lerp((.45, .2), BASKET, (f - 10) / 8) for f in range(11, 19)})
+    path.update({f: lerp(BASKET, (.5, .3), (f - 18) / 7) for f in range(19, 26)})
+    holders = {**{f: (1, (.45, .2)) for f in range(11)}, 14: (2, (.475, .37))}
+    balls, frames = scene(path, holders, [(18, *basket_box(.8))],
+                          {f: handler for f in range(15)} if handler else None, n=26)
+    shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert shot.release_s == round(release / FPS, 2) and shot.attempt["shooter_track_id"] == shooter
+
+
+@pytest.mark.parametrize("offset, found", [(.25, True), (.3, False)])
+def test_ball_carried_level_into_the_rim_from_beside_it_is_a_finish(offset, found):
+    # d96f: the dunker's last contact was 1.26 torso lengths beside the basket and
+    # the ball barely rose before dropping in. 1.5 torso lengths out it must rise.
+    start = (BASKET[0] - offset, .098)
+    path = {f: start for f in range(11)}
+    path.update({f: lerp(start, BASKET, (f - 10) / 5) for f in range(11, 16)})
+    path.update({f: (BASKET[0], BASKET[1] + .02 * (f - 15)) for f in range(16, 25)})
+    balls, frames = scene(path, {f: (1, start) for f in range(11)}, n=25)
+    shots = find_attempts([], balls, frames, FPS, RIM, 1.)
+    assert [shot.shot_type for shot in shots] == (["layup or dunk"] if found else [])
+
+
 def test_rim_attempt_let_go_away_from_the_rim_with_a_long_flight_is_a_shot():
     # f267, 5adf: an arc the arc path missed, found from the contact and the basket.
     path = {f: (.42, .35) for f in range(11)}
