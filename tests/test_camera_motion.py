@@ -40,7 +40,7 @@ def floor_texture(seed=0, sparse=False):
     return texture, to_court
 
 
-def write_video(path, frames=40, blank_after=None, overlay=False, cut_at=None, sparse=False):
+def write_video(path, frames=40, blank_after=None, overlay=False, cut_at=None, sparse=False, flash_at=()):
     texture, to_court = floor_texture(sparse=sparse)
     graphic = np.random.default_rng(5).integers(0, 255, (140, 520), dtype=np.uint8)
     other, _ = floor_texture(seed=1)
@@ -50,6 +50,8 @@ def write_video(path, frames=40, blank_after=None, overlay=False, cut_at=None, s
         image = cv2.warpPerspective(source, camera(frame) @ to_court, (W, H), borderValue=30)
         if blank_after is not None and frame > blank_after:
             image[:] = 128
+        if frame in flash_at:  # an arena photographer's flash washes out one frame
+            image = np.clip(image.astype(np.float32) * 1.6 + 70, 0, 255).astype(np.uint8)
         if overlay == "large":  # a busy static graphic covering much of the floor
             image[380:520, 420:940] = graphic
         elif overlay:  # a static score bug over the floor
@@ -116,6 +118,19 @@ def test_tracking_loss_withholds_later_frames(tmp_path):
     mappings = follow_court(path, list(range(30)), 0, np.linalg.inv(camera(0)), template("nba"), {}, [], W, H, 30)
     assert all(mappings[f].reliable for f in range(21))
     assert all(mappings[f].status == "lost" and not mappings[f].reliable for f in range(21, 30))
+
+
+def test_a_flash_frame_does_not_end_the_mapping(tmp_path):
+    path = tmp_path / "flash.mp4"
+    write_video(path, frames=40, flash_at=(20,))
+    frames = list(range(40))
+    for anchor in (5, 35):  # followed forward and backward over the flash
+        mappings = follow_court(path, frames, anchor, np.linalg.inv(camera(anchor)), template("nba"), {}, [],
+                                W, H, 40)
+        assert not mappings[20].reliable
+        steady = [f for f in frames if f != 20]
+        assert all(mappings[f].reliable for f in steady)
+        assert worst_error_ft(mappings, steady) < .5
 
 
 def test_fixed_cameras_keep_the_marked_mapping(pan_video):
