@@ -32,7 +32,7 @@ from app.court_detect import ClipCalibration
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
-from app.rim import box_iou, detect_fixed_rim, track_detected_rims, track_marked_rim, xywh
+from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
@@ -724,7 +724,11 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     if auto_rim:
         detected_rims, rim_stats = track_detected_rims(
             {f["frame"]: f["rims"] for f in player_frames}, cut_frames, step=stride,
-            max_gap_frames=max(stride, round(fps * .5)))
+            max_gap_frames=max(stride, round(fps * .5)),
+            # A fixed camera can see other courts' hoops; a moving one follows play to the
+            # hoop in use, and there a zoom can split that hoop into two tracks.
+            balls={b.frame: (b.x, b.y, b.confidence) for b in balls} if profile in COURT_PROFILES else None,
+            aspect=width / height)
         # Net flow was measured around each frame's most confident rim; keep it
         # only where that was the hoop finally chosen.
         for frame_no_, box in flow_rims.items():
@@ -909,6 +913,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     # form mode, whose loop does not run that detector, samples a fixed box.
     auto_rim = game_mode and not rim_marked
     rim_detection_error = None
+    # Fixed-camera hoops from zoomed tiles, used on frames whose full view shows no rim.
+    fallback_rims: list[tuple[float, tuple[float, float, float, float]]] = []
+    rim_tile_search = None
     stage_started = time.perf_counter()
     if profile == "moving" and rim:
         report(.06, "Tracking the marked rim forward and backward")
@@ -920,6 +927,13 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         try:
             rim = detect_fixed_rim(input_path, _basketball_detector("ball", loaded_models)[1])
         except Exception as exc:  # The rim is optional; analysis continues without outcomes.
+            rim_detection_error = f"{type(exc).__name__}: {exc}"
+    elif auto_rim and profile in COURT_PROFILES:
+        report(.06, "Looking for the hoop")
+        try:
+            fallback_rims, rim_tile_search = fixed_hoop_candidates(
+                input_path, _basketball_detector("ball", loaded_models)[1])
+        except Exception as exc:  # Per-frame detection still runs without it.
             rim_detection_error = f"{type(exc).__name__}: {exc}"
     stage_times["rim_tracking"] = time.perf_counter() - stage_started
     pose_tracker = PoseTracker(width / height, max_gap_frames=max(3, round(fps * .7)))
@@ -954,8 +968,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                 previous_ball = None
                 prior_ball = None
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
-            if auto_rim and court_vision and court_vision.rims:
-                frame_rim = xywh(max(court_vision.rims)[1])
+            if auto_rim and court_vision and (court_vision.rims or fallback_rims):
+                frame_rim = xywh(max(court_vision.rims or fallback_rims)[1])
             flow_rims[frame_no] = frame_rim
             players = []
             landmark_maps = []
@@ -980,7 +994,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                                   "handler": handler, "ball": ball,
                                   "possession": court_vision.possession if court_vision else [],
                                   "unposed": court_vision.unposed if court_vision else [],
-                                  "rims": court_vision.rims if court_vision else [],
+                                  "rims": (court_vision.rims or fallback_rims) if court_vision else [],
                                   "events": court_vision.events if court_vision else [],
                                   # Drawn in the review pass, which decodes the source again.
                                   "drawn_poses": landmark_maps})
@@ -1114,6 +1128,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "rim_detected_frames": len(detected_rims) if auto_rim else (1 if rim_source == "detected" else 0),
                         "rim_other_hoop_tracks": rim_stats.get("other_hoop_tracks"),
                         "rim_detection_error": rim_detection_error,
+                        "rim_tile_search": rim_tile_search,
                         "rim_tracking_frames": len(tracked_rims),
                         "rim_tracking_lost": rim_tracking_lost,
                         "pose_predict_calls": court_vision.pose_predict_calls if court_vision else None,
@@ -1130,7 +1145,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         },
         "limitations": [
             "Angles and distances are 2D image-plane estimates, not calibrated 3D measurements.",
-            "Make/miss is inferred from visible ball/rim geometry: a make needs the ball to drop through the middle of the rim on its first arrival and not bounce back up. A ball bouncing off the rim, crossing over its edge and falling on beside it, or followed by a tip or putback that goes in is called missed; a ball that hits the rim's edge or drops in only after a rebound, without the rest being seen, is left unknown. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make. On 101 labeled broadcast clips 95 of the 101 shots found got a make/miss call and all 95 were right; the rest were left unknown, mostly where the rim or the attempt's timing was not seen.",
+            "Make/miss is inferred from visible ball/rim geometry: a make needs the ball to drop through the middle of the rim on its first arrival and not bounce back up. A ball bouncing off the rim, crossing over its edge and falling on beside it, or followed by a tip or putback that goes in is called missed; a ball that hits the rim's edge or drops in only after a rebound, without the rest being seen, is left unknown. Net movement only supports a trajectory that reaches the rim, so a net-only airball is not called a make. On three blind holdouts of NBA broadcast clips (233 shots), 172 of the 190 shots found got a make/miss call and 162 of those 172 were right; the rest were left unknown, mostly where the rim or the attempt's timing was not seen.",
             "Feedback is descriptive and should complement, not replace, coaching judgment.",
             "Shot candidates and outcomes require video review; passes, occlusion and camera movement can cause errors.",
         ],
@@ -1150,7 +1165,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             result["limitations"].append("The rim was found automatically by the basketball detector on each frame. Outcomes pause where no hoop is detected and restart after camera cuts; if the wrong hoop is chosen, mark the rim to override.")
         elif profile == "moving" and rim_marked:
             result["limitations"].append("Moving-camera outcomes use a user-initialized visual rim tracker. It supports continuous pans and moderate zooms, but withholds outcomes after tracking loss or a camera cut; review every result.")
-        result["limitations"].append("Jump shots need raised-hand ball contact and an arc rising above the release shoulders, or the detector's jump-shot class with an arc when the release is hidden. Layups, dunks, tips and putbacks need a hand contact followed by the ball reaching the basket (a ball-in-basket detection or the rim's area), or the detector's layup-dunk class with the ball rising above the player's head. Shot types come from the detector classes, the ball's flight time and image-plane geometry, and on a calibrated court the shot distance separates floaters (under 10 ft) from jump shots; a finish at the rim is reported as 'layup or dunk' because the two look alike in 2D. On 101 labeled broadcast clips 59 of 67 layups, dunks, tips and floaters were found (release within 0.75 s), against 43 of 50 jump shots. Attempts whose ball is never seen near the basket, touches where the player has no visible pose (often a tip or putback in a crowd), fully occluded releases and flat arcs may be omitted. An arc whose ball comes back down beside the rim before reaching it is treated as a pass, unless the detector's shot-block class fires in flight; without a visible rim that check cannot run, so a pass can still be called a shot. A ball bouncing off the rim or a rebound at the rim can still read as a new attempt (on the labeled broadcast clips about 1 prediction in 18 was not a real shot, mostly a catch or scramble at the rim read as a tip), and slow-motion edits need manual review.")
+        result["limitations"].append("Jump shots need raised-hand ball contact and an arc rising above the release shoulders, or the detector's jump-shot class with an arc when the release is hidden. Layups, dunks, tips and putbacks need a hand contact followed by the ball reaching the basket (a ball-in-basket detection or the rim's area), or the detector's layup-dunk class with the ball rising above the player's head. Shot types come from the detector classes, the ball's flight time and image-plane geometry, and on a calibrated court the shot distance separates floaters (under 10 ft) from jump shots; a finish at the rim is reported as 'layup or dunk' because the two look alike in 2D. On three blind holdouts of NBA broadcast clips 130 of 157 layups, dunks, tips and floaters were found (release within 0.75 s), against 55 of 71 jump shots. Attempts whose ball is never seen near the basket, touches where the player has no visible pose (often a tip or putback in a crowd), fully occluded releases and flat arcs may be omitted. An arc whose ball comes back down beside the rim before reaching it is treated as a pass, unless the detector's shot-block class fires in flight; without a visible rim that check cannot run, so a pass can still be called a shot. A ball bouncing off the rim or a rebound at the rim can still read as a new attempt (on the broadcast holdouts about 1 prediction in 7 was not a real shot, mostly a catch or scramble at the rim read as a tip), and slow-motion edits need manual review.")
         if court_map is not None:
             result["limitations"].append(court_map.limitation())
         elif court_auto is not None:

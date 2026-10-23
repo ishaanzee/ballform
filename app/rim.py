@@ -13,13 +13,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from app.basketball import RIM_CLASS
+from app.basketball import PLAYER_CLASSES, RIM_CLASS
 
 RimBox = tuple[float, float, float, float]  # normalized x, y, w, h
 MIN_CONFIDENCE = .5
 # Two rim detections in one frame covering this much of the smaller box are
 # one hoop: the ball at the rim gave 0.43 and 0.75 (f6f0, 3e78).
 SAME_HOOP_OVERLAP = .3
+# Ball frames near a hoop needed before ball activity, not detector confidence,
+# picks between several steady hoops.
+BALL_VISITS_TO_PICK_HOOP = 3
+BALL_VISIT_CONFIDENCE = .5
 
 
 class RimTracker:
@@ -157,15 +161,56 @@ def _overlap(a: RimBox, b: RimBox) -> float:
     return ix * iy / smaller if smaller > 0 else 0.
 
 
+def _ball_visits(track: list[tuple[int, float, RimBox]], balls: dict[int, tuple[float, float, float]],
+                 frames: list[int], aspect: float) -> int:
+    """Frames whose confident ball is coming down onto the hoop (within 2 rim widths
+    sideways, up to 4 above the ring, and lower than a frame or two before) or being
+    lifted to it (within 1.5 sideways, rising, up to 1 above the ring).
+
+    A jump shot drops onto its own hoop and a layup is carried up to it. On a
+    head-height camera in a gym (bKA6) the neighbouring courts' hoops also collect
+    ball frames, but those balls are a still, faint false positive, a ball rising
+    away, or a nearer ball passing in front of the far hoop at or below its ring.
+    """
+    entries = {frame: box for frame, _, box in track}
+    known = sorted(entries)
+    visits = 0
+    for frame in frames:
+        ball = balls.get(frame)
+        previous = balls.get(frame - 1) or balls.get(frame - 2)
+        if ball is None or previous is None or ball[2] < BALL_VISIT_CONFIDENCE:
+            continue
+        nearest = min(known, key=lambda f: abs(f - frame))
+        x, y, w, h = entries[nearest]
+        rim_width_y = max(w * aspect, 1e-9)  # one rim width in normalized-height units
+        dx = (ball[0] - (x + w / 2)) / max(w, 1e-9)
+        dy = (ball[1] - (y + h / 2)) / rim_width_y
+        falling = (ball[1] - previous[1]) / rim_width_y
+        dropping = abs(dx) <= 2 and -4 <= dy <= -.25 and falling >= .05
+        lifted = abs(dx) <= 1.5 and -1 <= dy <= -.1 and falling <= -.05
+        visits += dropping or lifted
+    return visits
+
+
+def _confidence(track: list[tuple[int, float, RimBox]]) -> float:
+    return sum(conf for _, conf, _ in track)
+
+
 def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int = 1,
-                        max_gap_frames: int = 15) -> tuple[dict[int, RimBox], dict]:
+                        max_gap_frames: int = 15, balls: dict[int, tuple[float, float, float]] | None = None,
+                        aspect: float = 16 / 9) -> tuple[dict[int, RimBox], dict]:
     """Link per-frame rim detections into hoops and keep the dominant hoop per camera segment.
 
     detections: {source frame: [(confidence, normalized xyxy), ...]}. Within a
     segment, a detection joins the hoop whose last box it is near (the hoop may
     pan by a fraction of its width per frame) and similar in size. The hoop
     with the most total confidence wins; one-off false positives (a red sleeve
-    near the baseline) form short, weak tracks and are dropped. Box jitter is
+    near the baseline) form short, weak tracks and are dropped. When ``balls``
+    ({frame: normalized ball x, y, confidence}) is given and several steady
+    hoops are in view, the one the ball drops onto or is lifted to wins instead:
+    a fixed camera in a gym can see the neighbouring courts' hoops, sharper and
+    more confident than the one in play (bKA6 picked a side court's hoop on all
+    nine clips). Box jitter is
     reduced with a 5-sample local linear fit. Gaps are left to the scorer's rim lookup,
     which interpolates up to 12 frames and never bridges a cut.
     """
@@ -212,7 +257,13 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
                     used.add(best)
         if not tracks:
             continue
-        dominant = max(tracks, key=lambda track: sum(conf for _, conf, _ in track))
+        dominant = max(tracks, key=_confidence)
+        steady = [track for track in tracks if len(track) >= 3]
+        if balls and len(steady) > 1:
+            span = [f for f in balls if start <= f < end]
+            visits = {id(track): _ball_visits(track, balls, span, aspect) for track in steady}
+            if max(visits.values()) >= BALL_VISITS_TO_PICK_HOOP:
+                dominant = max(steady, key=lambda track: (visits[id(track)], _confidence(track)))
         if len(dominant) < 3:
             continue
         stats["segments_with_rim"] += 1
@@ -256,3 +307,96 @@ def detect_fixed_rim(input_path: Path, detector, samples: int = 15) -> RimBox | 
     if len(rims) < .4 * max(1, len(detections)):
         return None
     return tuple(float(v) for v in np.median(np.asarray(list(rims.values())), axis=0))
+
+
+# Zoomed hoop search for fixed cameras (see fixed_hoop_candidates).
+TILED_MIN_CONFIDENCE = .25
+TILED_MIN_SAMPLES = 3
+# In pixels a hoop box is 0.30-0.56 as tall as wide on the fixed-camera clips; a light
+# pole on the outdoor clip was boxed at 0.68-0.73.
+TILED_MAX_HEIGHT_TO_WIDTH = .63
+# An 18 in rim beside 6 ft players: rim width over the median player box height was
+# 0.23-0.52 on the fixed-camera clips, the light pole 0.11.
+TILED_MIN_WIDTH_TO_PLAYER = .15
+
+
+def _tiles(width: int, height: int):
+    """Six overlapping half-width, two-thirds-height crops: a 2x zoom over the frame."""
+    crop_width, crop_height = width // 2, round(height * 2 / 3)
+    for column in range(3):
+        for row in range(2):
+            x1, y1 = round(column * width / 4), round(row * height / 3)
+            yield x1, y1, min(width, x1 + crop_width), min(height, y1 + crop_height)
+
+
+def fixed_hoop_candidates(input_path: Path, detector, samples: int = 6
+                          ) -> tuple[list[tuple[float, tuple[float, float, float, float]]], dict]:
+    """Hoops for a fixed camera whose full frames show no steady rim, from zoomed tiles.
+
+    On a 720p wall camera with hoops at the frame edges (jzIB) or an outdoor
+    gooseneck hoop (Rghu), the full-frame detector boxes the rim below
+    MIN_CONFIDENCE or not at all; 2x tiles find it at 0.25-0.6 (13 of 17 such
+    clips, no false hoops). A hoop must appear in the same place on
+    TILED_MIN_SAMPLES of the sampled frames, be hoop-shaped and be plausibly
+    sized next to the players. Returns ([(confidence, normalized xyxy), ...], stats), empty when
+    the full frames already show a steady rim (the per-frame detection then
+    suffices) or no hoop is found.
+    """
+    stats = {"samples": 0, "full_frame_rim_samples": 0, "searched_tiles": False, "hoops": 0}
+    capture = cv2.VideoCapture(str(input_path))
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    frames = []
+    if capture.isOpened() and total > 0:
+        for index in range(samples):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, min(total - 1, round((index + .5) * total / samples)))
+            ok, frame = capture.read()
+            if ok:
+                frames.append(frame)
+    capture.release()
+    stats["samples"] = len(frames)
+    if not frames:
+        return [], stats
+    player_heights = []
+    for frame in frames:
+        objects = detector.detect(frame) or []
+        stats["full_frame_rim_samples"] += bool(rim_candidates(objects))
+        player_heights += [box[3] - box[1] for cls, conf, box in objects if cls in PLAYER_CLASSES and conf >= .4]
+    if stats["full_frame_rim_samples"] >= .4 * len(frames):
+        return [], stats
+    stats["searched_tiles"] = True
+    clusters: list[dict] = []
+    for index, frame in enumerate(frames):
+        height, width = frame.shape[:2]
+        found = []
+        for x1, y1, x2, y2 in _tiles(width, height):
+            for cls, conf, box in detector.detect(frame[y1:y2, x1:x2]) or []:
+                if cls != RIM_CLASS or conf < TILED_MIN_CONFIDENCE:
+                    continue
+                found.append((conf, ((x1 + box[0] * (x2 - x1)) / width, (y1 + box[1] * (y2 - y1)) / height,
+                                     (x1 + box[2] * (x2 - x1)) / width, (y1 + box[3] * (y2 - y1)) / height)))
+        for conf, box in sorted(found, reverse=True):
+            x, y, w, h = xywh(box)
+            centre = (x + w / 2, y + h / 2)
+            for cluster in clusters:
+                cx, cy, cw, _ = cluster["box"]
+                if (math.dist(centre, (cx + cw / 2, cy + cluster["box"][3] / 2)) <= max(w, cw)
+                        and .6 <= w / max(cw, 1e-9) <= 1 / .6):
+                    if index not in cluster["samples"]:
+                        cluster["samples"].add(index)
+                        cluster["boxes"].append((x, y, w, h))
+                        cluster["confidences"].append(conf)
+                    break
+            else:
+                clusters.append({"box": (x, y, w, h), "samples": {index}, "boxes": [(x, y, w, h)],
+                                 "confidences": [conf]})
+    aspect = frames[0].shape[1] / frames[0].shape[0]
+    player_height = float(np.median(player_heights)) if player_heights else None
+    hoops = []
+    for cluster in clusters:
+        x, y, w, h = (float(v) for v in np.median(np.asarray(cluster["boxes"]), axis=0))
+        if (len(cluster["samples"]) >= TILED_MIN_SAMPLES
+                and h <= TILED_MAX_HEIGHT_TO_WIDTH * w * aspect
+                and (player_height is None or w * aspect >= TILED_MIN_WIDTH_TO_PLAYER * player_height)):
+            hoops.append((float(np.mean(cluster["confidences"])), (x, y, x + w, y + h)))
+    stats["hoops"] = len(hoops)
+    return sorted(hoops, reverse=True), stats

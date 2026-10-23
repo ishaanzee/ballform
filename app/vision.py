@@ -107,8 +107,12 @@ class CourtVision:
     def __init__(self, pose_model, ball_model, device: str, profile: str, court=None):
         self.pose_model, self.ball_model = pose_model, ball_model
         self.device, self.profile, self.court = device, profile, court
-        self.tiled = profile in {"elevated", "moving"}
-        self.imgsz = 1280 if self.tiled else 960
+        # Every game profile uses the overlapping side crops: on a courtside camera the ball
+        # near a far hoop is too small for the full view alone (fixed-camera eval, 2026-10-23:
+        # the crops alone took courtside shots found from 6 to 10 of 18). Ball crops without the
+        # side-crop pose were no faster, since the pose passes overlap the crops.
+        self.tiled = True
+        self.imgsz = 1280
         self.raw_people = 0
         self.timing_seconds = {"total": 0.0, "pose": 0.0, "ball": 0.0}
         self.pose_predict_calls = 0

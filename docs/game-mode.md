@@ -46,6 +46,22 @@ The rules generalize, but by much less than the dev gain (dev recall 86% → 90%
 
 Fixed cameras were measured for the first time on `eval/fixed.csv`: 35 clips (33 shots) from four public adult videos (a half-court pickup run and an outdoor 4v4 from tripods at court level, a college club game and a rec game from the stands), labeled from the frames. Ballform finds 17 of the 33 shots (52%), 17 of its 22 shots are real, and it calls 9 of the 17 (8 right). The arc-reach rule of 2026-10-15 had dropped six of those jump shots, since on fixed footage no basket event caught their ball; it now runs only on the moving profile. Nothing has been tuned on fixed footage yet.
 
+**2026-10-23: first fixed-camera fixes.** Three causes covered most of the misses, one per video:
+
+- The courtside profile never ran the overlapping side crops, so a small ball near a far hoop went unseen (outdoor 4v4: ball on 30-60% of frames). Every game profile now uses them. It costs time: two courtside clips went from 9 to 14 s and from 11 to 21 s on an M3 Pro (the second includes 2 s of tiled hoop search). Ball crops without the side-crop pose found one shot fewer and were no faster.
+- A tripod in a gym saw the neighbouring courts' hoops either side of its own, and the hoop with the most detector confidence won: a side court's, on all nine clips. With several steady hoops in view, a fixed camera now picks the one a confident ball drops onto from above or is lifted to from below. A faint still "ball", a ball rising away, or a nearer ball passing in front of a far hoop at ring height does not count. This rule does not run on the moving profile: there a zoom can split the hoop in play into two tracks, and on the broadcast sets it changed 6 clips for a small net loss (3 fewer correct make/miss calls on dev, 1 more on holdout 3, 1 more false shot on holdout 2).
+- The full-frame detector never boxed the outdoor gooseneck hoop or the small hoops at the edges of a 720p wall camera at its 0.5 cutoff. When six sampled full frames show no steady rim, a fixed camera now searches 2x tiles at 0.25. It keeps a hoop seen in the same place on 3 of the 6 samples, no taller than 0.63 of its width in pixels, and at least 0.15 of the median player's height wide. A light pole that the tiles also boxed fails both checks. The tiled hoops fill in frames whose full view shows no rim. On the 17 clips of those two videos they found the hoop on 13, with no false hoops.
+
+| fixed.csv (35 clips, 33 shots) | 2026-10-16 | 2026-10-23 |
+|---|---|---|
+| shots found (recall) | 52% (17/33) | 88% (29/33) |
+| predicted shots that are real | 77% (17/22) | 85% (29/34) |
+| make/miss called | 53% (9/17) | 59% (17/29) |
+| make/miss right when called | 89% (8/9) | 100% (17/17) |
+| shot type (five types) | 76% (13/17) | 79% (23/29) |
+
+These thresholds were chosen on these clips, so `fixed.csv` is now a dev set for fixed cameras, and the next fixed-camera labels should be held out. The broadcast sets score exactly as before, since each change is limited to fixed profiles. What is left is mostly the 720p wall camera (3 of 7). Its left hoop sits half outside the frame and is never found, and the ball is seen on only 16-48% of frames.
+
 **2026-10-15: tuning on the doubled dev set.** The 100 clips labeled on 2026-10-09 brought the dev set to 201 clips (283 shots, 40 games). On them the rules above did worse than on the first 101: recall 83% against 87%, precision 84% against 94%, and all 12 dev misses called made were there. Five branches were tuned against the 201 clips, one per weakness, each threshold swept and checked leave-one-game-out over the 40 games, and merged in this order: make/miss (below), rim-attempt touches and arc detection (which shots game mode finds), shot type (the same section), and the take-off and court following behind distances (`docs/court-calibration.md`). At the merges two tips found by the new fingertip reach were typed putbacks by the new put-down rule; that rule now needs the ball in the hands (below). Dev replay, 201 clips:
 
 | dev (201 clips) | at `9279252` | after |
