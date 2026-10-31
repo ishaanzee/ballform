@@ -11,6 +11,7 @@ import numpy as np
 from app.models import Detection, PoseFrame
 from app.basketball import (BasketballDetector, BALL_CLASSES, PLAYER_CLASSES, POSSESSION_CLASS, REFEREE_CLASS,
                             SHOT_EVENT_CLASSES)
+from app import pose as pose_settings
 from app.rim import rim_candidates
 
 # COCO-17 -> the MediaPipe indices used by the existing drawing/scoring code.
@@ -210,6 +211,10 @@ class CourtVision:
             self.ball_crop_overlap_frames += 1
         pose_regions = list(regions(width, height, self.tiled))
         crops = [frame[y1:y2, x1:x2] for x1, y1, x2, y2 in pose_regions]
+        # Below POSE_CONF a pose is kept only where a detector player box will vouch for it
+        # (players_only, broadcast footage): the shooter going up at the rim, airborne or half
+        # hidden behind a defender, is often 0.1-0.3. Without that check it needs POSE_CONF.
+        vouched = basketball_objects is not None and self.profile == "moving"
         pose_results = self._pose_passes(crops, gpu_busy=side_ball_future is not None)
         for index, (region, crop, pose_data) in enumerate(zip(pose_regions, crops, pose_results)):
             x1, y1, x2, y2 = region
@@ -218,6 +223,8 @@ class CourtVision:
                 for box, confidence, keypoints in zip(*pose_data):
                     if keypoints.shape != (17, 3):
                         raise ValueError("Game pose model must use COCO's 17 keypoints with confidence.")
+                    if confidence <= pose_settings.POSE_CONF and not vouched:
+                        continue
                     mapped = map_keypoints(keypoints, region, width, height)
                     normalized_box = ((box[0] + x1) / width, (box[1] + y1) / height,
                                       (box[2] + x1) / width, (box[3] + y1) / height)
@@ -324,21 +331,26 @@ def players_only(people: list[Person], objects) -> list[Person]:
     Each detector player/referee box vouches for at most one pose (highest
     IoU x confidence first), so a spectator or a duplicate pose overlapping a
     real player's box cannot borrow that player's box to pass the filter.
+    Poses the pose model is sure of (above POSE_CONF) claim boxes first; a
+    less certain pose only gets a box none of them took, so it can never push
+    a confident player out.
     """
     roles = [(cls, conf, box) for cls, conf, box in objects
              if (cls in PLAYER_CLASSES or cls == REFEREE_CLASS) and conf >= .4]
-    pairs = sorted(((iou(person.box, box) * conf, p, r) for p, person in enumerate(people)
-                    for r, (_, conf, box) in enumerate(roles)), reverse=True)
     used_people, used_roles, kept = set(), set(), set()
-    for score, p, r in pairs:
-        if score < .25:
-            break
-        if p in used_people or r in used_roles:
-            continue
-        used_people.add(p)
-        used_roles.add(r)
-        if roles[r][0] in PLAYER_CLASSES:
-            kept.add(p)
+    for confident in (True, False):
+        tier = [p for p, person in enumerate(people) if (person.confidence > pose_settings.POSE_CONF) == confident]
+        pairs = sorted(((iou(people[p].box, box) * conf, p, r) for p in tier
+                        for r, (_, conf, box) in enumerate(roles)), reverse=True)
+        for score, p, r in pairs:
+            if score < .25:
+                break
+            if p in used_people or r in used_roles:
+                continue
+            used_people.add(p)
+            used_roles.add(r)
+            if roles[r][0] in PLAYER_CLASSES:
+                kept.add(p)
     return [person for p, person in enumerate(people) if p in kept]
 
 

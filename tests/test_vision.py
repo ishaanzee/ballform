@@ -268,6 +268,55 @@ def test_each_detector_player_box_vouches_for_one_pose():
     assert players_only([spectator, player, other], objects) == [player, other]
 
 
+def test_a_less_certain_pose_cannot_take_a_confident_players_box():
+    # The tipper's confident pose fits his detector box a little worse than a 0.2 fragment does.
+    tipper = Person((.40, .28, .47, .70), .6, {})
+    fragment = Person((.40, .30, .46, .70), .2, {})
+    box = (4, .9, (.40, .30, .46, .70))
+    assert players_only([fragment, tipper], [box]) == [tipper]
+    # A box no confident pose claimed still vouches for the less certain one.
+    assert players_only([fragment, tipper], [box, (4, .9, (.40, .29, .46, .71))]) == [fragment, tipper]
+
+
+def test_low_confidence_pose_is_kept_only_where_a_detector_player_box_vouches_for_it(monkeypatch):
+    class BallDetector:
+        def detect(self, frame):
+            return []
+
+    class Pose:
+        parallel_sides = False
+
+        def __init__(self, confidence):
+            self.confidence = confidence
+
+        def infer(self, image, size, side=False):
+            if image.shape[:2] != (600, 1000):
+                return None  # side crops
+            points = np.zeros((1, 17, 3))
+            points[0, :, 2] = .9
+            points[0, 5], points[0, 6] = (220, 200, .9), (260, 200, .9)
+            points[0, 11], points[0, 12] = (220, 260, .9), (260, 260, .9)
+            return np.array([[200, 180, 280, 300]]), np.array([self.confidence]), points
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", BallDetector)
+    frame = np.zeros((600, 1000, 3), dtype=np.uint8)
+    ball = (1, .9, (.6, .6, .62, .62))
+
+    def kept(confidence, profile, objects):
+        vision = CourtVision(Pose(confidence), BallDetector(), "mps", profile)
+        try:
+            return len(vision.detect(frame, 0, 0.0, prefetched_objects=objects)[0])
+        finally:
+            vision.close()
+
+    # The shooter going up at the rim (pose confidence 0.2) is kept when his player box matches.
+    assert kept(.2, "moving", [(4, .9, (.2, .3, .28, .5)), ball]) == 1
+    assert kept(.2, "moving", [(4, .9, (.6, .3, .68, .5)), ball]) == 0
+    # A fixed camera has no player-box check, so it still needs a confident pose.
+    assert kept(.2, "courtside", [(4, .9, (.2, .3, .28, .5)), ball]) == 0
+    assert kept(.35, "courtside", [(4, .9, (.2, .3, .28, .5)), ball]) == 1
+
+
 def test_game_release_rejects_dribble_and_checks_left_hand():
     pose = small_pose(0)
     pose.landmarks['left_wrist'] = (.50, .43, .95)
