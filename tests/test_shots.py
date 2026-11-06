@@ -788,6 +788,9 @@ class FlatCourt:
     def to_court(self, frame, pixel):
         return float(pixel[0]), float(pixel[1])
 
+    def reliable(self, frame):
+        return None  # no take-off or landing spot: only the approach is measured
+
 
 def walking_shooter(speed_ft_s, distance_ft):
     """P1's feet for the second before a release at frame 30, coming at the basket at ``speed_ft_s``

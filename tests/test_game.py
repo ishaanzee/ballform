@@ -414,6 +414,11 @@ def test_set_shot_uses_the_release_frame_feet():
 
 
 def _rim_finish(shot_type="dunk", take_off=(0., 13.25), land=(0., 8.25), release=30):
+    return _jump_to(shot_type, take_off, land, release)[0].game
+
+
+def _jump_to(shot_type, take_off, land, release=30):
+    """A shooter planting at take_off, in the air over frames 15-36, landing at land; the shot measured."""
     from app.game import add_court_metrics
     court_map, court_to_image = _court_map(60)
     frames = []
@@ -429,7 +434,18 @@ def _rim_finish(shot_type="dunk", take_off=(0., 13.25), land=(0., 8.25), release
             "metrics": {}, "evidence": [], "limitations": []}
     shot = ShotResult(1, 0., 1., 1.5, "made", .9, [], {}, game=game, shot_type=shot_type)
     add_court_metrics([shot], frames, [], court_map)
-    return game
+    return shot, frames, court_map
+
+
+@pytest.mark.parametrize("land, expected", [
+    ((0., 8.25), "layup or dunk"),   # 34f5, 5365: layups typed floaters landed 1.5-4.7 ft out
+    ((0., 12.25), "floater"),         # floaters' shooters landed 6.1 ft out or more
+])
+def test_floater_whose_shooter_lands_under_the_rim_is_a_finish(land, expected):
+    from app.shots import type_by_distance
+    shot, frames, court_map = _jump_to("floater", (0., 13.25), land)
+    assert type_by_distance([shot], frames, court_map) == (expected != "floater")
+    assert shot.shot_type == expected
 
 
 def test_dunk_distance_is_where_the_path_passes_the_basket_not_the_take_off():
