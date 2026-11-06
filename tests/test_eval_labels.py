@@ -54,3 +54,16 @@ def test_a_game_has_one_spelling(name):
                 spellings[(ESPN_TO_NBA.get(away, away), ESPN_TO_NBA.get(home, home), date)].add(game)
     split = {key: sorted(names) for key, names in spellings.items() if len(names) > 1}
     assert not split, f"one game under several tags: {split}"
+
+
+def test_label_fixes_2026_11_06_hold():
+    # The three clips corrected from the frames on 2026-11-06 keep their rows and audit notes.
+    rows = clips("labels.csv")
+    got = {job: [(row.release_s, row.outcome, row.shot_type) for row in rows[job]]
+           for job in ("1f3b385091c9", "483cfc8b3060", "3f4df5367418")}
+    assert got["1f3b385091c9"] == [(7.97, "unclear", "layup")]
+    assert got["483cfc8b3060"] == [(2.55, "missed", "floater"), (3.78, "missed", "layup"), (4.95, "made", "layup")]
+    assert got["3f4df5367418"] == [(2.95, "missed", "jump shot"), (4.95, "made", "dunk")]
+    for job, release in [("1f3b385091c9", 7.97), ("483cfc8b3060", 3.78), ("483cfc8b3060", 4.95), ("3f4df5367418", 4.95)]:
+        (row,) = [row for row in rows[job] if row.release_s == release]
+        assert "Corrected 2026-11-06 from the frames: " in row.notes
