@@ -479,6 +479,16 @@ def test_finish_with_no_landing_seen_is_placed_at_the_rim_on_the_take_off_side()
     assert jump.game["metrics"]["shot_distance_ft"] > 7
 
 
+@pytest.mark.parametrize("spot", [(0., -4.), (30., 10.)])
+def test_spot_off_the_court_is_withheld(spot):
+    # 5f3e, 7ad6: feet hidden behind a defender mapped 34-36 ft out, beyond the sideline.
+    shot, _, _ = _jump_to("jump shot", spot, spot, release=22)
+    metrics = shot.game["metrics"]
+    assert metrics["shot_distance_ft"] is None and metrics["shot_zone"] is None
+    assert metrics["shooter_court_x_ft"] is None
+    assert "shot distance withheld" in shot.game["evidence"][0]
+
+
 def test_jump_shot_keeps_the_take_off_spot_and_mistyped_long_finishes_too():
     jump = _rim_finish("jump shot", release=22)
     assert jump["metrics"]["shot_distance_ft"] == pytest.approx(8., abs=.2)

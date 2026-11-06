@@ -729,8 +729,11 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
             on_half = _toward_rim(on_half, court.rim, FINISH_SPOT_FT)
         distance = math.dist(on_half, court.rim)
         shot_zone = zone(on_half, court)
-        metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
-                        "shooter_court_x_ft": round(on_half[0], 1), "shooter_court_y_ft": round(on_half[1], 1)})
+        # Nobody shoots from off the court: a spot there is a mis-mapped player (feet hidden or
+        # taken from another player), so no distance is given rather than a wrong one (5f3e, 7ad6).
+        if shot_zone is not None:
+            metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
+                            "shooter_court_x_ft": round(on_half[0], 1), "shooter_court_y_ft": round(on_half[1], 1)})
         if detail["jumped"]:
             where = (f"the shooter's feet ({detail['method']}) on the last grounded frame"
                      f"{'s' if len(detail['frames']) > 1 else ''} before take-off, "
@@ -748,9 +751,14 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
                      f"{take_off_ft:.1f} ft out ({where}); the landing was not seen, so the path past the basket "
                      "is unknown")
         margin = three_point_margin(on_half, court)
-        evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from {where}. "
-                        f"{court.dims['label']} {'zone ' + shot_zone.replace('_', ' ') if shot_zone else 'zone unavailable (off the calibrated half)'}"
-                        f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
+        if shot_zone is None:
+            evidence.append(f"Court: shot distance withheld: the shooter's spot ({distance:.1f} ft from the basket, "
+                            f"measured from {where}) is off the calibrated court, so the feet were not mapped "
+                            "correctly.")
+        else:
+            evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from "
+                            f"{where}. {court.dims['label']} zone {shot_zone.replace('_', ' ')}"
+                            f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
         extrapolated = court_map.calibration.extrapolation_ft(spot)
         if extrapolated > 2:
             evidence.append(f"Court: the shooter stood {extrapolated:.0f} ft outside the marked landmarks, so the "
