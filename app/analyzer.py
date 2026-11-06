@@ -30,6 +30,7 @@ from app.camera_motion import anchor_frame, build_court_map, court_json, draw_co
 from app.court import STANDARDS, fit as fit_court, parse_landmarks
 from app.court_detect import ClipCalibration
 from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
+from app.outcome_model import call_outcomes, clip_context
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
@@ -756,6 +757,11 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                                  for item in shot.evidence]
             shot.number = len(shots) + 1
             shots.append(shot)
+    outcome_features = None
+    if game_mode:
+        # Learned make/miss call where a rim was known at arrival (BALLFORM_OUTCOME_MODEL=0: rules only).
+        outcome_features = call_outcomes(shots, scoring_rim, normalized_flow, fps,
+                                         clip_context(width, height, observed_balls, player_frames))
     game_summary = None
     if mode == "one_on_one":
         # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
@@ -794,7 +800,8 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     return {"observed_balls": observed_balls, "handler_method": handler_method, "stitched": stitched,
             "detected_rims": detected_rims, "rim_stats": rim_stats, "scoring_rim": scoring_rim,
             "rim_source": rim_source, "shots": shots, "game_summary": game_summary, "court_map": court_map,
-            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds}
+            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds,
+            "outcome_features": outcome_features}
 
 
 def save_scoring_inputs(inputs: dict, path: Path) -> None:

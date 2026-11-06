@@ -560,4 +560,7 @@ def analyze_shots(
             cues=cues,
             outcome_frame=outcome_frame,
         ))
+        if rim_by_arrival(rim, apex_frame, fps):
+            from app.outcome_model import remember
+            remember(results[-1], apex_frame, segment, ordered)
     return results
