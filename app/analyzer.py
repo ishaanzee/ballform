@@ -29,7 +29,7 @@ from app.game import add_court_metrics, analyze_game_shots
 from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
 from app.court import STANDARDS, fit as fit_court, parse_landmarks
 from app.court_detect import ClipCalibration
-from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
+from app.scoring import RimInput, _rim_at, analyze_shots, bridge_rim_gaps, classify_view
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
@@ -728,7 +728,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
             # A fixed camera can see other courts' hoops; a moving one follows play to the
             # hoop in use, and there a zoom can split that hoop into two tracks.
             balls={b.frame: (b.x, b.y, b.confidence) for b in balls} if profile in COURT_PROFILES else None,
-            aspect=width / height)
+            aspect=width / height, follows_play=profile == "moving")
         # Net flow was measured around each frame's most confident rim; keep it
         # only where that was the hoop finally chosen.
         for frame_no_, box in flow_rims.items():
@@ -737,6 +737,9 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                 flows[frame_no_] = {"net": 0.0, "reference": 0.0}
     normalized_flow = _normalize_net_flow(flows)
     scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
+    # Where the detected rim switches from one hoop to the other it is not bridged, as at a cut.
+    switches = rim_stats.get("hoop_switches", []) if scoring_rim is detected_rims else []
+    scoring_rim = bridge_rim_gaps(scoring_rim, fps, [*cut_frames, *switches])
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):

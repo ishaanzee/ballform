@@ -113,6 +113,11 @@ FLOATER_MAX_FT = 16.
 # or farther; three layups and putbacks typed floaters took off 3.1-3.7 ft out
 # (2fd5, b868, d731), their high soft arcs read as floaters.
 RIM_FINISH_FT = 4.
+# A floater is let go short of the basket and its shooter lands short of it too; a
+# shooter landing closer than this to the point under the rim went up to the basket:
+# a finish. On the dev labels the layups typed floaters landed 1.5-4.7 ft out, every
+# floater 6.1 ft or more.
+FINISH_LANDING_FT = 5.
 # A floater is let go on the move toward the basket; a jump shooter stops first
 # (a pull-up, a turnaround, a catch and shoot). On the dev labels every jump shot
 # or floater taken off inside 20 ft whose shooter came at the basket at 10 ft/s
@@ -624,8 +629,9 @@ def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> fl
 
 def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> bool:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
-    ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
-    which say more than the detector classes or the flight time. Rim finishes are left
+    ``shot_distance_ft``, the take-off spot), the shooter's approach to the basket and,
+    for floaters, the landing spot, which say more than the detector classes or the
+    flight time. Rim finishes are left
     alone: their distance is where the path passes the basket, and changing them would
     change how that distance is measured.
 
@@ -657,7 +663,31 @@ def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), co
             shot.shot_type = "jump shot"
             shot.evidence.append(f"Jump shot: taken {distance:.1f} ft from the basket on the calibrated court, "
                                  f"farther out than a floater (up to {FLOATER_MAX_FT} ft)")
+    for shot in shots:
+        landing = landing_ft(shot, player_frames, court_map) if shot.shot_type == "floater" else None
+        if landing is not None and landing < FINISH_LANDING_FT:
+            shot.evidence.append(f"Layup or dunk: the shooter landed {landing:.1f} ft from the basket on the "
+                                 f"calibrated court; a floater's shooter lands short of it ({FINISH_LANDING_FT:.0f} ft "
+                                 "or more)")
+            shot.shot_type, rim_finishes = "layup or dunk", True
     return rim_finishes
+
+
+def landing_ft(shot: ShotResult, player_frames: list[dict], court_map) -> float | None:
+    """How far from the point under the rim the shooter landed after release, in feet,
+    or None without a calibrated court or a landing seen."""
+    from app.court import near_half
+    from app.game import LANDING_WINDOW_S, _grounded_position
+
+    game = shot.game or {}
+    shooter = (game.get("players") or {}).get("shooter_track_id")
+    near = next((f for f in player_frames if f["frame"] == game.get("release_frame")), None)
+    if court_map is None or shooter is None or near is None:
+        return None
+    found = _grounded_position(player_frames, shooter, near, court_map, after=LANDING_WINDOW_S)
+    if isinstance(found, str) or found[1]["landing"] is None:
+        return None
+    return math.dist(near_half(found[1]["landing"]["spot"], court_map.court), court_map.court.rim)
 
 
 def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_type: str,
@@ -982,7 +1012,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             evidence += [f"{shot_type.capitalize()}: let go away from the rim, reaching it "
                          f"{(event.frame - contact.frame) / fps:.2f} s later", *notes]
         else:
-            shot_type = "layup"
+            # Neither let go at the rim nor long enough in the air for an arc shot: a
+            # finish all the same, and a dunk looks like a layup in 2D.
+            shot_type = "layup or dunk"
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
                 evidence.append(f"Putback: {(contact.frame - previous_reach) / fps:.2f} s after the previous attempt "
                                 "reached the basket")

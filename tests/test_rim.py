@@ -44,6 +44,23 @@ def test_each_camera_segment_picks_its_own_hoop():
     assert stats["segments_with_rim"] == 2 and stats["other_hoop_tracks"] == 0
 
 
+@pytest.mark.parametrize("follows_play", [False, True])
+def test_camera_following_play_keeps_each_hoop_for_its_own_time(follows_play):
+    # 20a1, 6c6a: one continuous pan from end to end shows one hoop, then the other.
+    detections = {f: [rim(.5 - .004 * f)] for f in range(0, 100)}
+    detections.update({f: [] for f in range(100, 160)})
+    detections.update({f: [rim(.95 - .003 * (f - 160), conf=.8)] for f in range(160, 300)})
+    detections[130] = [rim(.6, y=.35, conf=.6)]  # a one-off false box while no hoop is in view
+    detections[50].append(rim(.8, y=.4, conf=.9))  # and one beside the hoop in view
+    rims, stats = track_detected_rims(detections, [], follows_play=follows_play)
+    # Without it the steadier, later hoop wins the whole segment.
+    assert (0 in rims, 200 in rims) == (follows_play, True)
+    assert 130 not in rims and rims.get(50, (.3,))[0] == pytest.approx(.3, abs=.002)
+    assert stats.get("hoops_by_time", 0) == follows_play
+    # The scorer does not bridge the rim from one hoop to the other.
+    assert stats["hoop_switches"] == ([160] if follows_play else [])
+
+
 def test_segments_without_a_steady_hoop_get_no_rim():
     detections = {f: [] for f in range(0, 20)}
     detections[5] = [rim(.4)]

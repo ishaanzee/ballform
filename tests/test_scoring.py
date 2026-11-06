@@ -317,3 +317,18 @@ def test_game_shot_needs_the_ball_to_rise_above_its_release(rise, found):
     })
     shots = analyze_shots(track, [shooter], fps, None, aspect_ratio=1., game_mode=True)
     assert len(shots) == found
+
+
+def test_rim_track_gaps_are_bridged_up_to_half_a_second_within_a_shot():
+    from app.scoring import _rim_at, bridge_rim_gaps
+    box = (.5, .2, .04, .02)
+    moved = (.54, .2, .04, .02)
+    # 0c86, b2fe: the hoop's detections drop for 0.3-0.5 s while ball and hands cover it.
+    rim = {0: box, 25: moved, 100: box, 120: box, 200: box}
+    assert _rim_at(rim, 12) is None
+    bridged = bridge_rim_gaps(rim, 60., cut_frames=[110])
+    assert bridged[12] == pytest.approx((.5 + .04 * 12 / 25, .2, .04, .02))
+    assert 60 not in bridged and _rim_at(bridged, 60) is None  # 75 frames: longer than 0.5 s at 60 fps
+    assert 115 not in bridged and _rim_at(bridged, 115) is None  # a cut falls in the gap
+    assert rim == {0: box, 25: moved, 100: box, 120: box, 200: box}  # the input is left alone
+    assert bridge_rim_gaps(box, 60.) == box and bridge_rim_gaps(None, 60.) is None
