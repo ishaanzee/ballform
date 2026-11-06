@@ -130,3 +130,22 @@ def test_shipped_model_reads_the_measured_features():
     remember(shot, 10, balls, balls)
     feats = call_outcomes([shot], RIM, {}, FPS, _clip(balls), model=model)[0]
     assert 0 <= model.p_made([feats])[0] <= 1
+
+
+def test_the_rules_keep_their_outcome_inputs_only_with_a_rim():
+    from app.scoring import analyze_shots
+    from app.shots import _shot
+
+    track = [Detection(f, f / 10, x, y, .9, .01) for f, (x, y) in enumerate(
+        [(.30, .70), (.35, .56), (.40, .40), (.46, .25), (.51, .18), (.53, .23), (.54, .32), (.55, .43), (.55, .55)])]
+    rim = (.48, .36, .14, .08)
+    shot = analyze_shots(track, [], 10, rim, {7: 3.0})[0]
+    assert shot.__dict__["_outcome_inputs"][0] == 4  # the apex
+    assert "_outcome_inputs" not in shot.to_dict() and json.dumps(shot.to_dict())
+    assert "_outcome_inputs" not in analyze_shots(track, [], 10, None)[0].__dict__
+    feats = call_outcomes([shot], rim, {7: 3.0}, 10, _clip(track), model=Constant(.5))[0]
+    assert feats["cross_inside"] == 1.
+    # the attempt finder's shots: kept when measured with a rim, not when it was unavailable
+    measured = _shot(track, 0, 1, 8, 10, ("made", .9, [], 7, (4, track[4:], track)), "jump shot", [], {})
+    unmeasured = _shot(track, 0, 1, 8, 10, ("unknown", 0., [], None, None), "jump shot", [], {})
+    assert "_outcome_inputs" in measured.__dict__ and "_outcome_inputs" not in unmeasured.__dict__
