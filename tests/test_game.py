@@ -417,12 +417,13 @@ def _rim_finish(shot_type="dunk", take_off=(0., 13.25), land=(0., 8.25), release
     return _jump_to(shot_type, take_off, land, release)[0].game
 
 
-def _jump_to(shot_type, take_off, land, release=30):
-    """A shooter planting at take_off, in the air over frames 15-36, landing at land; the shot measured."""
+def _jump_to(shot_type, take_off, land, release=30, tracked_to=60):
+    """A shooter planting at take_off, in the air over frames 15-36, landing at land; the shot measured.
+    The shooter is tracked up to frame tracked_to."""
     from app.game import add_court_metrics
     court_map, court_to_image = _court_map(60)
     frames = []
-    for frame in range(60):
+    for frame in range(tracked_to):
         # Plant at take_off, in the air over frames 15-36 drifting toward the rim, then down at land.
         share = min(1., max(0., (frame - 15) / 21))
         spot = tuple(np.asarray(take_off) + (np.asarray(land) - np.asarray(take_off)) * share)
@@ -461,6 +462,21 @@ def test_layup_passing_under_the_rim_is_measured_at_its_closest_point():
     # A reverse layup: take-off on one side, landing on the other.
     game = _rim_finish("layup or dunk", take_off=(-6., 9.25), land=(4., 4.25))
     assert game["metrics"]["shot_distance_ft"] < 1.5
+
+
+def test_finish_with_no_landing_seen_is_placed_at_the_rim_on_the_take_off_side():
+    # Lost from view in the air: the spot 8-9 ft out is only where the shooter went up from.
+    shot, _, _ = _jump_to("layup or dunk", (6., 10.55), (0., 8.25), tracked_to=32)
+    metrics, evidence = shot.game["metrics"], " ".join(shot.game["evidence"])
+    assert metrics["shot_distance_ft"] == pytest.approx(2., abs=.05)
+    assert metrics["shot_zone"] == "paint"
+    assert metrics["shooter_court_x_ft"] > 1  # on the take-off side
+    assert "the landing was not seen" in evidence
+    # With the landing seen it is where the path passes the basket; a jump shot keeps its take-off spot.
+    seen, _, _ = _jump_to("layup or dunk", (6., 10.55), (0., 8.25))
+    assert "passes closest to the basket" in " ".join(seen.game["evidence"])
+    jump, _, _ = _jump_to("jump shot", (6., 10.55), (0., 8.25), release=22, tracked_to=32)
+    assert jump.game["metrics"]["shot_distance_ft"] > 7
 
 
 def test_jump_shot_keeps_the_take_off_spot_and_mistyped_long_finishes_too():
