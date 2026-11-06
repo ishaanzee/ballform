@@ -93,7 +93,7 @@ def test_model_call_replaces_the_rules_where_the_rim_was_known():
     remember(shot, 10, balls, balls)
     call_outcomes([shot], RIM, {}, FPS, _clip(balls), model=Constant(.93))
     assert (shot.outcome, shot.outcome_confidence) == ("made", .93)
-    assert shot.outcome_frame is not None
+    assert 10 < shot.outcome_frame <= 25  # timed at the crossing
     assert "p(made) = 0.93" in shot.evidence[-1] and "rules called it unknown" in shot.evidence[-1]
     call_outcomes([shot], RIM, {}, FPS, _clip(balls), model=Constant(.5))
     assert (shot.outcome, shot.outcome_frame) == ("unknown", None)

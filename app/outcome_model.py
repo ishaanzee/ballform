@@ -225,9 +225,10 @@ def _sampled(clip: dict, start: float, end: float) -> list[int]:
 
 
 def rim_features(segment, apex_frame: int, rim, net_motion, fps: float, track, clip: dict,
-                 release_frame: int | None = None) -> tuple[dict, int | None]:
+                 release_frame: int | None = None) -> tuple[dict, dict]:
     """Measurements of one shot's way down to the rim (the inputs ``scoring.rim_outcome`` reads),
-    and the frame they centre on (the crossing, else the arrival at the rim, else None)."""
+    and the frame a make or a miss would be timed at: the crossing for a make and the arrival
+    at the rim for a miss, each the other when it was not seen, else None."""
     track = sorted(track or segment, key=lambda b: b.frame)
     width, height = clip["width"], clip["height"]
     descending = [b for b in segment if b.frame >= apex_frame]
@@ -315,7 +316,9 @@ def rim_features(segment, apex_frame: int, rim, net_motion, fps: float, track, c
     basket = [conf for frame, conf in clip["ball_in_basket"] if apex_frame - .3 * fps <= frame <= apex_frame + 1.5 * fps]
     f["bib_peak"] = max(basket, default=0.)
     f["bib_count"] = len(basket)
-    return {k: float(v) for k, v in f.items()}, anchor
+    made_at = crossed if crossed is not None else arrived
+    missed_at = arrived if arrived is not None else crossed
+    return {k: float(v) for k, v in f.items()}, {"made": made_at, "missed": missed_at}
 
 
 def clip_context(width: int, height: int, observed_balls, player_frames) -> dict:
@@ -327,9 +330,9 @@ def clip_context(width: int, height: int, observed_balls, player_frames) -> dict
                                for kind, conf, *_ in f.get("events", []) if kind == "ball_in_basket"]}
 
 
-def outcome_features(shots, rim, net_motion, fps: float, clip: dict) -> list[tuple[dict, int | None] | None]:
-    """(features, anchor frame) per shot whose outcome the rules measured with a rim known
-    at arrival, else None. Read before any call is changed, so training (model off) and
+def outcome_features(shots, rim, net_motion, fps: float, clip: dict) -> list[tuple[dict, dict] | None]:
+    """(features, frames a make or a miss is timed at) per shot whose outcome the rules
+    measured with a rim known at arrival, else None. Read before any call is changed, so training (model off) and
     serving see the same values."""
     ordered = sorted(range(len(shots)), key=lambda i: shots[i].release_s)
     following = {i: (ordered[k + 1] if k + 1 < len(ordered) else None) for k, i in enumerate(ordered)}
@@ -341,14 +344,14 @@ def outcome_features(shots, rim, net_motion, fps: float, clip: dict) -> list[tup
             continue
         apex_frame, segment, track = inputs
         release = round(shot.release_s * fps)
-        feats, anchor = rim_features(segment, apex_frame, rim, net_motion, fps, track, clip, release)
-        anchor = anchor if anchor is not None else apex_frame
+        feats, frames = rim_features(segment, apex_frame, rim, net_motion, fps, track, clip, release)
+        frames = {call: apex_frame if frame is None else frame for call, frame in frames.items()}
         nxt = following[i]
         feats["next_gap_s"] = min(shots[nxt].release_s - shot.release_s, 10.) if nxt is not None else 10.
         feats["next_made"] = float(nxt is not None and shots[nxt].outcome in MADE)
         feats["is_rim_path"] = float((shot.attempt or {}).get("path") in {"rim_attempt", "layup_dunk_class"})
         feats["is_rim_type"] = float(shot.shot_type in RIM_TYPES)
-        out.append((feats, anchor))
+        out.append((feats, frames))
     return out
 
 
@@ -363,14 +366,15 @@ def call_outcomes(shots, rim, net_motion, fps: float, clip: dict | None,
         model = load_model()
     todo = [(shot, m) for shot, m in zip(shots, measured) if m is not None]
     if model is not None and todo:
-        for (shot, (feats, anchor)), p in zip(todo, model.p_made([m[0] for _, m in todo])):
+        for (shot, (feats, frames)), p in zip(todo, model.p_made([m[0] for _, m in todo])):
             p, call = float(p), model.call(float(p))
             shot.evidence.append(f"Learned outcome model: p(made) = {p:.2f} (made at {model.t_hi:.2f} or more, missed "
                                  f"at {model.t_lo:.2f} or less); the rules called it {shot.outcome}")
+            rules = "made" if shot.outcome in MADE else shot.outcome
             if call == "unknown":
                 shot.outcome_frame = None
-            elif shot.outcome_frame is None:
-                shot.outcome_frame = anchor
+            elif call != rules or shot.outcome_frame is None:
+                shot.outcome_frame = frames[call]
             shot.outcome = call
             shot.outcome_confidence = round(p if call == "made" else 1 - p if call == "missed" else 0., 2)
     return [m[0] if m is not None else None for m in measured]
