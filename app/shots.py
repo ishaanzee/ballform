@@ -965,6 +965,18 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             bounced = any(b.y > contact.ball.y + .5 * contact.torso for b in path)
             if rise < .5 * contact.torso or bounced:
                 continue
+            # As for an arc, the rise must be seen (ARC_RISE_RADII), not drawn from a net or
+            # a hand read as the ball at the rim while the ball is dribbled or held far out
+            # (bc0a, 8452, f9db). On the dev labels this dropped 9 false shots and one
+            # match that was 0.6 s late (0ab3); the result held from 0.5 to 3 radii.
+            if _seen_rising(balls, contact.frame, event.frame, fps) < ARC_RISE_RADII:
+                continue
+            # With the rim in view, a ball let go away from it is seen entering its area. A
+            # ball-in-basket detection alone is then often an empty net, boxed as the ball
+            # too, while the ball is held out (62f8, 667b, fd34). On the dev labels: 3 false
+            # shots dropped, one match lost (5adf, a detection on the net mid-flight).
+            if event.sources == ["ball_in_basket"] and _rim_at(rim, event.frame) is not None:
+                continue
         # A dunk or a layup carried up enters the rim's area still in the
         # hands; the release is the end of that hold.
         for later in contacts:
