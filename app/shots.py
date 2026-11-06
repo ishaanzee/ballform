@@ -629,8 +629,9 @@ def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> fl
 
 def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> bool:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
-    ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
-    which say more than the detector classes or the flight time. Rim finishes are left
+    ``shot_distance_ft``, the take-off spot), the shooter's approach to the basket and,
+    for floaters, the landing spot, which say more than the detector classes or the
+    flight time. Rim finishes are left
     alone: their distance is where the path passes the basket, and changing them would
     change how that distance is measured.
 
