@@ -863,3 +863,19 @@ def test_a_shot_seen_never_reaching_a_basket_is_dropped_only_on_a_following_came
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
     shot, = find_attempts([], balls, frames, FPS, None, 1., following=False)
     assert shot.shot_type == "jump shot"
+
+
+@pytest.mark.parametrize("lost, found", [(True, False), (False, True)])
+def test_rim_attempt_from_away_needs_its_rise_seen(lost, found):
+    # bc0a, 8452: the ball held far out is lost and the net is read as the ball at
+    # the basket; the old rise test passed on that jump, but nobody saw the ball go up.
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.5, .12), (f - 10) / 10) for f in range(11, 20) if not lost})
+    path.update({f: (.5, .12) for f in range(20, 23)})
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=30)
+    shots = find_attempts([], balls, frames, FPS, None, 1.)
+    assert len(shots) == int(found)
+    if found:
+        assert shots[0].attempt["path"] == "rim_attempt" and shots[0].attempt["contact_frame"] == 10

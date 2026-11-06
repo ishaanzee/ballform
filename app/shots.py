@@ -930,6 +930,12 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             bounced = any(b.y > contact.ball.y + .5 * contact.torso for b in path)
             if rise < .5 * contact.torso or bounced:
                 continue
+            # As for an arc, the rise must be seen (ARC_RISE_RADII), not drawn from a net or
+            # a hand read as the ball at the rim while the ball is dribbled or held far out
+            # (bc0a, 8452, f9db). On the dev labels this dropped 9 false shots and one
+            # match that was 0.6 s late (0ab3); the result held from 0.5 to 3 radii.
+            if _seen_rising(balls, contact.frame, event.frame, fps) < ARC_RISE_RADII:
+                continue
         # A dunk or a layup carried up enters the rim's area still in the
         # hands; the release is the end of that hold.
         for later in contacts:
