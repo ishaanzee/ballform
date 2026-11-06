@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ["BALLFORM_OUTCOME_MODEL"] = "0"  # measure the rules' shots, never a previous model's calls
+os.environ["BALLFORM_SHOT_VERIFIER"] = "0"  # and every shot they find
 for _name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_name, "1")
 

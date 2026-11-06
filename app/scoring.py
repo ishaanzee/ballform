@@ -486,6 +486,8 @@ def analyze_shots(
         raise ValueError("handedness must be left or right")
     if len(ball) < 4:
         return []
+    from app.outcome_model import remember  # imports this module
+
     ordered = sorted(ball, key=lambda b: b.frame)
     frames = [b.frame for b in ordered]
     max_gap = max(2, round(fps * .35))
@@ -541,7 +543,8 @@ def analyze_shots(
             if release_contact else
             "Release contact unavailable: timestamp uses the start of the visible arc and may precede or follow actual release"
         )
-        if rim_by_arrival(rim, apex_frame, fps):
+        measured = rim_by_arrival(rim, apex_frame, fps)
+        if measured:
             outcome, confidence, rim_evidence, outcome_frame = rim_outcome(
                 segment, apex_frame, rim, net_motion, fps, ordered)
             evidence += rim_evidence
@@ -560,7 +563,6 @@ def analyze_shots(
             cues=cues,
             outcome_frame=outcome_frame,
         ))
-        if rim_by_arrival(rim, apex_frame, fps):
-            from app.outcome_model import remember
+        if measured:
             remember(results[-1], apex_frame, segment, ordered)
     return results
