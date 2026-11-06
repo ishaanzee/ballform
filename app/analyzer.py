@@ -33,8 +33,9 @@ from app.scoring import RimInput, _rim_at, analyze_shots, bridge_rim_gaps, class
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
-from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
+from app.vision import COURT_PROFILES, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
+from app.ball_select import CandidateCourtVision, StaticBallFilter, enabled as static_ball_filter_enabled
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 from app.possession import decode_handlers
 from app.trajectory import floor_trajectories, trajectories_json
@@ -865,7 +866,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                 raise
             pipeline_fallback = f"Prefetch detector initialization failed: {type(exc).__name__}: {exc}"
             pipeline_depth = 1
-    court_vision = CourtVision(game_pose_model, ball_model, device, profile, court) if game_mode else None
+    static_ball_filter = static_ball_filter_enabled() and game_mode
+    court_vision = CandidateCourtVision(game_pose_model, ball_model, device, profile, court,
+                                        static_filter=StaticBallFilter() if static_ball_filter else None
+                                        ) if game_mode else None
     capture = cv2.VideoCapture(str(input_path))
     if not capture.isOpened():
         raise ValueError("OpenCV could not decode this video. Try exporting it as H.264 MP4.")
@@ -903,6 +907,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     balls: list[Detection] = []
     poses: list[PoseFrame] = []
     player_frames: list[dict] = []
+    # Every ball candidate per analyzed frame (app/ball_select.py), so a replay can choose again.
+    ball_candidates: dict[int, list[tuple[float, float, float, float, int]]] = {}
     flows: dict[int, dict[str, float]] = {}
     flow_rims: dict[int, tuple[float, float, float, float] | None] = {}
     previous_ball: Detection | None = None
@@ -973,6 +979,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                     handler_tracker.reset()
                 previous_ball = None
                 prior_ball = None
+                if court_vision and court_vision.static_filter:
+                    court_vision.static_filter.reset()
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
             if auto_rim and court_vision and (court_vision.rims or fallback_rims):
                 frame_rim = xywh(max(court_vision.rims or fallback_rims)[1])
@@ -980,8 +988,13 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             players = []
             landmark_maps = []
             if court_vision:
+                hoops = [box for _, box in fallback_rims]
+                if frame_rim:
+                    hoops.append((frame_rim[0], frame_rim[1], frame_rim[0] + frame_rim[2], frame_rim[1] + frame_rim[3]))
                 players, landmark_maps, ball = court_vision.detect(
-                    frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects=prefetched_objects)
+                    frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects=prefetched_objects,
+                    rims=hoops)
+                ball_candidates[frame_no] = court_vision.ball_candidates
                 raw_people_counts.append(court_vision.raw_people)
                 for pose in players:
                     pose.appearance = jersey_descriptor(frame, pose)
@@ -1026,7 +1039,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
               "profile": profile, "rim": rim, "rim_marked": rim_marked, "auto_rim": auto_rim,
               "tracked_rims": tracked_rims, "cut_frames": cut_frames, "balls": balls, "poses": poses,
               "player_frames": player_frames, "flows": flows, "flow_rims": flow_rims,
-              "calibration": calibration, "court_landmarks": court_landmarks, "game_mode": game_mode}
+              "calibration": calibration, "court_landmarks": court_landmarks, "game_mode": game_mode,
+              # Optional: runs saved before 2026-11-06 lack it, and scoring does not read it.
+              "ball_candidates": ball_candidates}
     if os.environ.get("BALLFORM_SAVE_SCORING_INPUTS"):
         # Saved before scoring mutates identities, so a replay starts from the same state.
         save_scoring_inputs(inputs, output_dir / SCORING_INPUTS)
@@ -1101,6 +1116,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "pose_calls_on_torch_fallback": (getattr(court_vision.pose_model, "fallback_calls", 0)
                                                     - pose_fallback_calls_before) if court_vision else None,
                    "frame_pipeline_depth": pipeline_depth,
+                   "static_ball_filter": {"enabled": static_ball_filter,
+                                          "forced_side_crop_frames": court_vision.forced_side_crop_frames,
+                                          "changed_choice_frames": court_vision.static_choice_frames}
+                   if court_vision else None,
                    "frame_pipeline_requested": pipeline_request,
                    "frame_pipeline_fallback": pipeline_fallback,
                    "prefetch_ball_backend": prefetch_detector.backend if prefetch_detector else None,
