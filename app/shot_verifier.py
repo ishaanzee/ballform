@@ -5,8 +5,9 @@ shot the rules found, from what was seen around its release: how it was found, t
 detector's classes, hand contacts, ball and rim visibility, the neighbouring shots and the
 rim measurements. Shots under the model's threshold are dropped; nothing is ever added.
 Trained on broadcast clips, it is applied to a camera following play only.
-Trained by scripts/train_shot_verifier.py on the dev labels; set BALLFORM_SHOT_VERIFIER=0
-to turn it off.
+Trained by scripts/train_shot_verifier.py on the dev labels. Off by default: once the
+false-shot rules of 2026-11-06 were in, it dropped no shot held out (leave-one-game-out
+AUC 0.76). Set BALLFORM_SHOT_VERIFIER=1 to turn it on; retrain it when there are more labels.
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ FEATURES = (
 
 
 def enabled() -> bool:
-    return os.environ.get("BALLFORM_SHOT_VERIFIER", "1") != "0"
+    return os.environ.get("BALLFORM_SHOT_VERIFIER", "0") == "1"
 
 
 class Verifier:

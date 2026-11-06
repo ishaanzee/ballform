@@ -775,7 +775,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                                           cut_frames, [m[0] if m else None for m in measured])
         # Learned make/miss call where a rim was known at arrival (BALLFORM_OUTCOME_MODEL=0: rules only).
         outcome_features = call_outcomes(shots, scoring_rim, normalized_flow, fps, None, measured=measured)
-        # Learned check of each shot; drops the unlikely ones (BALLFORM_SHOT_VERIFIER=0: keep all).
+        # Learned check of each shot, off unless BALLFORM_SHOT_VERIFIER=1: drops the unlikely ones.
         kept = kept_shots(shots, verifier_features, profile)
         shots = [shots[i] for i in kept]
         outcome_features = [outcome_features[i] for i in kept]

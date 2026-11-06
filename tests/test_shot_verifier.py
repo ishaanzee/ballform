@@ -50,6 +50,12 @@ def test_env_switch_turns_the_verifier_off(monkeypatch, switch, kept):
     assert kept_shots(_shots(), [{}] * 3, "moving") == kept
 
 
+def test_verifier_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("BALLFORM_SHOT_VERIFIER", raising=False)
+    monkeypatch.setattr(shot_verifier, "load_model", lambda *a: Constant([.9, .1, .8]))
+    assert kept_shots(_shots(), [{}] * 3, "moving") == [0, 1, 2]
+
+
 def test_verifier_round_trips(tmp_path):
     rng = np.random.default_rng(0)
     X = rng.normal(size=(80, len(FEATURES)))
