@@ -204,14 +204,14 @@ def _confidence(track: list[tuple[int, float, RimBox]]) -> float:
 
 
 def _static_hoop(dominant: list[tuple[int, float, RimBox]], tracks: list[list[tuple[int, float, RimBox]]],
-                 balls: dict[int, tuple[float, float, float]] | None, span: list[int], aspect: float,
-                 min_frames: int, step: int) -> RimBox | None:
+                 visits: dict[int, int], aspect: float, min_frames: int, step: int) -> RimBox | None:
     """Median box of a fixed camera's hoop of play, or None when it was not seen steadily.
 
     Tracks within a rim width of the chosen one are the same hoop, split where it went
     unseen for longer than the linking gap. With other steady hoops in view the chosen
-    one must be where the ball goes and no other may be: play moving between hoops,
-    or no ball evidence for any, leaves the rim to the per-frame track.
+    one must be where the ball goes and no other may be (``visits``: ball visits by
+    id(track)): play moving between hoops, or no ball evidence for any, leaves the rim
+    to the per-frame track.
     """
     def centre(box):
         return box[0] + box[2] / 2, (box[1] + box[3] / 2) / aspect  # in frame-width units
@@ -220,8 +220,8 @@ def _static_hoop(dominant: list[tuple[int, float, RimBox]], tracks: list[list[tu
     same, rivals = [], []
     for track in tracks:
         box = np.median(np.asarray([b for _, _, b in track]), axis=0)
-        width = max(box[2], chosen[2])
-        if math.dist(centre(box), centre(chosen)) <= width and .6 <= box[2] / chosen[2] <= 1 / .6:
+        width = max(box[2], chosen[2], 1e-9)
+        if math.dist(centre(box), centre(chosen)) <= width and min(box[2], chosen[2]) / width >= .6:
             same.append(track)
         elif len(track) >= 3:
             rivals.append(track)
@@ -229,13 +229,13 @@ def _static_hoop(dominant: list[tuple[int, float, RimBox]], tracks: list[list[tu
     if len(boxes) * step < min_frames:
         return None
     median = np.median(boxes, axis=0)
-    drift = [math.dist(centre(box), centre(median)) / median[2] for box in boxes]
-    size = np.abs(boxes[:, 2] / median[2] - 1)
+    width = max(median[2], 1e-9)
+    drift = [math.dist(centre(box), centre(median)) / width for box in boxes]
+    size = np.abs(boxes[:, 2] / width - 1)
     if np.percentile(drift, 90) > STATIC_HOOP_SPREAD or np.percentile(size, 90) > STATIC_HOOP_SPREAD:
         return None
-    if rivals and (not balls or _ball_visits(dominant, balls, span, aspect) < BALL_VISITS_TO_PICK_HOOP
-                   or any(_ball_visits(track, balls, span, aspect) >= BALL_VISITS_TO_PICK_HOOP
-                          for track in rivals)):
+    if rivals and (visits.get(id(dominant), 0) < BALL_VISITS_TO_PICK_HOOP
+                   or any(visits.get(id(track), 0) >= BALL_VISITS_TO_PICK_HOOP for track in rivals)):
         return None
     return tuple(float(v) for v in median)
 
@@ -307,8 +307,9 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
             continue
         dominant = max(tracks, key=_confidence)
         steady = [track for track in tracks if len(track) >= 3]
-        span = [f for f in balls if start <= f < end] if balls else []
+        visits: dict[int, int] = {}
         if balls and len(steady) > 1:
+            span = [f for f in balls if start <= f < end]
             visits = {id(track): _ball_visits(track, balls, span, aspect) for track in steady}
             if max(visits.values()) >= BALL_VISITS_TO_PICK_HOOP:
                 dominant = max(steady, key=lambda track: (visits[id(track)], _confidence(track)))
@@ -329,7 +330,7 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
             coefficients = np.polyfit(t, boxes[lo:hi], 1)
             rims[frame] = tuple(float(v) for v in coefficients[1])
         if static_hoop_frames:
-            hoop = _static_hoop(dominant, tracks, balls, span, aspect, static_hoop_frames, step)
+            hoop = _static_hoop(dominant, tracks, visits, aspect, static_hoop_frames, step)
             if hoop is not None:
                 stats["static_hoop_frames"] += sum(frame not in rims for frame in segment)
                 for frame in segment:  # re-inserted so the boxes stay in frame order

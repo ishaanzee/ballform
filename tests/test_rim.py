@@ -235,3 +235,28 @@ def test_static_fill_stays_inside_its_camera_segment():
     detections = {f: [rim(.4)] if f < 30 else [] for f in range(60)}
     rims, _ = track_detected_rims(detections, [45], static_hoop_frames=25)
     assert sorted(rims) == list(range(45))
+
+
+def test_only_fixed_camera_profiles_fill_a_static_hoop(monkeypatch, tmp_path):
+    import app.analyzer as analyzer
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    def capture(*_args, **kwargs):
+        seen[profile] = kwargs.get("static_hoop_frames")
+        raise Stop
+
+    monkeypatch.setattr(analyzer, "track_detected_rims", capture)
+    for profile in ("moving", "elevated", "courtside"):
+        inputs = {"fps": 25.0, "width": 1920, "height": 1080, "total": 50, "frame_no": 49,
+                  "analyzed_fps": 25.0, "stride": 1, "mode": "game", "handedness": "right",
+                  "profile": profile, "game_mode": False, "rim": None, "rim_marked": False,
+                  "auto_rim": True, "tracked_rims": {}, "cut_frames": [], "balls": [], "poses": [],
+                  "player_frames": [{"frame": 0, "rims": []}], "flows": {}, "flow_rims": {},
+                  "calibration": None, "court_landmarks": None}
+        with pytest.raises(Stop):
+            analyzer.score_clip(inputs, None, tmp_path / "input.mp4")
+    assert seen == {"moving": None, "elevated": 25, "courtside": 25}
