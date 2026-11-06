@@ -187,6 +187,24 @@ def test_fixed_camera_hoop_fills_the_frames_before_it_was_first_detected():
     assert sorted(unfilled) == list(range(30, 60))
 
 
+def test_static_fill_keeps_the_tracked_boxes_where_the_track_had_one():
+    # a451: the fill only covers frames with no box; detected frames keep their own.
+    rng = np.random.default_rng(1)
+    detections = {f: [rim(.485 + rng.normal(0, .001), w=.03, h=.017)] if f >= 30 else [] for f in range(60)}
+    rims, _ = track_detected_rims(detections, [], static_hoop_frames=25)
+    unfilled, _ = track_detected_rims(detections, [])
+    assert all(rims[f] == unfilled[f] for f in range(30, 60))
+    median_x = np.median([detections[f][0][1][0] for f in range(30, 60)])
+    assert all(rims[f][0] == pytest.approx(median_x) for f in range(30))
+
+
+def test_a_hoop_boxed_twice_per_frame_counts_its_frames_once():
+    # Two boxes a little apart on each of 15 frames are 15 frames seen, short of 25.
+    detections = {f: [rim(.4, h=.01), rim(.4, y=.308, h=.01, conf=.8)] if f < 15 else [] for f in range(60)}
+    rims, stats = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert sorted(rims) == list(range(15)) and stats["static_hoop_frames"] == 0
+
+
 def test_split_hoop_of_play_beside_neighbouring_hoops_is_filled():
     # d063: the centre hoop goes unseen for 40 frames, so its track splits; the ball
     # drops onto it, and the two neighbouring courts' hoops get no ball.

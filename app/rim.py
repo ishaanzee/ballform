@@ -226,7 +226,8 @@ def _static_hoop(dominant: list[tuple[int, float, RimBox]], tracks: list[list[tu
         elif len(track) >= 3:
             rivals.append(track)
     boxes = np.asarray([box for track in same for _, _, box in track])
-    if len(boxes) * step < min_frames:
+    # Frames, not boxes: a hoop boxed twice on a frame (two fragments) counts once.
+    if len({frame for track in same for frame, _, _ in track}) * step < min_frames:
         return None
     median = np.median(boxes, axis=0)
     width = max(median[2], 1e-9)

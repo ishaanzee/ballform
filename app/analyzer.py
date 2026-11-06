@@ -1128,9 +1128,11 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                                                    for f in player_frames),
                         "rim_marked": rim_marked,
                         "rim_source": rim_source,
-                        "rim_detected_frames": len(detected_rims) if auto_rim else (1 if rim_source == "detected" else 0),
+                        "rim_detected_frames": (len(detected_rims) - rim_stats.get("static_hoop_frames", 0) if auto_rim
+                                                else 1 if rim_source == "detected" else 0),
                         "rim_other_hoop_tracks": rim_stats.get("other_hoop_tracks"),
-                        # Frames given a fixed camera's static hoop box (included in rim_detected_frames).
+                        # Frames given a fixed camera's static hoop box where its track had none
+                        # (not counted in rim_detected_frames, which keeps its old meaning).
                         "rim_static_hoop_frames": rim_stats.get("static_hoop_frames"),
                         "rim_detection_error": rim_detection_error,
                         "rim_tile_search": rim_tile_search,
