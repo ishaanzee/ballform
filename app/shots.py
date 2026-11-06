@@ -974,7 +974,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             # With the rim in view, a ball let go away from it is seen entering its area. A
             # ball-in-basket detection alone is then often an empty net, boxed as the ball
             # too, while the ball is held out (62f8, 667b, fd34). On the dev labels: 3 false
-            # shots dropped, one match lost (5adf, a detection on the net mid-flight).
+            # shots dropped (and f018 on fixed.csv), one match lost (5adf: the net fired
+            # mid-flight and the ball entered the rim's area 1.36 s after the last contact, past
+            # CONTACT_TO_BASKET_S).
             if event.sources == ["ball_in_basket"] and _rim_at(rim, event.frame) is not None:
                 continue
         # A dunk or a layup carried up enters the rim's area still in the
