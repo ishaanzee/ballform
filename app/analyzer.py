@@ -737,7 +737,9 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                 flows[frame_no_] = {"net": 0.0, "reference": 0.0}
     normalized_flow = _normalize_net_flow(flows)
     scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
-    scoring_rim = bridge_rim_gaps(scoring_rim, fps, cut_frames)
+    # Where the detected rim switches from one hoop to the other it is not bridged, as at a cut.
+    switches = rim_stats.get("hoop_switches", []) if scoring_rim is detected_rims else []
+    scoring_rim = bridge_rim_gaps(scoring_rim, fps, [*cut_frames, *switches])
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):

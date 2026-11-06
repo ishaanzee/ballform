@@ -285,6 +285,9 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
         stats["segments_with_rim"] += 1
         stats["other_hoop_tracks"] += len(tracks) - len(chosen)
         stats["hoops_by_time"] = stats.get("hoops_by_time", 0) + len(chosen) - 1
+        # Frames where one hoop takes over from another.
+        firsts = sorted(hoop[0][0] for hoop in chosen)
+        stats["hoop_switches"] = [*stats.get("hoop_switches", []), *firsts[1:]]
         for hoop in chosen:
             boxes = np.asarray([box for _, _, box in hoop])
             times = np.asarray([frame for frame, _, _ in hoop], dtype=float)

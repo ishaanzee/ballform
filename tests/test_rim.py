@@ -57,6 +57,8 @@ def test_camera_following_play_keeps_each_hoop_for_its_own_time(follows_play):
     assert (0 in rims, 200 in rims) == (follows_play, True)
     assert 130 not in rims and rims.get(50, (.3,))[0] == pytest.approx(.3, abs=.002)
     assert stats.get("hoops_by_time", 0) == follows_play
+    # The scorer does not bridge the rim from one hoop to the other.
+    assert stats["hoop_switches"] == ([160] if follows_play else [])
 
 
 def test_segments_without_a_steady_hoop_get_no_rim():
