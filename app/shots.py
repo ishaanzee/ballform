@@ -764,32 +764,6 @@ def rattles_not_called(anchors: list[Anchor], balls: list[Detection], rim: RimIn
         shot.outcome, shot.outcome_confidence, shot.outcome_frame = "unknown", 0., None
 
 
-def after_makes(anchors: list[Anchor], baskets: list[int], fps: float) -> list[Anchor]:
-    """The attempts a make does not rule out, by release; ``baskets`` are crossings taken off
-    the shots they were credited to (held_before_make)."""
-    kept: list[Anchor] = []
-    for anchor in sorted(anchors, key=lambda a: a.release):
-        shot = anchor.shot
-        # One crossing is one basket: an attempt credited with a make an earlier one already
-        # took is dropped. The extra was a hand by the ball going in (1561, d9a1) or a contest
-        # just before the shot, whose release then stands for it (6e6e). On the dev labels:
-        # 3 false shots dropped, no match lost.
-        if (shot.outcome in {"made", "likely made"} and shot.outcome_frame is not None
-                and any(k.shot.outcome in {"made", "likely made"} and k.shot.outcome_frame == shot.outcome_frame
-                        for k in kept)):
-            continue
-        # A make ends the possession: the ball drops through the net and has to be
-        # inbounded, so a "release" right after it is a hand on the falling ball.
-        # That holds for a basket taken off the shot before it, too, except for the
-        # attempt that scored it (a dunk still in the hands as it went through).
-        made_at = [frame for frame in baskets if frame != shot.outcome_frame] + [
-            made.shot.outcome_frame for made in kept if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
-        if any(0 <= anchor.release - frame <= DEAD_BALL_S * fps for frame in made_at):
-            continue
-        kept.append(anchor)
-    return kept
-
-
 def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[dict], fps: float,
                   rim: RimInput, aspect: float, net_motion=None, following: bool = True) -> list[ShotResult]:
     """Type the arc shots and add the attempts they miss, sorted by release (one camera segment)."""
@@ -1105,7 +1079,17 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
 
     baskets = held_before_make(anchors, contacts)
     rattles_not_called(anchors, balls, rim, fps)
-    kept = after_makes(anchors, baskets, fps)
+    kept = []
+    for anchor in sorted(anchors, key=lambda a: a.release):
+        # A make ends the possession: the ball drops through the net and has to be
+        # inbounded, so a "release" right after it is a hand on the falling ball.
+        # That holds for a basket taken off the shot before it, too, except for the
+        # attempt that scored it (a dunk still in the hands as it went through).
+        made_at = [frame for frame in baskets if frame != anchor.shot.outcome_frame] + [
+            made.shot.outcome_frame for made in kept if made.shot.outcome == "made" and made.shot.outcome_frame is not None]
+        if any(0 <= anchor.release - frame <= DEAD_BALL_S * fps for frame in made_at):
+            continue
+        kept.append(anchor)
     missed_before_follow_up(kept, fps)
     ordered = sorted((a.shot for a in kept), key=lambda s: s.release_s)
     for number, shot in enumerate(ordered, 1):

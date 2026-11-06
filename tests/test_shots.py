@@ -894,16 +894,3 @@ def test_lone_basket_detection_for_a_ball_let_go_away_from_the_rim_needs_no_rim_
     balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=30)
     shots = find_attempts([], balls, frames, FPS, rim, 1.)
     assert len(shots) == int(found)
-
-
-@pytest.mark.parametrize("first, crossing, kept", [
-    ("made", 30, 1),         # 1561, d9a1: a hand by the ball going in took the same make again
-    ("likely made", 30, 1),
-    ("made", 40, 2),         # another crossing is another basket
-    ("missed", 30, 2),
-])
-def test_one_crossing_is_credited_to_one_attempt(first, crossing, kept):
-    from app.shots import after_makes
-    # The later release comes before the crossing, so the dead-ball rule lets it through.
-    early, late = attempt(10, 20, first, 30), attempt(26, 32, "made", crossing)
-    assert after_makes([late, early], [], FPS) == [early, late][:kept]
