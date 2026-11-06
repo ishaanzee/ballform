@@ -728,7 +728,10 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
             # A fixed camera can see other courts' hoops; a moving one follows play to the
             # hoop in use, and there a zoom can split that hoop into two tracks.
             balls={b.frame: (b.x, b.y, b.confidence) for b in balls} if profile in COURT_PROFILES else None,
-            aspect=width / height)
+            aspect=width / height,
+            # A fixed camera's hoop does not move: once seen steadily for a second it
+            # stands in on the frames where it was hidden or its track split.
+            static_hoop_frames=round(fps) if profile in COURT_PROFILES else None)
         # Net flow was measured around each frame's most confident rim; keep it
         # only where that was the hoop finally chosen.
         for frame_no_, box in flow_rims.items():
@@ -1127,6 +1130,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                         "rim_source": rim_source,
                         "rim_detected_frames": len(detected_rims) if auto_rim else (1 if rim_source == "detected" else 0),
                         "rim_other_hoop_tracks": rim_stats.get("other_hoop_tracks"),
+                        # Frames given a fixed camera's static hoop box (included in rim_detected_frames).
+                        "rim_static_hoop_frames": rim_stats.get("static_hoop_frames"),
                         "rim_detection_error": rim_detection_error,
                         "rim_tile_search": rim_tile_search,
                         "rim_tracking_frames": len(tracked_rims),
