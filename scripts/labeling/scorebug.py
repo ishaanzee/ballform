@@ -376,6 +376,8 @@ def locate(observations: dict[int, list], width: int, height: int):
             s = scores[0]
             boxes += [t.box for t in numbers if .8 * s.h < t.h < 1.25 * s.h and abs(t.cy - cy) < .5 * h
                       and abs(t.cx - cx) < .35 * width and (t.cx < s.cx < cx or cx < s.cx < t.cx)]
+    if not boxes:  # anchors split between two places (the bug and a graphic): no clock at the median
+        return None
     x1 = min(b[0] for b in boxes) - 2 * h
     y1 = min(b[1] for b in boxes) - 1.5 * h
     x2 = max(b[0] + b[2] for b in boxes) + 2 * h

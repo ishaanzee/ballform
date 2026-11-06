@@ -98,6 +98,15 @@ def test_wide_one_row_bug():
     assert region[0] < 265 and region[2] < 1232
 
 
+def test_anchors_in_two_places_find_no_bug():
+    # Two probes show a bottom-left bug, two a HALFTIME graphic top right: the median position
+    # is near neither, so there is no box (min() of no boxes used to raise).
+    bug = [("14", 1.0, (60, 960, 70, 45)), ("15", 1.0, (160, 960, 70, 45)), ("1ST 5:44 :23", 1.0, (250, 962, 260, 43))]
+    graphic = [("HALFTIME", 1.0, (1300, 300, 300, 50)), ("8:24", 1.0, (1350, 360, 120, 50))]
+    assert scorebug.locate({0: bug, 1: bug, 2: graphic, 3: graphic}, 1920, 1080) is None
+    assert scorebug.locate({0: bug, 1: bug, 2: graphic}, 1920, 1080)[0] == 0  # the bug is the majority
+
+
 def test_stacked_bug_box_unchanged():
     # Both scores are in the box, so a number further along the clock's row is not taken.
     obs = [("CLE", 1.0, (1490, 876, 73, 36)), ("DEN", 1.0, (1490, 924, 78, 36)), ("71", 1.0, (1616, 873, 42, 39)),
