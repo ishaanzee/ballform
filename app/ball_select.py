@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from statistics import median
 
 from app import vision
@@ -193,15 +194,24 @@ class CandidateCourtVision(vision.CourtVision):
             self.ball_candidates = []
             return super().detect(frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects)
         height, width = frame.shape[:2]
-        objects = prefetched_objects if prefetched_objects is not None else self._detect_basketball_objects(frame)
+        if prefetched_objects is not None:
+            objects = prefetched_objects
+        else:
+            started = time.perf_counter()
+            objects = self._detect_basketball_objects(frame)
+            # vision.CourtVision.detect counts this detection in its wall time when it runs it itself.
+            self.timing_seconds["total"] += time.perf_counter() - started
         hoops = [box for _, box in rim_candidates(objects)] + list(rims)
         passed = objects
+        # vision.CourtVision.detect returns before any ball choice on these frames.
+        skipped = (self.profile == "moving"
+                   and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in objects))
         if self.static_filter is not None:
             self.static_filter.size = (width, height)
             full = candidates_from([(0, 0, width, height, objects)], width, height, frame_no, time_s)
             ball_objects = [k for k, o in enumerate(objects) if o[0] in BALL_CLASSES]
             confident = [i for i, (ball, _, _) in enumerate(full) if ball.confidence >= SIDE_CROP_CONF]
-            if self.tiled and confident and all(
+            if not skipped and self.tiled and confident and all(
                     self.static_filter.is_static(full[i][0], time_s, None, hoops, full[i][2]) for i in confident):
                 # Hidden from the side-crop trigger only; they are still candidates below.
                 hidden = {ball_objects[i] for i in confident}
@@ -218,8 +228,6 @@ class CandidateCourtVision(vision.CourtVision):
         self.ball_candidates = [(b.x, b.y, b.confidence, b.radius, index) for b, index, _ in found]
         if self.static_filter is None:
             return poses, maps, ball
-        skipped = (self.profile == "moving"
-                   and not any(cls in PLAYER_CLASSES and conf >= .4 for cls, conf, _ in objects))
         wrists = wrists_of(poses, width, height)
         if not skipped:
             chosen = self.static_filter.choose(found, previous_ball, prior_ball, frame_no, time_s, wrists, hoops)
