@@ -307,7 +307,8 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
 def _steady_hoop(track, max_gap_frames: int) -> bool:
     """A hoop seen for at least as long as the longest gap a track bridges, at the
     detector's usual confidence for a hoop in view: not a one-off false box."""
-    return (track[-1][0] - track[0][0] >= max_gap_frames
+    # Three sightings at least, as for the dominant hoop: two boxes a gap apart are not a hoop in view.
+    return (len(track) >= 3 and track[-1][0] - track[0][0] >= max_gap_frames
             and float(np.median([conf for _, conf, _ in track])) >= HOOP_IN_VIEW_CONFIDENCE)
 
 
