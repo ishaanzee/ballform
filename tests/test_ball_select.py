@@ -168,3 +168,65 @@ def test_saved_candidates_round_trip_and_old_runs_without_them_still_score(tmp_p
     saved = load_scoring_inputs(path)
     assert saved["ball_candidates"][3][1] == (.43, .55, .5, .01, 1)
     assert score_clip(saved, None, tmp_path / "input.mp4")["shots"] == []
+
+
+def test_moving_balls_are_chosen_like_plain_court_vision_with_the_filter_on_or_off(monkeypatch):
+    class Detector:
+        t = 0
+
+        def detect(self, frame):
+            # Side crops: one ball that moves every frame.
+            x = .3 + .02 * self.t
+            return [(1, .55, (x, .6, x + .02, .62))]
+
+    def full_frame(f):
+        x = .2 + .03 * f
+        # A confident ball skips the side crops; a weaker one runs them.
+        return [(4, .9, (.6, .2, .7, .6)), (1, .7 if f % 3 == 0 else .5, (x, .5, x + .02, .52)),
+                (1, .4, (.8 - .02 * f, .3, .82 - .02 * f, .32))]
+
+    detector = Detector()
+    frame = np.zeros((600, 1000, 3), dtype=np.uint8)
+    plain_off_on = [_vision(monkeypatch, detector), _vision(monkeypatch, detector, StaticBallFilter())]
+    plain_off_on.insert(0, vision_module.CourtVision(TorchPose(_Pose(), "mps"), detector, "mps", "courtside"))
+    chosen = []
+    try:
+        for vision in plain_off_on:
+            previous = prior = None
+            run = []
+            for f in range(15):
+                detector.t = f
+                _, _, picked = vision.detect(frame, f, f / FPS, previous, prior, prefetched_objects=full_frame(f))
+                run.append(picked)
+                if picked:
+                    prior, previous = previous, picked
+            chosen.append(run)
+    finally:
+        for vision in plain_off_on:
+            vision.close()
+    assert chosen[0] == chosen[1] == chosen[2]
+    # The side crops ran on the weak-ball frames, so their balls were candidates too.
+    assert len(plain_off_on[0].side_crop_ball_candidates) == 10
+    assert any(c[4] > 0 for c in plain_off_on[2].ball_candidates)
+    assert plain_off_on[2].static_choice_frames == 0 and plain_off_on[2].forced_side_crop_frames == 0
+
+
+def test_frames_skipped_for_no_players_are_not_counted_as_forced_side_crops(monkeypatch):
+    class Detector:
+        def detect(self, frame):
+            return []
+
+    monkeypatch.setattr(vision_module, "BasketballDetector", Detector)
+    vision = CandidateCourtVision(TorchPose(_Pose(), "mps"), Detector(), "mps", "moving",
+                                  static_filter=StaticBallFilter())
+    lock = (1, .9, (.295, .04, .305, .06))
+    frame = np.zeros((600, 1000, 3), dtype=np.uint8)
+    try:
+        for frame_no in range(14):
+            # No player box: vision.CourtVision.detect returns before the side crops.
+            _, _, chosen = vision.detect(frame, frame_no, frame_no / FPS, prefetched_objects=[lock])
+            assert chosen is None
+    finally:
+        vision.close()
+    assert vision.forced_side_crop_frames == 0
+    assert [c[4] for c in vision.ball_candidates] == [0]
