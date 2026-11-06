@@ -352,11 +352,13 @@ def outcome_features(shots, rim, net_motion, fps: float, clip: dict) -> list[tup
     return out
 
 
-def call_outcomes(shots, rim, net_motion, fps: float, clip: dict,
-                  model: OutcomeModel | None = None) -> list[dict | None]:
-    """Measure every shot, then, with the model on, replace the rules' call where a rim was
-    known at arrival. Returns the per-shot features (None where there was no rim)."""
-    measured = outcome_features(shots, rim, net_motion, fps, clip)
+def call_outcomes(shots, rim, net_motion, fps: float, clip: dict | None,
+                  model: OutcomeModel | None = None, measured: list | None = None) -> list[dict | None]:
+    """Measure every shot (or take ``outcome_features``' result as ``measured``), then, with the
+    model on, replace the rules' call where a rim was known at arrival. Returns the per-shot
+    features (None where there was no rim)."""
+    if measured is None:
+        measured = outcome_features(shots, rim, net_motion, fps, clip)
     if model is None and enabled():
         model = load_model()
     todo = [(shot, m) for shot, m in zip(shots, measured) if m is not None]
