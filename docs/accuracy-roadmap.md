@@ -27,7 +27,7 @@ Details and per-holdout numbers are in `docs/game-mode.md` (measured accuracy, 2
 - **Opt-in**: `BALLFORM_STATIC_BALL_FILTER=1` (tracker locks on still false balls) and `BALLFORM_SHOT_VERIFIER=1` (learned shot check). Ball candidates are now saved per frame for later re-selection.
 - **Evaluation**: Wilson intervals, a found-and-called-right metric, paired McNemar comparisons (`--compare`, `--compare-reports`) and `--summary-only` for holdouts.
 
-Pooled over the three blind holdouts (233 shots, scored once): false shots 31 → 25, wrong make/miss calls 10 → 4 (misses called made 7 → 3), found-and-called-right 162 → 170, median distance error down on all three; shots found (190) and shot type (138) unchanged.
+Pooled over the three blind holdouts (233 shots, scored once): false shots 31 → 25, wrong make/miss calls 10 → 4 (misses called made 7 → 3), found-and-called-right 162 → 170, median distance error down on all three; shots found (190) and shot type (138) unchanged. On the first 3 games of holdout 4 (2026-27 season, 23 shots): false shots 9 → 6, make/miss right 14 of 15 called → 17 of 17, shots found unchanged.
 
 ## what will work next, in order
 

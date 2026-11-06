@@ -59,6 +59,10 @@ Once thresholds are tuned against these clips, they stop being an honest test. P
 
 `holdout3.csv` is a blind third holdout made on 2026-10-16: 61 clips (90 shots, 7 no-shot clips) from ten 2025-26 games in no other file (GSW@IND 11-01, DEN@NOP 11-19, BKN@MIL 11-29, UTA@MEM 12-12, DAL@SAC 12-27, CHA@LAC 01-12, MEM@CHA 03-21, ORL@BOS 04-12, and the playoff games TOR@CLE 04-20 and SAS@OKC 05-20), labeled from the frames before Ballform had seen them, with `scripts/labeling/`. Treat it like `holdout2.csv`.
 
+`holdout4.csv` is a blind fourth holdout started on 2026-11-06 from games of the 2026-27 season, a new season with new broadcast graphics and rosters, labeled from the frames before Ballform had seen them and checked by an independent second labeler before commit (the first games committed that night: SAC@NOP 10-29, CHI@BOS 10-26 and CHA@BKN 10-21, 20 clips with 23 shots and 3 no-shot clips; more games were still being checked, and their staged rows are in `eval/staging/holdout4/`). Score it with `--summary-only` and treat it like `holdout2.csv`.
+
+`fixed-holdout.csv` holds blind fixed-camera clips from public amateur videos that are not in `fixed.csv`, started on 2026-11-06 because `fixed.csv` had become a dev set (its first videos were still being labeled and checked at the end of that night; staged rows are in `eval/staging/fixed-holdout/` until they are committed with `rows.py commit`). Score it with `--labels eval/fixed-holdout.csv --summary-only`.
+
 `fixed.csv` holds non-broadcast footage: 35 clips from four public fixed-camera videos of adult games (notes start `FIXED youtube:<id>`; `ballform-eval` groups them by video). Their jobs use the courtside or elevated profile at the source frame rate (25-30 fps), and have no distances or zones. Score it with `--labels eval/fixed.csv`.
 
 New broadcast clips are labeled with the toolkit in `scripts/labeling/` (see its README): play-by-play, the NBA channel's full-game upload, scorebug OCR to line the two up, cut-free clips, contact sheets, and locked commits of the rows.
