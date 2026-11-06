@@ -580,8 +580,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="max release-time gap to match a shot (and to pair false shots in a comparison), seconds")
     parser.add_argument("--out", type=Path, default=EVAL_DIR / "report.json")
     parser.add_argument("--summary-only", action="store_true",
-                        help="print only the summary (and the --compare result), and leave the per-shot and per-game "
-                             "sections out of the report; score holdouts this way")
+                        help="print only the summary, any failed clips and the --compare result, and leave the "
+                             "per-shot and per-game sections out of the report; score holdouts this way")
     parser.add_argument("--compare", type=Path, metavar="REPORT",
                         help="pair this run's shots with an earlier report.json's and print each metric's gains, "
                              "losses and exact McNemar p value")
@@ -610,6 +610,9 @@ def main(argv: list[str] | None = None) -> int:
     _print_summary(summary)
     if not args.summary_only:
         _print_shots(rows)
+    elif failed := [row for row in rows if "label_release_s" not in row]:
+        # Which clips failed, and why, says nothing about their shots.
+        print("\nfailed clips:\n" + "\n".join(f"  {row['job_id']}: {row['problem']}" for row in failed))
     report = {"summary": summary}
     if earlier is not None:
         report["paired"] = {"against": str(args.compare),

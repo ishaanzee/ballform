@@ -228,3 +228,38 @@ def test_summary_only_reports_and_comparing_saved_reports(tmp_path, capsys):
     assert "false_shots                    gains 0   losses 0   p 1.000   1 -> 1" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main(["--compare-reports", str(full), str(short)])  # a summary-only report has no shots to pair
+
+
+def test_summary_only_still_names_the_clips_that_failed(tmp_path, capsys):
+    labels = tmp_path / "labels.csv"
+    labels.write_text(HEADER + "a,1.0,made,,,,,,\ngone,2.0,missed,,,,,,\n")
+    write_job(tmp_path / "jobs", "a", [shot(1.0)], duration_s=10.0)
+    assert main(["--labels", str(labels), "--jobs", str(tmp_path / "jobs"), "--out", str(tmp_path / "short.json"),
+                 "--summary-only"]) == 0
+    printed = capsys.readouterr().out
+    assert "2 clips (1 failed)" in printed and "  gone: FileNotFoundError" in printed
+    assert "a @1.0s" not in printed  # still no shot lines
+
+
+def test_a_clip_without_a_saved_length_is_timed_from_its_video(tmp_path):
+    import cv2
+    import numpy as np
+
+    write_job(tmp_path, "a", [shot(1.0)])
+    writer = cv2.VideoWriter(str(tmp_path / "a" / "input.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 48))
+    for _ in range(45):
+        writer.write(np.zeros((48, 64, 3), np.uint8))
+    writer.release()
+    assert evaluate(read_labels_from(tmp_path, "a,1.0,made,,,,,,\n"), tmp_path, .75)[0].duration_s == 1.5
+
+
+def test_compare_leaves_out_a_clip_that_failed_in_one_run(tmp_path):
+    labels = read_labels_from(tmp_path, "a,1.0,made,,,,,,\nb,2.0,missed,,,,,,\n")
+    write_job(tmp_path / "before", "a", [shot(1.0), shot(5.0)])
+    write_job(tmp_path / "before", "b", [shot(2.0, "missed")])
+    write_job(tmp_path / "after", "b", [shot(2.0, "missed")])  # a has no result, so it fails
+    paired = compare(report_of(tmp_path / "before", labels), report_of(tmp_path / "after", labels))
+    assert (paired["labeled_shots_in_both"], paired["labeled_shots_only_before"], paired["clips_compared"]) == (1, 1, 1)
+    assert paired["false_shots_not_compared"] == 1 and paired["metrics"]["false_shots"]["gains"] == 0
+    assert paired["metrics"]["found_and_called_right"] == {"before": 1, "after": 1, "of": 1, "gains": 0, "losses": 0,
+                                                           "p": 1.0}
