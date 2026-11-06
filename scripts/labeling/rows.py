@@ -8,6 +8,7 @@
     uv run --inexact python scripts/labeling/rows.py append eval/staging/dev/<event>.csv eval/labels.csv
     uv run --inexact python scripts/labeling/rows.py commit eval/staging/dev/<event>.csv eval/labels.csv \\
         -m "label six WAS@LAL 2026-03-30 clips"
+    uv run --inexact python scripts/labeling/rows.py zones eval/labels.csv
 
 check validates the header, the column count of every row, the values (with
 app.evaluation.read_labels), that each job exists under data/jobs with input.mp4 and
@@ -15,7 +16,8 @@ settings.json, and that the notes start with the game ('AAA@BBB YYYY-MM-DD ...' 
 'FIXED youtube:<id> ...'). append adds the rows to a target CSV (creating it with the
 header), refusing job_ids already in any eval/*.csv. commit does check + append + a git
 commit of only the target file, holding an exclusive lock (eval/staging/.commit.lock)
-so parallel labelers never interleave; it prints the commit hash.
+so parallel labelers never interleave; it prints the commit hash. zones lists rows whose
+zone disagrees with the ESPN coordinates quoted in their notes, to check against the frames.
 """
 from __future__ import annotations
 
@@ -193,6 +195,44 @@ def write_rows(path: Path, rows: list[dict]) -> None:
             writer.writerow([row.get(k, "") for k in HEADER])
 
 
+ESPN_XY = re.compile(r"x=(-?\d+(?:\.\d+)?)[,;]?\s*y=(-?\d+(?:\.\d+)?)")
+NBA_STATS_GAME = re.compile(r"\bgame 00\d{8}\b")
+
+
+def zone_conflicts(rows: list[dict]) -> list[tuple[dict, str, float, float]]:
+    """Rows whose zone disagrees with the ESPN x/y in their notes, as (row, zone from the
+    coordinates, x, y), with pbp.zone_of. The label's own 2-or-3 call stands in for ESPN's
+    points attempted (both are exact), so only paint/midrange and corner/above-the-break
+    disagreements show. The first x/y in the notes is taken, so a row whose notes quote an
+    earlier play first can be a false alarm; rows with NBA-stats coordinates are skipped."""
+    import pbp  # same folder; imports app.court
+    out = []
+    for row in rows:
+        zone, notes = row.get("zone", ""), row.get("notes", "")
+        found = ESPN_XY.search(notes)
+        if not zone or not found or NBA_STATS_GAME.search(notes):
+            continue
+        x, y = float(found.group(1)), float(found.group(2))
+        if not pbp.valid_xy(x, y):
+            continue
+        points = 3 if zone in ("corner_three", "above_break_three") else 2
+        from_xy, _ = pbp.zone_of(x, y, points)
+        if from_xy and from_xy != zone:
+            out.append((row, from_xy, x, y))
+    return out
+
+
+def zones(args) -> int:
+    with args.rows.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    found = zone_conflicts(rows)
+    for row, from_xy, x, y in found:
+        print(f"{row['job_id']} @{row['release_s']}: zone {row['zone']}, ESPN x={x:g} y={y:g} gives {from_xy}")
+    print(f"{args.rows}: {len(found)} of {len(rows)} rows have a zone that disagrees with their ESPN coordinates"
+          + ("; check each against the frames" if found else ""))
+    return 0
+
+
 def existing_jobs(exclude: Path | None = None) -> dict[str, str]:
     found = {}
     for csv_path in sorted(EVAL_DIR.glob("*.csv")):
@@ -311,11 +351,13 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("rows", type=Path)
     m.add_argument("target", type=Path)
     m.add_argument("-m", "--message", required=True)
+    z = sub.add_parser("zones", help="list rows whose zone disagrees with the ESPN x/y in their notes")
+    z.add_argument("rows", type=Path)
     args = parser.parse_args(argv)
     if args.command == "check":
         check(args.rows, check_jobs=not args.no_jobs)
         return 0
-    return {"add": add, "append": append, "commit": commit}[args.command](args)
+    return {"add": add, "append": append, "commit": commit, "zones": zones}[args.command](args)
 
 
 if __name__ == "__main__":

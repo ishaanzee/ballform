@@ -90,3 +90,35 @@ def test_row_validation(tmp_path, monkeypatch):
     bad.write_text(",".join(rows.HEADER) + "\n0a1b2c3d4e5f,3.4,made,,,,,,WAS@LAL 2026-03-30 a, b\n")
     with pytest.raises(SystemExit, match="10 columns"):
         rows.check(bad, quiet=True)
+
+
+def test_zone_conflicts_with_espn_coordinates():
+    notes = "WAS@LAL 2026-03-30 ESPN event 401810953 Q1 6:45 'a' (Jump Shot; x={x} y={y})."
+    rows_ = [
+        {"job_id": "a", "release_s": "1", "zone": "paint", "notes": notes.format(x=25, y=6)},  # agrees
+        {"job_id": "b", "release_s": "1", "zone": "midrange", "notes": notes.format(x=29, y=14)},  # inside the lane
+        {"job_id": "c", "release_s": "1", "zone": "corner_three", "notes": notes.format(x=3, y=12)},  # y counts from the rim
+        {"job_id": "d", "release_s": "1", "zone": "above_break_three", "notes": notes.format(x=25, y=24)},  # 3PA on the arc
+        {"job_id": "e", "release_s": "1", "zone": "", "notes": notes.format(x=29, y=14)},  # no zone label
+        {"job_id": "f", "release_s": "1", "zone": "paint",
+         "notes": "LAL@HOU 2026-03-18 game 0022501007 Q4 58.4 'Doncic' (x=5 y=40)."},  # NBA-stats coordinates
+        {"job_id": "g", "release_s": "1", "zone": "paint", "notes": "Same clip. Putback (Layup; x=12, y=3)."},
+    ]
+    found = {row["job_id"]: zone for row, zone, _, _ in rows.zone_conflicts(rows_)}
+    assert found == {"b": "paint", "c": "above_break_three", "g": "midrange"}
+
+
+def test_dev_label_corrections_2026_11_06():
+    # Rows corrected from the frames on 2026-11-06 keep their corrections and audit notes.
+    path = Path(__file__).resolve().parents[1] / "eval" / "labels.csv"
+    import csv
+    with path.open(newline="") as handle:
+        by_key = {(r["job_id"], r["release_s"]): r for r in csv.DictReader(handle)}
+    fixed = {("ea6cc5ca108b", "1.3"): ("release_s", "1.3"), ("0ab32365534b", "7.4"): ("zone", "midrange"),
+             ("5ccf94ad7276", "1.98"): ("zone", "corner_three"), ("5ccf94ad7276", "5.2"): ("shot_type", "layup"),
+             ("0bd8c860f55f", "1.35"): ("zone", "above_break_three"), ("79bec837eb96", "2.85"): ("zone", "paint")}
+    for key, (field, value) in fixed.items():
+        row = by_key[key]
+        assert row[field] == value
+        assert "Corrected 2026-11-06 from the frames: " in row["notes"]
+    assert ("ea6cc5ca108b", "1.6") not in by_key
