@@ -472,6 +472,8 @@ def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detect
     # 5adf: the ball-in-basket class fired on the net while the ball was still in flight.
     # With the rim in view that lone detection does not anchor a shot let go away from the
     # rim (62f8, 667b, fd34: empty nets), so the ball's entry into the rim's area does.
+    # The 5adf clip itself is now lost: its entry came 1.36 s after the last contact, past
+    # CONTACT_TO_BASKET_S, so no contact is left to credit.
     path = {f: (.3, .35) for f in range(11)}
     path.update({f: lerp((.3, .35), (.5, -.3), (f - 10) / 15) for f in range(11, 26)})
     path.update({f: lerp((.5, -.3), (.5, .15), (f - 25) / 24) for f in range(26, 50)})
