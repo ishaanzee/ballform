@@ -752,13 +752,14 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
                      "is unknown")
         margin = three_point_margin(on_half, court)
         if shot_zone is None:
+            # Separation and contest clearance in feet are measured from the same spot.
             evidence.append(f"Court: shot distance withheld: the shooter's spot ({distance:.1f} ft from the basket, "
                             f"measured from {where}) is off the calibrated court, so the feet were not mapped "
-                            "correctly.")
-        else:
-            evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from "
-                            f"{where}. {court.dims['label']} zone {shot_zone.replace('_', ' ')}"
-                            f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
+                            "correctly. Separation and contest clearance in feet are withheld too.")
+            continue
+        evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from "
+                        f"{where}. {court.dims['label']} zone {shot_zone.replace('_', ' ')}"
+                        f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
         extrapolated = court_map.calibration.extrapolation_ft(spot)
         if extrapolated > 2:
             evidence.append(f"Court: the shooter stood {extrapolated:.0f} ft outside the marked landmarks, so the "
