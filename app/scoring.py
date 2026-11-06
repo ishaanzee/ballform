@@ -79,6 +79,30 @@ def _rim_at(rim: RimInput, frame: int) -> RimBox | None:
     return tuple(rim[left][i] + amount * (rim[right][i] - rim[left][i]) for i in range(4))  # type: ignore[return-value]
 
 
+# The rim track drops while the ball and hands cover the hoop (a finish at the rim,
+# a make through the net), for up to about half a second (0c86, b2fe). Within one
+# camera shot the hoop barely moves in that time, so such gaps are bridged; across
+# a cut the hoop on the other side can be another one.
+RIM_BRIDGE_S = .5
+
+
+def bridge_rim_gaps(rim: RimInput, fps: float, cut_frames=()) -> RimInput:
+    """A tracked rim with its gaps of up to RIM_BRIDGE_S that no camera cut falls in
+    filled in, interpolating between the samples on either side. A fixed box or no
+    rim is returned as it is."""
+    if not isinstance(rim, Mapping) or not rim:
+        return rim
+    keys = sorted(rim)
+    filled = dict(rim)
+    for left, right in zip(keys, keys[1:]):
+        if right - left > RIM_BRIDGE_S * fps or any(left < cut <= right for cut in cut_frames):
+            continue
+        for frame in range(left + 1, right):
+            amount = (frame - left) / (right - left)
+            filled[frame] = tuple(rim[left][i] + amount * (rim[right][i] - rim[left][i]) for i in range(4))
+    return filled
+
+
 def rim_by_arrival(rim: RimInput, apex_frame: int, fps: float) -> bool:
     """True when a rim is known at the apex or before the ball can arrive (ARRIVAL_S).
 
@@ -486,6 +510,8 @@ def analyze_shots(
         raise ValueError("handedness must be left or right")
     if len(ball) < 4:
         return []
+    from app.outcome_model import remember  # imports this module
+
     ordered = sorted(ball, key=lambda b: b.frame)
     frames = [b.frame for b in ordered]
     max_gap = max(2, round(fps * .35))
@@ -541,7 +567,8 @@ def analyze_shots(
             if release_contact else
             "Release contact unavailable: timestamp uses the start of the visible arc and may precede or follow actual release"
         )
-        if rim_by_arrival(rim, apex_frame, fps):
+        measured = rim_by_arrival(rim, apex_frame, fps)
+        if measured:
             outcome, confidence, rim_evidence, outcome_frame = rim_outcome(
                 segment, apex_frame, rim, net_motion, fps, ordered)
             evidence += rim_evidence
@@ -560,4 +587,6 @@ def analyze_shots(
             cues=cues,
             outcome_frame=outcome_frame,
         ))
+        if measured:
+            remember(results[-1], apex_frame, segment, ordered)
     return results

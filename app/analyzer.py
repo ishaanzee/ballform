@@ -29,12 +29,15 @@ from app.game import add_court_metrics, analyze_game_shots
 from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
 from app.court import STANDARDS, fit as fit_court, parse_landmarks
 from app.court_detect import ClipCalibration
-from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
-from app.shots import find_attempts, type_by_distance
+from app.scoring import RimInput, _rim_at, analyze_shots, bridge_rim_gaps, classify_view
+from app.outcome_model import call_outcomes, clip_context, outcome_features as outcome_features_of
+from app.shot_verifier import kept_shots, shot_features
+from app.shots import find_attempts, hand_contacts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
-from app.vision import COURT_PROFILES, CourtVision, CutDetector, camera_profile, regions, validate_court
+from app.vision import COURT_PROFILES, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
+from app.ball_select import CandidateCourtVision, StaticBallFilter, enabled as static_ball_filter_enabled
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 from app.possession import decode_handlers
 from app.trajectory import floor_trajectories, trajectories_json
@@ -728,7 +731,10 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
             # A fixed camera can see other courts' hoops; a moving one follows play to the
             # hoop in use, and there a zoom can split that hoop into two tracks.
             balls={b.frame: (b.x, b.y, b.confidence) for b in balls} if profile in COURT_PROFILES else None,
-            aspect=width / height)
+            aspect=width / height, follows_play=profile == "moving",
+            # A fixed camera's hoop does not move: once seen steadily for a second it
+            # stands in on the frames where it was hidden or its track split.
+            static_hoop_frames=round(fps) if profile in COURT_PROFILES else None)
         # Net flow was measured around each frame's most confident rim; keep it
         # only where that was the hoop finally chosen.
         for frame_no_, box in flow_rims.items():
@@ -737,7 +743,10 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                 flows[frame_no_] = {"net": 0.0, "reference": 0.0}
     normalized_flow = _normalize_net_flow(flows)
     scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
-    shots = []
+    # Where the detected rim switches from one hoop to the other it is not bridged, as at a cut.
+    switches = rim_stats.get("hoop_switches", []) if scoring_rim is detected_rims else []
+    scoring_rim = bridge_rim_gaps(scoring_rim, fps, [*cut_frames, *switches])
+    shots, contacts = [], []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
         segment_balls = _interpolate_track([b for b in balls if start <= b.frame < end], max(2, round(fps * .25)))
@@ -745,10 +754,11 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
         segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
                                      aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
         if game_mode:
-            segment_shots = find_attempts(segment_shots, segment_balls,
-                                          [f for f in player_frames if start <= f["frame"] < end],
+            segment_frames = sorted((f for f in player_frames if start <= f["frame"] < end), key=lambda f: f["frame"])
+            segment_shots = find_attempts(segment_shots, segment_balls, segment_frames,
                                           fps, scoring_rim, width / height, normalized_flow,
                                           following=profile == "moving")
+            contacts += hand_contacts(segment_frames, sorted(segment_balls, key=lambda b: b.frame), width / height)
         for shot in segment_shots:
             if scoring_rim is None:
                 shot.evidence = ["Outcome unavailable: no rim was detected or marked."
@@ -756,6 +766,20 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                                  for item in shot.evidence]
             shot.number = len(shots) + 1
             shots.append(shot)
+    outcome_features = verifier_features = None
+    if game_mode:
+        # Both learned models read the rules' shots and calls before either changes them.
+        measured = outcome_features_of(shots, scoring_rim, normalized_flow, fps,
+                                       clip_context(width, height, observed_balls, player_frames))
+        verifier_features = shot_features(shots, scoring_rim, fps, player_frames, observed_balls, contacts,
+                                          cut_frames, [m[0] if m else None for m in measured])
+        # Learned make/miss call where a rim was known at arrival (BALLFORM_OUTCOME_MODEL=0: rules only).
+        outcome_features = call_outcomes(shots, scoring_rim, normalized_flow, fps, None, measured=measured)
+        # Learned check of each shot, off unless BALLFORM_SHOT_VERIFIER=1: drops the unlikely ones.
+        kept = kept_shots(shots, verifier_features, profile)
+        shots = [shots[i] for i in kept]
+        outcome_features = [outcome_features[i] for i in kept]
+        verifier_features = [verifier_features[i] for i in kept]
     game_summary = None
     if mode == "one_on_one":
         # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
@@ -794,7 +818,8 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     return {"observed_balls": observed_balls, "handler_method": handler_method, "stitched": stitched,
             "detected_rims": detected_rims, "rim_stats": rim_stats, "scoring_rim": scoring_rim,
             "rim_source": rim_source, "shots": shots, "game_summary": game_summary, "court_map": court_map,
-            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds}
+            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds,
+            "outcome_features": outcome_features, "verifier_features": verifier_features}
 
 
 def save_scoring_inputs(inputs: dict, path: Path) -> None:
@@ -859,7 +884,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                 raise
             pipeline_fallback = f"Prefetch detector initialization failed: {type(exc).__name__}: {exc}"
             pipeline_depth = 1
-    court_vision = CourtVision(game_pose_model, ball_model, device, profile, court) if game_mode else None
+    static_ball_filter = static_ball_filter_enabled() and game_mode
+    court_vision = CandidateCourtVision(game_pose_model, ball_model, device, profile, court,
+                                        static_filter=StaticBallFilter() if static_ball_filter else None
+                                        ) if game_mode else None
     capture = cv2.VideoCapture(str(input_path))
     if not capture.isOpened():
         raise ValueError("OpenCV could not decode this video. Try exporting it as H.264 MP4.")
@@ -897,6 +925,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     balls: list[Detection] = []
     poses: list[PoseFrame] = []
     player_frames: list[dict] = []
+    # Every ball candidate per analyzed frame (app/ball_select.py), so a replay can choose again.
+    ball_candidates: dict[int, list[tuple[float, float, float, float, int]]] = {}
     flows: dict[int, dict[str, float]] = {}
     flow_rims: dict[int, tuple[float, float, float, float] | None] = {}
     previous_ball: Detection | None = None
@@ -967,6 +997,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                     handler_tracker.reset()
                 previous_ball = None
                 prior_ball = None
+                if court_vision and court_vision.static_filter:
+                    court_vision.static_filter.reset()
             frame_rim = tracked_rims.get(frame_no) if profile == "moving" else rim
             if auto_rim and court_vision and (court_vision.rims or fallback_rims):
                 frame_rim = xywh(max(court_vision.rims or fallback_rims)[1])
@@ -974,8 +1006,13 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
             players = []
             landmark_maps = []
             if court_vision:
+                hoops = [box for _, box in fallback_rims]
+                if frame_rim:
+                    hoops.append((frame_rim[0], frame_rim[1], frame_rim[0] + frame_rim[2], frame_rim[1] + frame_rim[3]))
                 players, landmark_maps, ball = court_vision.detect(
-                    frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects=prefetched_objects)
+                    frame, frame_no, time_s, previous_ball, prior_ball, prefetched_objects=prefetched_objects,
+                    rims=hoops)
+                ball_candidates[frame_no] = court_vision.ball_candidates
                 raw_people_counts.append(court_vision.raw_people)
                 for pose in players:
                     pose.appearance = jersey_descriptor(frame, pose)
@@ -1020,7 +1057,9 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
               "profile": profile, "rim": rim, "rim_marked": rim_marked, "auto_rim": auto_rim,
               "tracked_rims": tracked_rims, "cut_frames": cut_frames, "balls": balls, "poses": poses,
               "player_frames": player_frames, "flows": flows, "flow_rims": flow_rims,
-              "calibration": calibration, "court_landmarks": court_landmarks, "game_mode": game_mode}
+              "calibration": calibration, "court_landmarks": court_landmarks, "game_mode": game_mode,
+              # Optional: runs saved before 2026-11-06 lack it, and scoring does not read it.
+              "ball_candidates": ball_candidates}
     if os.environ.get("BALLFORM_SAVE_SCORING_INPUTS"):
         # Saved before scoring mutates identities, so a replay starts from the same state.
         save_scoring_inputs(inputs, output_dir / SCORING_INPUTS)
@@ -1095,6 +1134,10 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                    "pose_calls_on_torch_fallback": (getattr(court_vision.pose_model, "fallback_calls", 0)
                                                     - pose_fallback_calls_before) if court_vision else None,
                    "frame_pipeline_depth": pipeline_depth,
+                   "static_ball_filter": {"enabled": static_ball_filter,
+                                          "forced_side_crop_frames": court_vision.forced_side_crop_frames,
+                                          "changed_choice_frames": court_vision.static_choice_frames}
+                   if court_vision else None,
                    "frame_pipeline_requested": pipeline_request,
                    "frame_pipeline_fallback": pipeline_fallback,
                    "prefetch_ball_backend": prefetch_detector.backend if prefetch_detector else None,
@@ -1125,8 +1168,12 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                                                    for f in player_frames),
                         "rim_marked": rim_marked,
                         "rim_source": rim_source,
-                        "rim_detected_frames": len(detected_rims) if auto_rim else (1 if rim_source == "detected" else 0),
+                        "rim_detected_frames": (len(detected_rims) - rim_stats.get("static_hoop_frames", 0) if auto_rim
+                                                else 1 if rim_source == "detected" else 0),
                         "rim_other_hoop_tracks": rim_stats.get("other_hoop_tracks"),
+                        # Frames given a fixed camera's static hoop box where its track had none
+                        # (not counted in rim_detected_frames, which keeps its old meaning).
+                        "rim_static_hoop_frames": rim_stats.get("static_hoop_frames"),
                         "rim_detection_error": rim_detection_error,
                         "rim_tile_search": rim_tile_search,
                         "rim_tracking_frames": len(tracked_rims),

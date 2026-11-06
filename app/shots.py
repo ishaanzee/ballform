@@ -31,6 +31,7 @@ from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
 from app import scoring
 from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
+from app.outcome_model import remember
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -113,6 +114,11 @@ FLOATER_MAX_FT = 16.
 # or farther; three layups and putbacks typed floaters took off 3.1-3.7 ft out
 # (2fd5, b868, d731), their high soft arcs read as floaters.
 RIM_FINISH_FT = 4.
+# A floater is let go short of the basket and its shooter lands short of it too; a
+# shooter landing closer than this to the point under the rim went up to the basket:
+# a finish. On the dev labels the layups typed floaters landed 1.5-4.7 ft out, every
+# floater 6.1 ft or more.
+FINISH_LANDING_FT = 5.
 # A floater is let go on the move toward the basket; a jump shooter stops first
 # (a pull-up, a turnaround, a catch and shoot). On the dev labels every jump shot
 # or floater taken off inside 20 ft whose shooter came at the basket at 10 ft/s
@@ -549,7 +555,7 @@ def _overlapping(runs: list[Run], start: int, end: int) -> Run | None:
 
 
 def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim: RimInput,
-             net_motion, fps: float) -> tuple[str, float, list[str], int | None]:
+             net_motion, fps: float) -> tuple[str, float, list[str], int | None, tuple | None]:
     # A dunk or a layup carried up crosses the rim plane before the hold ends
     # (``start``), so the descent is followed from the top of the ball's path.
     segment = [b for b in balls if min(start, apex_frame) <= b.frame <= apex_frame + 1.5 * fps]
@@ -558,7 +564,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
         if event is not None and "ball_in_basket" in event.sources:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
                             "lone detections also fire on an empty net, so it is not treated as a make without a rim.")
-        return "unknown", 0., evidence, None
+        return "unknown", 0., evidence, None, None
     outcome, confidence, evidence, frame = rim_outcome(segment, apex_frame, rim, net_motion, fps, balls)
     if event is not None and "ball_in_basket" in event.sources:
         motion = _net_motion_peak(net_motion, event.frame, round(event.frame + .5 * fps))
@@ -567,7 +573,8 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
             outcome, confidence, frame = "likely made", .6, event.frame
             evidence.append(f"No rim-plane crossing was visible; ball-in-basket detection with net-specific motion "
                             f"({motion:.1f}× baseline) supports a make")
-    return outcome, confidence, evidence, frame
+    # What the outcome was measured from, kept on the shot for the learned outcome model.
+    return outcome, confidence, evidence, frame, (apex_frame, segment, balls)
 
 
 def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
@@ -624,8 +631,9 @@ def approach_speed(shot: ShotResult, player_frames: list[dict], court_map) -> fl
 
 def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), court_map=None) -> bool:
     """Retype jump shots and floaters by the calibrated shot distance (game metric
-    ``shot_distance_ft``, the take-off spot) and the shooter's approach to the basket,
-    which say more than the detector classes or the flight time. Rim finishes are left
+    ``shot_distance_ft``, the take-off spot), the shooter's approach to the basket and,
+    for floaters, the landing spot, which say more than the detector classes or the
+    flight time. Rim finishes are left
     alone: their distance is where the path passes the basket, and changing them would
     change how that distance is measured.
 
@@ -657,15 +665,39 @@ def type_by_distance(shots: list[ShotResult], player_frames: list[dict] = (), co
             shot.shot_type = "jump shot"
             shot.evidence.append(f"Jump shot: taken {distance:.1f} ft from the basket on the calibrated court, "
                                  f"farther out than a floater (up to {FLOATER_MAX_FT} ft)")
+    for shot in shots:
+        landing = landing_ft(shot, player_frames, court_map) if shot.shot_type == "floater" else None
+        if landing is not None and landing < FINISH_LANDING_FT:
+            shot.evidence.append(f"Layup or dunk: the shooter landed {landing:.1f} ft from the basket on the "
+                                 f"calibrated court; a floater's shooter lands short of it ({FINISH_LANDING_FT:.0f} ft "
+                                 "or more)")
+            shot.shot_type, rim_finishes = "layup or dunk", True
     return rim_finishes
+
+
+def landing_ft(shot: ShotResult, player_frames: list[dict], court_map) -> float | None:
+    """How far from the point under the rim the shooter landed after release, in feet,
+    or None without a calibrated court or a landing seen."""
+    from app.court import near_half
+    from app.game import LANDING_WINDOW_S, _grounded_position
+
+    game = shot.game or {}
+    shooter = (game.get("players") or {}).get("shooter_track_id")
+    near = next((f for f in player_frames if f["frame"] == game.get("release_frame")), None)
+    if court_map is None or shooter is None or near is None:
+        return None
+    found = _grounded_position(player_frames, shooter, near, court_map, after=LANDING_WINDOW_S)
+    if isinstance(found, str) or found[1]["landing"] is None:
+        return None
+    return math.dist(near_half(found[1]["landing"]["spot"], court_map.court), court_map.court.rim)
 
 
 def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_type: str,
           evidence: list[str], attempt: dict) -> ShotResult:
     span = [b for b in balls if start <= b.frame <= end] or [b for b in balls if b.frame == release]
     first, last = (span[0], span[-1]) if span else (None, None)
-    outcome_label, confidence, outcome_evidence, outcome_frame = outcome
-    return ShotResult(
+    outcome_label, confidence, outcome_evidence, outcome_frame, *measured = outcome
+    shot = ShotResult(
         number=0,
         start_s=round(first.time_s if first else release / fps, 2),
         release_s=round(release / fps, 2),
@@ -679,6 +711,9 @@ def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_t
         shot_type=shot_type,
         attempt=attempt,
     )
+    if measured and measured[0] is not None:
+        remember(shot, *measured[0])
+    return shot
 
 
 def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:
@@ -930,6 +965,20 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             bounced = any(b.y > contact.ball.y + .5 * contact.torso for b in path)
             if rise < .5 * contact.torso or bounced:
                 continue
+            # As for an arc, the rise must be seen (ARC_RISE_RADII), not drawn from a net or
+            # a hand read as the ball at the rim while the ball is dribbled or held far out
+            # (bc0a, 8452, f9db). On the dev labels this dropped 9 false shots and one
+            # match that was 0.6 s late (0ab3); the result held from 0.5 to 3 radii.
+            if _seen_rising(balls, contact.frame, event.frame, fps) < ARC_RISE_RADII:
+                continue
+            # With the rim in view, a ball let go away from it is seen entering its area. A
+            # ball-in-basket detection alone is then often an empty net, boxed as the ball
+            # too, while the ball is held out (62f8, 667b, fd34). On the dev labels: 3 false
+            # shots dropped (and f018 on fixed.csv), one match lost (5adf: the net fired
+            # mid-flight and the ball entered the rim's area 1.36 s after the last contact, past
+            # CONTACT_TO_BASKET_S).
+            if event.sources == ["ball_in_basket"] and _rim_at(rim, event.frame) is not None:
+                continue
         # A dunk or a layup carried up enters the rim's area still in the
         # hands; the release is the end of that hold.
         for later in contacts:
@@ -982,7 +1031,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             evidence += [f"{shot_type.capitalize()}: let go away from the rim, reaching it "
                          f"{(event.frame - contact.frame) / fps:.2f} s later", *notes]
         else:
-            shot_type = "layup"
+            # Neither let go at the rim nor long enough in the air for an arc shot: a
+            # finish all the same, and a dunk looks like a layup in 2D.
+            shot_type = "layup or dunk"
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
                 evidence.append(f"Putback: {(contact.frame - previous_reach) / fps:.2f} s after the previous attempt "
                                 "reached the basket")

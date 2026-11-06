@@ -69,7 +69,7 @@ def test_layup_reaching_the_basket_is_a_shot_by_the_last_hand_contact():
     shots = find_attempts([], balls, frames, FPS, None, 1.)
     assert len(shots) == 1
     shot = shots[0]
-    assert shot.shot_type == "layup"
+    assert shot.shot_type == "layup or dunk"
     assert shot.release_s == round(10 / FPS, 2)
     assert shot.attempt["path"] == "rim_attempt" and shot.attempt["shooter_track_id"] == 1
     assert shot.outcome == "unknown"
@@ -194,7 +194,7 @@ def test_arc_tip_right_after_a_rim_attempt_got_there_is_a_tip():
     balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=47)
     tip_arc = ShotResult(1, 0., 30 / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
     layup, tip = find_attempts([tip_arc], balls, frames, FPS, None, 1.)
-    assert (layup.shot_type, tip.shot_type) == ("layup", "tip")
+    assert (layup.shot_type, tip.shot_type) == ("layup or dunk", "tip")
     assert any(item.endswith("0.33 s after the previous attempt got there") for item in tip.evidence)
 
 
@@ -309,7 +309,7 @@ def test_layup_outcome_uses_the_rim_when_one_exists():
     holders = {f: (1, (.42, .35)) for f in range(11)}
     balls, frames = scene(path, holders, handlers={f: 1 for f in range(11)})
     shot, = find_attempts([], balls, frames, FPS, (.47, .08, .06, .04), 1.)
-    assert shot.shot_type == "layup" and shot.attempt["basket_sources"] == ["rim_area"]
+    assert shot.shot_type == "layup or dunk" and shot.attempt["basket_sources"] == ["rim_area"]
     assert shot.outcome == "made"
 
 
@@ -322,7 +322,7 @@ def test_putback_after_a_rebound_is_a_new_layup():
     events = [(20, *basket_box(.8)), (50, *basket_box(.8))]
     balls, frames = scene(path, holders, events, {f: 2 for f in range(32, 41)})
     shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
-    assert [shot.shot_type for shot in shots] == ["jump shot", "layup"]
+    assert [shot.shot_type for shot in shots] == ["jump shot", "layup or dunk"]
     assert shots[1].attempt["shooter_track_id"] == 2
     assert any(item.startswith("Putback") for item in shots[1].evidence)
 
@@ -470,6 +470,10 @@ def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
 
 def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detection():
     # 5adf: the ball-in-basket class fired on the net while the ball was still in flight.
+    # With the rim in view that lone detection does not anchor a shot let go away from the
+    # rim (62f8, 667b, fd34: empty nets), so the ball's entry into the rim's area does.
+    # The 5adf clip itself is now lost: its entry came 1.36 s after the last contact, past
+    # CONTACT_TO_BASKET_S, so no contact is left to credit.
     path = {f: (.3, .35) for f in range(11)}
     path.update({f: lerp((.3, .35), (.5, -.3), (f - 10) / 15) for f in range(11, 26)})
     path.update({f: lerp((.5, -.3), (.5, .15), (f - 25) / 24) for f in range(26, 50)})
@@ -478,7 +482,7 @@ def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detect
     events = [(f, *basket_box(.9)) for f in range(19, 50, 5)]
     balls, frames = scene(path, holders, events, {f: 1 for f in range(11)})
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
-    assert shot.attempt["basket_frame"] == 19
+    assert shot.attempt["basket_frame"] == 43 and shot.attempt["basket_sources"] == ["rim_area"]
     assert shot.outcome == "made"
 
 
@@ -788,6 +792,9 @@ class FlatCourt:
     def to_court(self, frame, pixel):
         return float(pixel[0]), float(pixel[1])
 
+    def reliable(self, frame):
+        return None  # no take-off or landing spot: only the approach is measured
+
 
 def walking_shooter(speed_ft_s, distance_ft):
     """P1's feet for the second before a release at frame 30, coming at the basket at ``speed_ft_s``
@@ -863,3 +870,32 @@ def test_a_shot_seen_never_reaching_a_basket_is_dropped_only_on_a_following_came
     assert find_attempts([], balls, frames, FPS, None, 1.) == []
     shot, = find_attempts([], balls, frames, FPS, None, 1., following=False)
     assert shot.shot_type == "jump shot"
+
+
+@pytest.mark.parametrize("lost, found", [(True, False), (False, True)])
+def test_rim_attempt_from_away_needs_its_rise_seen(lost, found):
+    # bc0a, 8452: the ball held far out is lost and the net is read as the ball at
+    # the basket; the old rise test passed on that jump, but nobody saw the ball go up.
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.5, .12), (f - 10) / 10) for f in range(11, 20) if not lost})
+    path.update({f: (.5, .12) for f in range(20, 23)})
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=30)
+    shots = find_attempts([], balls, frames, FPS, None, 1.)
+    assert len(shots) == int(found)
+    if found:
+        assert shots[0].attempt["path"] == "rim_attempt" and shots[0].attempt["contact_frame"] == 10
+
+
+@pytest.mark.parametrize("rim, found", [(RIM, False), (None, True)])
+def test_lone_basket_detection_for_a_ball_let_go_away_from_the_rim_needs_no_rim_in_view(rim, found):
+    # 62f8, 667b, fd34: ball-in-basket fires on the empty net after the ball, seen
+    # going up far out, is lost. With the rim in view the ball never entered its area.
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.45, .25), (f - 10) / 6) for f in range(11, 17)})
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=30)
+    shots = find_attempts([], balls, frames, FPS, rim, 1.)
+    assert len(shots) == int(found)

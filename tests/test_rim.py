@@ -44,6 +44,25 @@ def test_each_camera_segment_picks_its_own_hoop():
     assert stats["segments_with_rim"] == 2 and stats["other_hoop_tracks"] == 0
 
 
+@pytest.mark.parametrize("follows_play", [False, True])
+def test_camera_following_play_keeps_each_hoop_for_its_own_time(follows_play):
+    # 20a1, 6c6a: one continuous pan from end to end shows one hoop, then the other.
+    detections = {f: [rim(.5 - .004 * f)] for f in range(0, 100)}
+    detections.update({f: [] for f in range(100, 160)})
+    detections.update({f: [rim(.95 - .003 * (f - 160), conf=.8)] for f in range(160, 300)})
+    detections[130] = [rim(.6, y=.35, conf=.6)]  # a one-off false box while no hoop is in view
+    detections[110] = detections[125] = [rim(.2, y=.5, conf=.8)]  # two confident boxes a gap apart
+    detections[50].append(rim(.8, y=.4, conf=.9))  # and one beside the hoop in view
+    rims, stats = track_detected_rims(detections, [], follows_play=follows_play)
+    # Without it the steadier, later hoop wins the whole segment.
+    assert (0 in rims, 200 in rims) == (follows_play, True)
+    assert 130 not in rims and rims.get(50, (.3,))[0] == pytest.approx(.3, abs=.002)
+    assert 110 not in rims and 125 not in rims
+    assert stats.get("hoops_by_time", 0) == follows_play
+    # The scorer does not bridge the rim from one hoop to the other.
+    assert stats["hoop_switches"] == ([160] if follows_play else [])
+
+
 def test_segments_without_a_steady_hoop_get_no_rim():
     detections = {f: [] for f in range(0, 20)}
     detections[5] = [rim(.4)]
@@ -167,3 +186,114 @@ def test_tiled_search_finds_a_small_hoop_and_rejects_a_pole(tmp_path):
 def test_tiled_search_is_skipped_when_full_frames_show_the_rim(tmp_path):
     hoops, stats = fixed_hoop_candidates(_clip(tmp_path / "clip.mp4"), FixedDetector())
     assert hoops == [] and not stats["searched_tiles"]
+
+
+# Static-hoop fill for fixed cameras (static_hoop_frames).
+
+def _drop_onto(x, frames):
+    """A confident ball coming down onto a hoop centred at x (ring at y .3085)."""
+    return {f: (x, .20 + .01 * (f - frames[0]), .8) for f in frames}
+
+
+def test_fixed_camera_hoop_fills_the_frames_before_it_was_first_detected():
+    # 16d7: the hoop of play is only detected from frame 30, after the first shot arrived.
+    detections = {f: [rim(.485, w=.03, h=.017)] if f >= 30 else [] for f in range(60)}
+    rims, stats = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert sorted(rims) == list(range(60)) and list(rims) == sorted(rims)
+    assert rims[5] == pytest.approx((.485, .3, .03, .017))
+    assert stats["static_hoop_frames"] == 30
+    unfilled, _ = track_detected_rims(detections, [])
+    assert sorted(unfilled) == list(range(30, 60))
+
+
+def test_static_fill_keeps_the_tracked_boxes_where_the_track_had_one():
+    # a451: the fill only covers frames with no box; detected frames keep their own.
+    rng = np.random.default_rng(1)
+    detections = {f: [rim(.485 + rng.normal(0, .001), w=.03, h=.017)] if f >= 30 else [] for f in range(60)}
+    rims, _ = track_detected_rims(detections, [], static_hoop_frames=25)
+    unfilled, _ = track_detected_rims(detections, [])
+    assert all(rims[f] == unfilled[f] for f in range(30, 60))
+    median_x = np.median([detections[f][0][1][0] for f in range(30, 60)])
+    assert all(rims[f][0] == pytest.approx(median_x) for f in range(30))
+
+
+def test_a_hoop_boxed_twice_per_frame_counts_its_frames_once():
+    # Two boxes a little apart on each of 15 frames are 15 frames seen, short of 25.
+    detections = {f: [rim(.4, h=.01), rim(.4, y=.308, h=.01, conf=.8)] if f < 15 else [] for f in range(60)}
+    rims, stats = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert sorted(rims) == list(range(15)) and stats["static_hoop_frames"] == 0
+
+
+def test_split_hoop_of_play_beside_neighbouring_hoops_is_filled():
+    # d063: the centre hoop goes unseen for 40 frames, so its track splits; the ball
+    # drops onto it, and the two neighbouring courts' hoops get no ball.
+    detections = _three_hoops(90)
+    for f in range(20, 60):
+        detections[f] = [d for d in detections[f] if d[1][0] != .485]
+    balls = _drop_onto(.50, range(65, 75))
+    rims, stats = track_detected_rims(detections, [], balls=balls, static_hoop_frames=25)
+    assert sorted(rims) == list(range(90))
+    assert rims[40] == pytest.approx((.485, .3, .03, .017))
+    unfilled, _ = track_detected_rims(detections, [], balls=balls)
+    assert 40 not in unfilled and unfilled[70][0] == pytest.approx(.485)
+
+
+def test_moving_hoop_is_not_frozen():
+    # A box drifting by over two rim widths is not a static hoop.
+    detections = {f: [rim(.30 + .002 * f)] if f < 40 else [] for f in range(60)}
+    rims, stats = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert sorted(rims) == list(range(40)) and stats["static_hoop_frames"] == 0
+
+
+def test_hoop_seen_too_briefly_is_not_spread_over_the_clip():
+    detections = {f: [rim(.4)] if f < 10 else [] for f in range(60)}
+    rims, _ = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert sorted(rims) == list(range(10))
+
+
+def test_no_fill_when_the_ball_goes_to_two_hoops():
+    # Play moves from hoop A (detected until frame 40) to hoop B: A must not stand in for B.
+    detections = {f: ([rim(.20, w=.03, h=.017, conf=.9)] if f < 40 else []) + [rim(.70, w=.03, h=.017, conf=.5)]
+                  for f in range(60)}
+    balls = {**_drop_onto(.215, range(10, 20)), **_drop_onto(.715, range(45, 53))}
+    rims, stats = track_detected_rims(detections, [], balls=balls, static_hoop_frames=25)
+    assert rims[10][0] == pytest.approx(.20) and 50 not in rims
+    assert stats["static_hoop_frames"] == 0
+
+
+def test_no_fill_among_several_hoops_without_ball_evidence():
+    detections = {f: ([rim(.20, conf=.95)] if f < 40 else []) + [rim(.50, conf=.6), rim(.80, conf=.6)]
+                  for f in range(60)}
+    rims, _ = track_detected_rims(detections, [], static_hoop_frames=25)
+    assert rims[10][0] == pytest.approx(.20) and 50 not in rims
+
+
+def test_static_fill_stays_inside_its_camera_segment():
+    detections = {f: [rim(.4)] if f < 30 else [] for f in range(60)}
+    rims, _ = track_detected_rims(detections, [45], static_hoop_frames=25)
+    assert sorted(rims) == list(range(45))
+
+
+def test_only_fixed_camera_profiles_fill_a_static_hoop(monkeypatch, tmp_path):
+    import app.analyzer as analyzer
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    def capture(*_args, **kwargs):
+        seen[profile] = kwargs.get("static_hoop_frames")
+        raise Stop
+
+    monkeypatch.setattr(analyzer, "track_detected_rims", capture)
+    for profile in ("moving", "elevated", "courtside"):
+        inputs = {"fps": 25.0, "width": 1920, "height": 1080, "total": 50, "frame_no": 49,
+                  "analyzed_fps": 25.0, "stride": 1, "mode": "game", "handedness": "right",
+                  "profile": profile, "game_mode": False, "rim": None, "rim_marked": False,
+                  "auto_rim": True, "tracked_rims": {}, "cut_frames": [], "balls": [], "poses": [],
+                  "player_frames": [{"frame": 0, "rims": []}], "flows": {}, "flow_rims": {},
+                  "calibration": None, "court_landmarks": None}
+        with pytest.raises(Stop):
+            analyzer.score_clip(inputs, None, tmp_path / "input.mp4")
+    assert seen == {"moving": None, "elevated": 25, "courtside": 25}

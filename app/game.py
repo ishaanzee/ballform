@@ -661,6 +661,12 @@ def _contest_points(player_frames: list[dict], near: dict, defender_id: int, bal
 LANDING_WINDOW_S = 1.
 # A layup, dunk or tip taking off farther out than this is a mistyped shot: it keeps the take-off spot.
 RIM_FINISH_REACH_FT = 15.
+# A finish is let go at the rim, within arm's reach of it: play-by-play puts 63 of 79
+# dev finishes 0-2 ft from the point under the rim. With no landing seen, the path past
+# the basket is unknown and the take-off spot (3.1-4.4 ft mean error on dev, against
+# 1.9 ft with the landing) says only where the shooter went up from, so the spot is
+# taken this close to the basket, on the take-off side.
+FINISH_SPOT_FT = 2.
 
 
 def _nearest_to_rim(start, end, rim) -> tuple[float, float]:
@@ -669,6 +675,15 @@ def _nearest_to_rim(start, end, rim) -> tuple[float, float]:
     length2 = float((b - a) @ (b - a))
     t = 0. if length2 < 1e-9 else min(1., max(0., float((r - a) @ (b - a)) / length2))
     return tuple(float(v) for v in a + (b - a) * t)
+
+
+def _toward_rim(point, rim, reach: float) -> tuple[float, float]:
+    """The point moved straight toward the floor point under the rim until it is at most reach from it."""
+    gap = math.dist(point, rim)
+    if gap <= reach:
+        return tuple(float(v) for v in point)
+    share = reach / gap
+    return tuple(float(r + (p - r) * share) for p, r in zip(point, rim))
 
 
 def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls: list[Detection], court_map,
@@ -707,12 +722,18 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
         # Play-by-play places a layup, dunk or tip where it is finished at the basket, not at the take-off:
         # the shooter is in the air between take-off and landing and finishes as that path passes the rim.
         finish = rim_finish and landing is not None and take_off_ft <= RIM_FINISH_REACH_FT
+        unseen_finish = rim_finish and landing is None and take_off_ft <= RIM_FINISH_REACH_FT
         if finish:
             on_half = _nearest_to_rim(on_half, near_half(landing["spot"], court), court.rim)
+        elif unseen_finish:
+            on_half = _toward_rim(on_half, court.rim, FINISH_SPOT_FT)
         distance = math.dist(on_half, court.rim)
         shot_zone = zone(on_half, court)
-        metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
-                        "shooter_court_x_ft": round(on_half[0], 1), "shooter_court_y_ft": round(on_half[1], 1)})
+        # Nobody shoots from off the court: a spot there is a mis-mapped player (feet hidden or
+        # taken from another player), so no distance is given rather than a wrong one (5f3e, 7ad6).
+        if shot_zone is not None:
+            metrics.update({"shot_distance_ft": round(distance, 1), "shot_zone": shot_zone,
+                            "shooter_court_x_ft": round(on_half[0], 1), "shooter_court_y_ft": round(on_half[1], 1)})
         if detail["jumped"]:
             where = (f"the shooter's feet ({detail['method']}) on the last grounded frame"
                      f"{'s' if len(detail['frames']) > 1 else ''} before take-off, "
@@ -725,9 +746,19 @@ def add_court_metrics(shots: list[ShotResult], player_frames: list[dict], balls:
             where = (f"the point where the shooter's path on the floor passes closest to the basket, between the "
                      f"take-off spot {take_off_ft:.1f} ft out ({where}) and the landing "
                      f"{landing['after_release_s']:.2f} s after release (frame {landing['frames'][0]})")
+        elif unseen_finish and take_off_ft > FINISH_SPOT_FT:
+            where = (f"a finish at the rim, within {FINISH_SPOT_FT:.0f} ft of it on the side of the take-off spot "
+                     f"{take_off_ft:.1f} ft out ({where}); the landing was not seen, so the path past the basket "
+                     "is unknown")
         margin = three_point_margin(on_half, court)
-        evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from {where}. "
-                        f"{court.dims['label']} {'zone ' + shot_zone.replace('_', ' ') if shot_zone else 'zone unavailable (off the calibrated half)'}"
+        if shot_zone is None:
+            # Separation and contest clearance in feet are measured from the same spot.
+            evidence.append(f"Court: shot distance withheld: the shooter's spot ({distance:.1f} ft from the basket, "
+                            f"measured from {where}) is off the calibrated court, so the feet were not mapped "
+                            "correctly. Separation and contest clearance in feet are withheld too.")
+            continue
+        evidence.append(f"Court: shot distance {distance:.1f} ft to the floor point under the rim, measured from "
+                        f"{where}. {court.dims['label']} zone {shot_zone.replace('_', ' ')}"
                         f", {abs(margin):.1f} ft {'behind' if margin >= 0 else 'inside'} the three-point line.")
         extrapolated = court_map.calibration.extrapolation_ft(spot)
         if extrapolated > 2:

@@ -4,6 +4,10 @@ Each labeled row is one shot in a finished job: its release time plus whatever
 is known (outcome, shot type, distance, zone). A row with an empty release_s
 marks a clip with no shots, so every detection in it counts as a false shot.
 Predicted shots are matched to labels by release time, one to one.
+
+Two reports of the same labels can be compared shot by shot (``--compare``,
+``--compare-reports``): a paired test, which sees much smaller changes than
+the two summaries' intervals do.
 """
 from __future__ import annotations
 
@@ -11,10 +15,12 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import statistics
 import sys
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -76,6 +82,7 @@ class ClipResult:
     matches: list[Match] = field(default_factory=list)
     error: str | None = None
     game: str = ""
+    duration_s: float | None = None
 
 
 def _float(value: str, line: int, name: str) -> float | None:
@@ -107,18 +114,26 @@ def read_labels(path: Path) -> list[Label]:
     return labels
 
 
+def _pair_times(first: list[float | None], second: list[float | None], tolerance_s: float) -> list[tuple[int, int]]:
+    """Pair two lists of times one to one, closest pairs first, at most ``tolerance_s`` apart."""
+    pairs = sorted((abs(a - b), i, j) for i, a in enumerate(first) for j, b in enumerate(second)
+                   if a is not None and b is not None and abs(a - b) <= tolerance_s)
+    used_first, used_second, paired = set(), set(), []
+    for _, i, j in pairs:
+        if i not in used_first and j not in used_second:
+            used_first.add(i)
+            used_second.add(j)
+            paired.append((i, j))
+    return paired
+
+
 def match_shots(labels: list[Label], shots: list[dict], tolerance_s: float) -> list[Match]:
     """Pair labels with predicted shots by release time, closest pairs first."""
     labels = [label for label in labels if label.release_s is not None]
-    pairs = sorted((abs(label.release_s - shot["release_s"]), i, j)
-                   for i, label in enumerate(labels) for j, shot in enumerate(shots)
-                   if shot.get("release_s") is not None and abs(label.release_s - shot["release_s"]) <= tolerance_s)
-    used_labels, used_shots, matches = set(), set(), []
-    for _, i, j in pairs:
-        if i not in used_labels and j not in used_shots:
-            used_labels.add(i)
-            used_shots.add(j)
-            matches.append(Match(labels[i], shots[j]))
+    paired = _pair_times([label.release_s for label in labels], [shot.get("release_s") for shot in shots],
+                         tolerance_s)
+    matches = [Match(labels[i], shots[j]) for i, j in paired]
+    used_labels, used_shots = {i for i, _ in paired}, {j for _, j in paired}
     matches += [Match(label, None) for i, label in enumerate(labels) if i not in used_labels]
     matches += [Match(None, shot) for j, shot in enumerate(shots) if j not in used_shots]
     return matches
@@ -144,6 +159,34 @@ def _metric(shot: dict, name: str):
 
 def _pct(part: int, whole: int) -> str:
     return f"{part}/{whole} ({100 * part / whole:.0f}%)" if whole else "0/0"
+
+
+Z_95 = 1.959964  # two-sided 95% normal quantile
+PROPORTION = re.compile(r"(\d+)/(\d+)(?: \(\d+%\))?$")  # what _pct writes
+
+
+def wilson(part: int, whole: int) -> tuple[float, float] | None:
+    """The 95% Wilson score interval of part/whole, or None when whole is 0."""
+    if not whole:
+        return None
+    rate, z2 = part / whole, Z_95 ** 2
+    centre = (rate + z2 / (2 * whole)) / (1 + z2 / whole)
+    half = Z_95 * math.sqrt(rate * (1 - rate) / whole + z2 / (4 * whole ** 2)) / (1 + z2 / whole)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def intervals(summary: dict) -> dict:
+    """The 95% Wilson interval, in percent, of each "part/whole (pct%)" value in a summary, keyed
+    the same way. Works on old reports too."""
+    found = {}
+    for key, value in summary.items():
+        if isinstance(value, dict):
+            if inner := intervals(value):
+                found[key] = inner
+        elif isinstance(value, str) and (proportion := PROPORTION.match(value)):
+            if bounds := wilson(int(proportion[1]), int(proportion[2])):
+                found[key] = [round(100 * bound, 1) for bound in bounds]
+    return found
 
 
 def summarize(clips: list[ClipResult]) -> dict:
@@ -199,6 +242,21 @@ def summarize(clips: list[ClipResult]) -> dict:
     summary["zone"] = {"accuracy": _pct(sum(_metric(m.shot, "shot_zone") == m.label.zone for m in zoned), len(zoned)),
                        "two_vs_three": _pct(sum((_metric(m.shot, "shot_zone") in THREES) == (m.label.zone in THREES)
                                                 for m in zoned), len(zoned))}
+
+    # One number for finding a shot and calling it right, and one for false shots: the pair to watch.
+    right = sum(_called(m.shot.get("outcome", "")) == m.label.outcome for m in judged)
+    summary["primary"] = {"found_and_called_right": _pct(right, len(labeled)),
+                          "false_shots": len(predicted) - len(paired)}
+    scored = [clip for clip in clips if clip.error is None]
+    timed = [clip for clip in scored if clip.duration_s]
+    minutes = sum(clip.duration_s for clip in timed) / 60
+    if minutes:
+        false_shots = sum(1 for clip in timed for m in clip.matches if m.shot and not m.label)
+        summary["primary"]["false_shots_per_minute"] = round(false_shots / minutes, 2)
+        summary["primary"]["footage_minutes"] = round(minutes, 1)
+    if len(timed) < len(scored):
+        summary["primary"]["clips_without_duration"] = len(scored) - len(timed)
+    summary["interval_95_pct"] = intervals(summary)
     return summary
 
 
@@ -226,6 +284,30 @@ def shot_rows(clips: list[ClipResult]) -> list[dict]:
                 "predicted_shooter_track": (shot.get("game") or {}).get("players", {}).get("shooter_track_id"),
             })
     return rows
+
+
+def clip_rows(clips: list[ClipResult]) -> list[dict]:
+    """Each clip with its length, or its problem if it failed. A comparison reads which clips were
+    scored from these, since a clip with no shot and no false shot has no shot row."""
+    return [{"job_id": clip.job_id, "problem": clip.error} if clip.error else
+            {"job_id": clip.job_id, "duration_s": clip.duration_s} for clip in clips]
+
+
+def _duration_s(result: dict, job_dir: Path) -> float | None:
+    """The clip's length: the result's (saved and rerun results, and replays from the rerun's
+    frame count), else read from the job's video, else None."""
+    duration = (result.get("video") or {}).get("duration_s")
+    if duration:
+        return float(duration)
+    source = next(iter(sorted(job_dir.glob("input.*"))), None)
+    if source is None:
+        return None
+    import cv2
+
+    capture = cv2.VideoCapture(str(source))
+    fps, frames = capture.get(cv2.CAP_PROP_FPS), capture.get(cv2.CAP_PROP_FRAME_COUNT)
+    capture.release()
+    return round(frames / fps, 2) if fps > 0 and frames > 0 else None
 
 
 def _settings(job_dir: Path) -> dict:
@@ -287,7 +369,9 @@ def replay(job_id: str, jobs_dir: Path, runs_dir: Path, court_landmarks: Path | 
     if inputs["calibration"] is not None and source is not None:
         cache = runs_dir / job_id / f"court_map-{_court_map_key(inputs['court_landmarks'], saved, source)}.pkl"
     scored = score_clip(inputs, None, source, court_map_cache=cache)
-    return {"shots": [shot.to_dict() for shot in scored["shots"]]}
+    fps, total = inputs["fps"], inputs["total"]
+    return {"shots": [shot.to_dict() for shot in scored["shots"]],
+            "video": {"duration_s": round(total / fps, 2) if fps and total else None}}
 
 
 def _court_map_key(landmarks: dict, saved: Path, source: Path) -> str:
@@ -345,17 +429,126 @@ def evaluate(labels: list[Label], jobs_dir: Path, tolerance_s: float, runs_dir: 
                 continue
             game = next((game_of(label.notes) for label in job_labels if game_of(label.notes)), "")
             clips.append(ClipResult(job_id, match_shots(job_labels, result.get("shots") or [], tolerance_s),
-                                    game=game))
+                                    game=game, duration_s=_duration_s(result, jobs_dir / job_id)))
     return clips
 
 
-def _print(summary: dict, rows: list[dict]) -> None:
+def mcnemar_p(gains: int, losses: int) -> float:
+    """Exact two-sided McNemar p value: how often a split of the changed shots at least this
+    uneven happens if each change were as likely a gain as a loss (binomial, p = 1/2)."""
+    changed = gains + losses
+    tail = sum(math.comb(changed, k) for k in range(max(gains, losses), changed + 1))
+    return min(1.0, 2 * tail / 2 ** changed)
+
+
+def _shot_state(row: dict) -> dict:
+    """What a labeled shot row says: found or not, and whether its outcome call and type are right."""
+    label_outcome, _, predicted_outcome = row["outcome"].partition(" / ")
+    label_type, _, predicted_type = row["shot_type"].partition(" / ")
+    found = row["problem"] == ""
+    return {"found": found, "judged": label_outcome in {"made", "missed"}, "typed": bool(label_type),
+            "right": found and _called(predicted_outcome) == label_outcome,
+            "type_right": found and _type_correct(label_type, predicted_type)}
+
+
+def _index(report: dict) -> tuple[dict, dict, set]:
+    """A report's labeled shot rows by (job_id, label_release_s, repeat), its false shots' release
+    times by job, and the jobs it scored. Reports from before the clip list show only jobs with a
+    shot row."""
+    labeled, false_shots, failed, seen = {}, {}, set(), Counter()
+    for row in report["shots"]:
+        if "label_release_s" not in row:
+            failed.add(row["job_id"])
+        elif row["label_release_s"] is not None:
+            key = (row["job_id"], row["label_release_s"])
+            labeled[(*key, seen[key])] = row  # a label repeated at the same time stays two shots
+            seen[key] += 1
+        else:
+            false_shots.setdefault(row["job_id"], []).append(row["predicted_release_s"])
+    if "clips" in report:
+        scored = {clip["job_id"] for clip in report["clips"] if not clip.get("problem")}
+    else:
+        scored = {row["job_id"] for row in report["shots"]} - failed
+    return labeled, false_shots, scored
+
+
+def _changes(pairs: list[tuple[dict, dict]], name: str) -> dict:
+    gains = sum(not before[name] and after[name] for before, after in pairs)
+    losses = sum(before[name] and not after[name] for before, after in pairs)
+    return {"before": sum(before[name] for before, _ in pairs), "after": sum(after[name] for _, after in pairs),
+            "of": len(pairs), "gains": gains, "losses": losses, "p": mcnemar_p(gains, losses)}
+
+
+def compare(before: dict, after: dict, tolerance_s: float = .75) -> dict:
+    """Pair two reports' shot rows and count, per metric, the shots that got better (gains) and
+    worse (losses) from ``before`` to ``after``, with the exact McNemar p value of that split.
+
+    Labeled shots pair by (job_id, label_release_s); a metric scored only on found shots counts
+    the shots found in both. False shots pair within each clip scored by both, by predicted
+    release time (one to one, closest first, within ``tolerance_s``); a false shot gone is a gain.
+    """
+    before_labeled, before_false, before_scored = _index(before)
+    after_labeled, after_false, after_scored = _index(after)
+    pairs = [(_shot_state(before_labeled[key]), _shot_state(after_labeled[key]))
+             for key in before_labeled if key in after_labeled]
+    both_found = [(a, b) for a, b in pairs if a["found"] and b["found"]]
+    metrics = {
+        "found": _changes(pairs, "found"),
+        "outcome_right_found_in_both": _changes([(a, b) for a, b in both_found if a["judged"] and b["judged"]],
+                                                "right"),
+        "found_and_called_right": _changes(pairs, "right"),
+        "fine_type_right_found_in_both": _changes([(a, b) for a, b in both_found if a["typed"] and b["typed"]],
+                                                  "type_right"),
+    }
+    jobs = before_scored & after_scored
+    gone = new = counted_before = counted_after = 0
+    for job in jobs:
+        old, now = before_false.get(job, []), after_false.get(job, [])
+        same = len(_pair_times(old, now, tolerance_s))
+        gone, new = gone + len(old) - same, new + len(now) - same
+        counted_before, counted_after = counted_before + len(old), counted_after + len(now)
+    metrics["false_shots"] = {"before": counted_before, "after": counted_after, "gains": gone, "losses": new,
+                              "p": mcnemar_p(gone, new)}
+    return {"labeled_shots_in_both": len(pairs), "labeled_shots_only_before": len(before_labeled) - len(pairs),
+            "labeled_shots_only_after": len(after_labeled) - len(pairs), "clips_compared": len(jobs),
+            "false_shots_not_compared": (sum(len(times) for job, times in before_false.items() if job not in jobs)
+                                         + sum(len(times) for job, times in after_false.items() if job not in jobs)),
+            "metrics": metrics}
+
+
+def _print_paired(paired: dict, before: str, after: str) -> None:
+    print(f"\npaired, {after} against {before}: {paired['labeled_shots_in_both']} labeled shots in both "
+          f"({paired['labeled_shots_only_before']} only before, {paired['labeled_shots_only_after']} only after), "
+          f"false shots compared in {paired['clips_compared']} clips")
+    for name, metric in paired["metrics"].items():
+        of = f" of {metric['of']}" if "of" in metric else ""
+        p = f"{metric['p']:.3f}" if metric["p"] >= .001 else "<0.001"
+        print(f"  {name:<30} gains {metric['gains']:<3} losses {metric['losses']:<3} p {p:<6}  "
+              f"{metric['before']} -> {metric['after']}{of}")
+    if paired["false_shots_not_compared"]:
+        print(f"  ({paired['false_shots_not_compared']} false shots not compared: their clip is missing from one "
+              "report, or it is an older report that lists only clips with a shot row)")
+    print("  gains: right after, not before (a false shot: gone after); p: exact two-sided McNemar test")
+
+
+def _with_interval(value) -> str:
+    """A summary value, and after a proportion its 95% Wilson interval in percent."""
+    proportion = PROPORTION.match(value) if isinstance(value, str) else None
+    bounds = wilson(int(proportion[1]), int(proportion[2])) if proportion else None
+    return f"{value} [{100 * bounds[0]:.0f}-{100 * bounds[1]:.0f}]" if bounds else f"{value}"
+
+
+def _print_summary(summary: dict) -> None:
     print(f"\n{summary['clips']} clips ({summary['clips_failed']} failed), {summary['labeled_shots']} labeled shots, "
           f"{summary['predicted_shots']} predicted, {summary['matched']} matched")
-    for key in ("detection", "outcome", "shot_type", "distance_ft", "zone"):
-        print(f"  {key}: " + ", ".join(f"{name} {value}" for name, value in summary[key].items()))
+    for key in ("primary", "detection", "outcome", "shot_type", "distance_ft", "zone"):
+        print(f"  {key}: " + ", ".join(f"{name} {_with_interval(value)}" for name, value in summary[key].items()))
     if "release_error_s_median" in summary:
         print(f"  median release-time error: {summary['release_error_s_median']} s")
+    print("  [low-high]: 95% Wilson interval, in percent")
+
+
+def _print_shots(rows: list[dict]) -> None:
     print("\nshots (label / predicted):")
     for row in rows:
         if "label_release_s" not in row:
@@ -383,9 +576,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--court-landmarks", type=Path, default=EVAL_DIR / "court_landmarks.json",
                         help="automatic court calibrations for jobs without landmarks in settings.json "
                              "(scripts/auto_court_landmarks.py); used by --rerun and --replay")
-    parser.add_argument("--tolerance", type=float, default=.75, help="max release-time gap to match a shot, seconds")
+    parser.add_argument("--tolerance", type=float, default=.75,
+                        help="max release-time gap to match a shot (and to pair false shots in a comparison), seconds")
     parser.add_argument("--out", type=Path, default=EVAL_DIR / "report.json")
+    parser.add_argument("--summary-only", action="store_true",
+                        help="print only the summary, any failed clips and the --compare result, and leave the "
+                             "per-shot and per-game sections out of the report; score holdouts this way")
+    parser.add_argument("--compare", type=Path, metavar="REPORT",
+                        help="pair this run's shots with an earlier report.json's and print each metric's gains, "
+                             "losses and exact McNemar p value")
+    parser.add_argument("--compare-reports", type=Path, nargs=2, metavar=("BEFORE", "AFTER"),
+                        help="compare two saved reports the same way, scoring nothing")
     args = parser.parse_args(argv)
+    if args.compare_reports:
+        if args.compare:
+            parser.error("choose --compare or --compare-reports")
+        before, after = (_read_report(path, parser) for path in args.compare_reports)
+        _print_paired(compare(before, after, args.tolerance), *map(str, args.compare_reports))
+        return 0
+    earlier = _read_report(args.compare, parser) if args.compare else None
     try:
         labels = read_labels(args.labels)
     except (OSError, ValueError) as exc:
@@ -398,8 +607,26 @@ def main(argv: list[str] | None = None) -> int:
     clips = evaluate(labels, args.jobs, args.tolerance, args.runs, how, args.workers if args.replay else 1,
                      args.court_landmarks)
     summary, rows = summarize(clips), shot_rows(clips)
-    _print(summary, rows)
+    _print_summary(summary)
+    if not args.summary_only:
+        _print_shots(rows)
+    elif failed := [row for row in rows if "label_release_s" not in row]:
+        # Which clips failed, and why, says nothing about their shots.
+        print("\nfailed clips:\n" + "\n".join(f"  {row['job_id']}: {row['problem']}" for row in failed))
+    report = {"summary": summary}
+    if earlier is not None:
+        report["paired"] = {"against": str(args.compare),
+                            **compare(earlier, {"shots": rows, "clips": clip_rows(clips)}, args.tolerance)}
+        _print_paired(report["paired"], str(args.compare), "this run")
+    if not args.summary_only:
+        report.update(by_game=_by_game(clips), shots=rows, clips=clip_rows(clips))
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(report, indent=2))
+    print(f"\nwrote {args.out}")
+    return 0
+
+
+def _by_game(clips: list[ClipResult]) -> dict:
     games: dict[str, list[ClipResult]] = {}
     for clip in clips:
         games.setdefault(clip.game or "unknown", []).append(clip)
@@ -408,9 +635,18 @@ def main(argv: list[str] | None = None) -> int:
                for game, group in sorted(games.items())}
     for value in by_game.values():
         value["outcome"] = {key: value["outcome"][key] for key in ("accuracy_when_called", "misses_called_made")}
-    args.out.write_text(json.dumps({"summary": summary, "by_game": by_game, "shots": rows}, indent=2))
-    print(f"\nwrote {args.out}")
-    return 0
+    return by_game
+
+
+def _read_report(path: Path, parser: argparse.ArgumentParser) -> dict:
+    """A saved report with its per-shot rows, to pair with."""
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        parser.error(f"{path}: {exc}")
+    if "shots" not in report:
+        parser.error(f"{path} has no per-shot rows (written with --summary-only?), so there is nothing to pair")
+    return report
 
 
 if __name__ == "__main__":
