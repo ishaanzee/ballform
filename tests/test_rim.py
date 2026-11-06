@@ -51,11 +51,13 @@ def test_camera_following_play_keeps_each_hoop_for_its_own_time(follows_play):
     detections.update({f: [] for f in range(100, 160)})
     detections.update({f: [rim(.95 - .003 * (f - 160), conf=.8)] for f in range(160, 300)})
     detections[130] = [rim(.6, y=.35, conf=.6)]  # a one-off false box while no hoop is in view
+    detections[110] = detections[125] = [rim(.2, y=.5, conf=.8)]  # two confident boxes a gap apart
     detections[50].append(rim(.8, y=.4, conf=.9))  # and one beside the hoop in view
     rims, stats = track_detected_rims(detections, [], follows_play=follows_play)
     # Without it the steadier, later hoop wins the whole segment.
     assert (0 in rims, 200 in rims) == (follows_play, True)
     assert 130 not in rims and rims.get(50, (.3,))[0] == pytest.approx(.3, abs=.002)
+    assert 110 not in rims and 125 not in rims
     assert stats.get("hoops_by_time", 0) == follows_play
     # The scorer does not bridge the rim from one hoop to the other.
     assert stats["hoop_switches"] == ([160] if follows_play else [])

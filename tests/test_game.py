@@ -326,7 +326,7 @@ def _standing(frame, track_id, spot, court_to_image, lift_px=0., wrist=None):
     return PoseFrame(frame, frame / 30, landmarks, track_id=track_id)
 
 
-def _court_shot(jump=True, defender_spot=(0., 22.)):
+def _court_shot(jump=True, defender_spot=(0., 22.), shooter_spot=(-5., 29.)):
     from app.game import add_court_metrics
     court_map, court_to_image = _court_map()
     frames = []
@@ -334,7 +334,7 @@ def _court_shot(jump=True, defender_spot=(0., 22.)):
         # The shooter plants at (-5, 29) and leaves the floor after frame 18.
         lift = 12. * max(0, frame - 18) if jump else 0.
         frames.append({"frame": frame, "time_s": frame / 30, "players": [
-            _standing(frame, 1, (-5., 29.), court_to_image, lift),
+            _standing(frame, 1, shooter_spot, court_to_image, lift),
             _standing(frame, 2, defender_spot, court_to_image, wrist=(.5, .3))]})
     game = {"release_frame": 24, "players": {"shooter_track_id": 1, "defender_track_id": 2},
             "metrics": {"separation_torso": 2.5, "contest_clearance_torso": 1.2, "visible_hand_clearance_torso": None},
@@ -487,6 +487,15 @@ def test_spot_off_the_court_is_withheld(spot):
     assert metrics["shot_distance_ft"] is None and metrics["shot_zone"] is None
     assert metrics["shooter_court_x_ft"] is None
     assert "shot distance withheld" in shot.game["evidence"][0]
+
+
+def test_shooter_off_the_court_gets_no_separation_or_clearance_in_feet():
+    # Separation and contest clearance in feet are measured from the same mis-mapped spot.
+    game, _ = _court_shot(shooter_spot=(30., 29.))
+    metrics = game["metrics"]
+    assert metrics["shot_distance_ft"] is None
+    assert metrics["separation_ft"] is None and metrics["contest_clearance_ft"] is None
+    assert metrics["separation_torso"] == 2.5  # the torso-length metrics stay
 
 
 def test_jump_shot_keeps_the_take_off_spot_and_mistyped_long_finishes_too():
