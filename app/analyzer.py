@@ -29,7 +29,7 @@ from app.game import add_court_metrics, analyze_game_shots
 from app.camera_motion import anchor_frame, build_court_map, court_json, draw_court
 from app.court import STANDARDS, fit as fit_court, parse_landmarks
 from app.court_detect import ClipCalibration
-from app.scoring import RimInput, _rim_at, analyze_shots, classify_view
+from app.scoring import RimInput, _rim_at, analyze_shots, bridge_rim_gaps, classify_view
 from app.shots import find_attempts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
@@ -737,6 +737,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                 flows[frame_no_] = {"net": 0.0, "reference": 0.0}
     normalized_flow = _normalize_net_flow(flows)
     scoring_rim, rim_source = _scoring_rim(profile, rim_marked, rim, tracked_rims, detected_rims)
+    scoring_rim = bridge_rim_gaps(scoring_rim, fps, cut_frames)
     shots = []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
