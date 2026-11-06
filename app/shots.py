@@ -31,6 +31,7 @@ from app.models import Detection, PoseFrame, ShotResult
 from app.possession import _unposed_reach
 from app import scoring
 from app.scoring import BOUNCE_REACH, RimInput, _rim_at, arc_apexes, rim_by_arrival, rim_outcome
+from app.outcome_model import remember
 from app.tracking import body_geometry
 
 # Wrist-to-ball distance in torso lengths, as game.py's possession votes; a
@@ -554,7 +555,7 @@ def _overlapping(runs: list[Run], start: int, end: int) -> Run | None:
 
 
 def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim: RimInput,
-             net_motion, fps: float) -> tuple[str, float, list[str], int | None]:
+             net_motion, fps: float) -> tuple[str, float, list[str], int | None, tuple | None]:
     # A dunk or a layup carried up crosses the rim plane before the hold ends
     # (``start``), so the descent is followed from the top of the ball's path.
     segment = [b for b in balls if min(start, apex_frame) <= b.frame <= apex_frame + 1.5 * fps]
@@ -563,7 +564,7 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
         if event is not None and "ball_in_basket" in event.sources:
             evidence.append(f"The detector's ball-in-basket class fired (peak {event.peak:.2f}) at frame {event.frame}; "
                             "lone detections also fire on an empty net, so it is not treated as a make without a rim.")
-        return "unknown", 0., evidence, None
+        return "unknown", 0., evidence, None, None
     outcome, confidence, evidence, frame = rim_outcome(segment, apex_frame, rim, net_motion, fps, balls)
     if event is not None and "ball_in_basket" in event.sources:
         motion = _net_motion_peak(net_motion, event.frame, round(event.frame + .5 * fps))
@@ -572,7 +573,8 @@ def _outcome(balls, start: int, event: BasketEvent | None, apex_frame: int, rim:
             outcome, confidence, frame = "likely made", .6, event.frame
             evidence.append(f"No rim-plane crossing was visible; ball-in-basket detection with net-specific motion "
                             f"({motion:.1f}× baseline) supports a make")
-    return outcome, confidence, evidence, frame
+    # What the outcome was measured from, kept on the shot for the learned outcome model.
+    return outcome, confidence, evidence, frame, (apex_frame, segment, balls)
 
 
 def _jump_type(shot_release: int, c6: list[Run], c7: list[Run], fps: float,
@@ -694,8 +696,8 @@ def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_t
           evidence: list[str], attempt: dict) -> ShotResult:
     span = [b for b in balls if start <= b.frame <= end] or [b for b in balls if b.frame == release]
     first, last = (span[0], span[-1]) if span else (None, None)
-    outcome_label, confidence, outcome_evidence, outcome_frame = outcome
-    return ShotResult(
+    outcome_label, confidence, outcome_evidence, outcome_frame, *measured = outcome
+    shot = ShotResult(
         number=0,
         start_s=round(first.time_s if first else release / fps, 2),
         release_s=round(release / fps, 2),
@@ -709,6 +711,9 @@ def _shot(balls, start: int, release: int, end: int, fps: float, outcome, shot_t
         shot_type=shot_type,
         attempt=attempt,
     )
+    if measured and measured[0] is not None:
+        remember(shot, *measured[0])
+    return shot
 
 
 def missed_before_follow_up(anchors: list[Anchor], fps: float) -> None:

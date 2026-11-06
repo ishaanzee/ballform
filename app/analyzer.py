@@ -30,7 +30,9 @@ from app.camera_motion import anchor_frame, build_court_map, court_json, draw_co
 from app.court import STANDARDS, fit as fit_court, parse_landmarks
 from app.court_detect import ClipCalibration
 from app.scoring import RimInput, _rim_at, analyze_shots, bridge_rim_gaps, classify_view
-from app.shots import find_attempts, type_by_distance
+from app.outcome_model import call_outcomes, clip_context, outcome_features as outcome_features_of
+from app.shot_verifier import kept_shots, shot_features
+from app.shots import find_attempts, hand_contacts, type_by_distance
 from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jersey_descriptor, stitch_tracks
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CutDetector, camera_profile, regions, validate_court
@@ -744,7 +746,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     # Where the detected rim switches from one hoop to the other it is not bridged, as at a cut.
     switches = rim_stats.get("hoop_switches", []) if scoring_rim is detected_rims else []
     scoring_rim = bridge_rim_gaps(scoring_rim, fps, [*cut_frames, *switches])
-    shots = []
+    shots, contacts = [], []
     boundaries = [0, *cut_frames, frame_no + 1]
     for start, end in zip(boundaries, boundaries[1:]):
         segment_balls = _interpolate_track([b for b in balls if start <= b.frame < end], max(2, round(fps * .25)))
@@ -752,10 +754,11 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
         segment_shots = analyze_shots(segment_balls, segment_poses, fps, scoring_rim, normalized_flow,
                                      aspect_ratio=width / height, handedness=handedness, game_mode=game_mode)
         if game_mode:
-            segment_shots = find_attempts(segment_shots, segment_balls,
-                                          [f for f in player_frames if start <= f["frame"] < end],
+            segment_frames = sorted((f for f in player_frames if start <= f["frame"] < end), key=lambda f: f["frame"])
+            segment_shots = find_attempts(segment_shots, segment_balls, segment_frames,
                                           fps, scoring_rim, width / height, normalized_flow,
                                           following=profile == "moving")
+            contacts += hand_contacts(segment_frames, sorted(segment_balls, key=lambda b: b.frame), width / height)
         for shot in segment_shots:
             if scoring_rim is None:
                 shot.evidence = ["Outcome unavailable: no rim was detected or marked."
@@ -763,6 +766,20 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
                                  for item in shot.evidence]
             shot.number = len(shots) + 1
             shots.append(shot)
+    outcome_features = verifier_features = None
+    if game_mode:
+        # Both learned models read the rules' shots and calls before either changes them.
+        measured = outcome_features_of(shots, scoring_rim, normalized_flow, fps,
+                                       clip_context(width, height, observed_balls, player_frames))
+        verifier_features = shot_features(shots, scoring_rim, fps, player_frames, observed_balls, contacts,
+                                          cut_frames, [m[0] if m else None for m in measured])
+        # Learned make/miss call where a rim was known at arrival (BALLFORM_OUTCOME_MODEL=0: rules only).
+        outcome_features = call_outcomes(shots, scoring_rim, normalized_flow, fps, None, measured=measured)
+        # Learned check of each shot; drops the unlikely ones (BALLFORM_SHOT_VERIFIER=0: keep all).
+        kept = kept_shots(shots, verifier_features, profile)
+        shots = [shots[i] for i in kept]
+        outcome_features = [outcome_features[i] for i in kept]
+        verifier_features = [verifier_features[i] for i in kept]
     game_summary = None
     if mode == "one_on_one":
         # Multi-person pose order is not a player identity. Do not publish mixed-player form metrics.
@@ -801,7 +818,8 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
     return {"observed_balls": observed_balls, "handler_method": handler_method, "stitched": stitched,
             "detected_rims": detected_rims, "rim_stats": rim_stats, "scoring_rim": scoring_rim,
             "rim_source": rim_source, "shots": shots, "game_summary": game_summary, "court_map": court_map,
-            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds}
+            "view": view, "view_confidence": view_confidence, "court_seconds": court_seconds,
+            "outcome_features": outcome_features, "verifier_features": verifier_features}
 
 
 def save_scoring_inputs(inputs: dict, path: Path) -> None:
