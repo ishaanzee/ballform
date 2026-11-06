@@ -38,9 +38,17 @@ import pbp  # noqa: E402
 OUT_DIR = pbp.STAGING / "scorebug"
 LOOKALIKES = str.maketrans({"З": "3", "з": "3", "Э": "3", "э": "3", "н": "h", "О": "O", "о": "o", "Т": "T", "т": "t", "Н": "H", "К": "K",
                             "к": "k", "Е": "E", "е": "e", "С": "C", "с": "c", "Р": "P", "р": "p", "А": "A",
-                            "а": "a", "В": "B", "М": "M", "Х": "X", "І": "I", "Ι": "I", "ı": "i", "：": ":",
-                            "∶": ":", "꞉": ":", ";": ":", "‚": ",", "·": ".", "•": "."})
-PERIOD = re.compile(r"^(?:([1-4Il])(?:ST|ND|RD|TH)|Q([1-4])|([1-4])Q|([2-9])?OT([2-9])?)$", re.I)
+                            "а": "a", "В": "B", "М": "M", "Х": "X", "І": "I", "Ι": "I", "ı": "i", "İ": "I",
+                            "：": ":", "∶": ":", "꞉": ":", ";": ":", "‚": ",", "·": ".", "•": "."})
+# An I or l (any case) read for the 1 of 1ST; only 1 takes ST, so 'IND' (Indiana) is not a period.
+PERIOD = re.compile(r"^(?:([1-4])(?:ST|ND|RD|TH)|([Il])ST|Q([1-4])|([1-4])Q|([2-9])?OT([2-9])?)$", re.I)
+# Spelled out by some local feeds: 'THIRD QUARTER', '2ND QTR', 'DOUBLE OVERTIME', 'HALFTIME'.
+ORDINALS = {"FIRST": 1, "SECOND": 2, "THIRD": 3, "FOURTH": 4, "DOUBLE": 2, "TRIPLE": 3}
+ORDINAL = r"FIRST|SECOND|THIRD|FOURTH|[1-4](?:ST|ND|RD|TH)|[Il]ST"
+SPELLED = re.compile(rf"(?P<quarter>{ORDINAL})\s*(?:QUARTER|QTR)"
+                     rf"|(?:(?P<overtime>{ORDINAL}|DOUBLE|TRIPLE)\s*)?(?:OVERTIME|OT)"
+                     r"|(?P<half>HALF[\s-]*TIME)", re.I)
+WORD = re.compile(rf"(?:{SPELLED.pattern})(?![A-Za-z0-9])|\S+", re.I)  # a spelled period stays one token
 MMSS = re.compile(r"^(\d{1,2}):(\d{2})$")
 TENTHS = re.compile(r"^(\d{1,2})\.(\d)$")
 SHOT = re.compile(r"^:(\d{1,2})$")
@@ -50,17 +58,33 @@ PIECES = re.compile(r"\d{1,2}:\d{2}|\d{1,2}\.\d|:\d{1,2}|\d+|[A-Za-z]+")
 
 # ---------------------------------------------------------------- parsing (pure)
 
+def _ordinal(word: str) -> int:
+    """'THIRD' / '3RD' / 'IST' / 'DOUBLE' -> 3 / 3 / 1 / 2."""
+    word = word.upper()
+    return ORDINALS.get(word) or (int(word[0]) if word[0] in "1234" else 1)
+
+
 def parse_period(token: str) -> int | None:
-    """'1ST' / 'IST' / 'Q4' / '4Q' / '4TH' / 'OT' / '2OT' / 'OT2' -> period number (OT = 5)."""
-    found = PERIOD.match(token.translate(LOOKALIKES).strip())
+    """'1ST' / 'IST' / 'Q4' / '4Q' / '4TH' / 'OT' / '2OT' / 'OT2' -> period number (OT = 5).
+    Spelled out: 'THIRD QUARTER' / '3RD QTR' -> 3, 'OVERTIME' -> 5, '2ND OT' / 'DOUBLE OVERTIME'
+    -> 6, 'HALFTIME' -> 2 (parse_reading keeps it only on a 0.0 clock)."""
+    token = token.translate(LOOKALIKES).strip()
+    found = PERIOD.match(token)
+    if found:
+        ordinal, one, q, q2, ot_pre, ot_post = found.groups()
+        if ordinal or one:
+            return int(ordinal or 1)
+        if q or q2:
+            return int(q or q2)
+        return 4 + int(ot_pre or ot_post or 1)
+    found = SPELLED.fullmatch(token)
     if not found:
         return None
-    ordinal, q, q2, ot_pre, ot_post = found.groups()
-    if ordinal:
-        return 1 if ordinal in "Il" else int(ordinal)
-    if q or q2:
-        return int(q or q2)
-    return 4 + int(ot_pre or ot_post or 1)
+    if found["quarter"]:
+        return _ordinal(found["quarter"])
+    if found["half"]:
+        return 2
+    return 4 + (_ordinal(found["overtime"]) if found["overtime"] else 1)
 
 
 def parse_game_clock(token: str) -> float | None:
@@ -103,7 +127,7 @@ def tokens_of(observations) -> list[Token]:
     for text, conf, (x, y, w, h) in observations:
         text = text.translate(LOOKALIKES)
         n = max(1, len(text))
-        for word in re.finditer(r"\S+", text):
+        for word in WORD.finditer(text):
             pieces = [(word.group(), word.start())]
             if parse_period(word.group()) is None and parse_game_clock(word.group()) is None:
                 pieces = [(m.group(), word.start() + m.start()) for m in PIECES.finditer(word.group())]
@@ -177,6 +201,9 @@ def parse_reading(observations, valid_scores=None, scores_for=None) -> Reading:
         period = min(periods, key=lambda p: _dist(p, clock))
         reading.period = parse_period(period.text)
         used.add(id(period))
+        spelled = SPELLED.fullmatch(period.text)
+        if spelled and spelled["half"] and reading.clock:  # a clock beside HALFTIME counts down the break
+            reading.period = None
     shots = [t for t in tokens if SHOT.match(t.text) and int(t.text[1:]) <= 24]
     if shots:
         shot = min(shots, key=lambda s: _dist(s, clock))
@@ -335,9 +362,22 @@ def locate(observations: dict[int, list], width: int, height: int):
     h = sorted(c.h for _, c in anchors)[len(anchors) // 2]
     near_frames = {f for f, c in anchors if abs(c.cx - cx) < 4 * h and abs(c.cy - cy) < 2 * h}
     for frame in near_frames:
-        for t in tokens_of(observations[frame]):
-            if abs(t.cx - cx) < .2 * width and abs(t.cy - cy) < max(5 * h, .08 * height) and t.h < 3 * h:
-                boxes.append(t.box)
+        tokens = tokens_of(observations[frame])
+        inside = [t for t in tokens
+                  if abs(t.cx - cx) < .2 * width and abs(t.cy - cy) < max(5 * h, .08 * height) and t.h < 3 * h]
+        boxes += [t.box for t in inside]
+        # A wide one-row bug (ESPN's, the NBA bar) has the away score more than .2 of the width
+        # from the clock: when the box holds one score (Vision may read it twice, alone and in a
+        # longer line), on the clock's row, take numbers of its size beyond it on that row (not
+        # the other side of the clock, where a ticker runs).
+        numbers = [t for t in tokens if INTEGER.match(t.text) and int(t.text) < 200]
+        scores = [t for t in numbers if t in inside and t.h >= .9 * h]
+        if scores and all(abs(t.cx - scores[0].cx) < h and abs(t.cy - cy) < .5 * h for t in scores):
+            s = scores[0]
+            boxes += [t.box for t in numbers if .8 * s.h < t.h < 1.25 * s.h and abs(t.cy - cy) < .5 * h
+                      and abs(t.cx - cx) < .35 * width and (t.cx < s.cx < cx or cx < s.cx < t.cx)]
+    if not boxes:  # anchors split between two places (the bug and a graphic): no clock at the median
+        return None
     x1 = min(b[0] for b in boxes) - 2 * h
     y1 = min(b[1] for b in boxes) - 1.5 * h
     x2 = max(b[0] + b[2] for b in boxes) + 2 * h
