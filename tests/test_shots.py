@@ -470,6 +470,8 @@ def test_rim_attempt_make_long_after_reaching_the_basket_is_not_credited():
 
 def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detection():
     # 5adf: the ball-in-basket class fired on the net while the ball was still in flight.
+    # With the rim in view that lone detection does not anchor a shot let go away from the
+    # rim (62f8, 667b, fd34: empty nets), so the ball's entry into the rim's area does.
     path = {f: (.3, .35) for f in range(11)}
     path.update({f: lerp((.3, .35), (.5, -.3), (f - 10) / 15) for f in range(11, 26)})
     path.update({f: lerp((.5, -.3), (.5, .15), (f - 25) / 24) for f in range(26, 50)})
@@ -478,7 +480,7 @@ def test_make_is_timed_from_the_ball_reaching_the_rim_not_an_early_basket_detect
     events = [(f, *basket_box(.9)) for f in range(19, 50, 5)]
     balls, frames = scene(path, holders, events, {f: 1 for f in range(11)})
     shot, = find_attempts([], balls, frames, FPS, RIM, 1.)
-    assert shot.attempt["basket_frame"] == 19
+    assert shot.attempt["basket_frame"] == 43 and shot.attempt["basket_sources"] == ["rim_area"]
     assert shot.outcome == "made"
 
 
@@ -879,3 +881,16 @@ def test_rim_attempt_from_away_needs_its_rise_seen(lost, found):
     assert len(shots) == int(found)
     if found:
         assert shots[0].attempt["path"] == "rim_attempt" and shots[0].attempt["contact_frame"] == 10
+
+
+@pytest.mark.parametrize("rim, found", [(RIM, False), (None, True)])
+def test_lone_basket_detection_for_a_ball_let_go_away_from_the_rim_needs_no_rim_in_view(rim, found):
+    # 62f8, 667b, fd34: ball-in-basket fires on the empty net after the ball, seen
+    # going up far out, is lost. With the rim in view the ball never entered its area.
+    path = {f: (.42, .45) for f in range(11)}
+    path.update({f: lerp((.42, .45), (.45, .25), (f - 10) / 6) for f in range(11, 17)})
+    holders = {f: (1, (.42, .45)) for f in range(11)}
+    events = [(20, *basket_box(.8)), (21, *basket_box(.8))]
+    balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=30)
+    shots = find_attempts([], balls, frames, FPS, rim, 1.)
+    assert len(shots) == int(found)
