@@ -17,6 +17,9 @@ from app.basketball import PLAYER_CLASSES, RIM_CLASS
 
 RimBox = tuple[float, float, float, float]  # normalized x, y, w, h
 MIN_CONFIDENCE = .5
+# Hoops in view were boxed at 0.8-0.9 on the broadcast clips; a second hoop kept by time
+# on a camera that follows play needs that median confidence (track_detected_rims).
+HOOP_IN_VIEW_CONFIDENCE = .7
 # Two rim detections in one frame covering this much of the smaller box are
 # one hoop: the ball at the rim gave 0.43 and 0.75 (f6f0, 3e78).
 SAME_HOOP_OVERLAP = .3
@@ -196,9 +199,14 @@ def _confidence(track: list[tuple[int, float, RimBox]]) -> float:
     return sum(conf for _, conf, _ in track)
 
 
+def _apart(track, others) -> bool:
+    """True when the track's frames lie wholly before or after each of the other tracks'."""
+    return all(track[-1][0] < other[0][0] or track[0][0] > other[-1][0] for other in others)
+
+
 def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int = 1,
                         max_gap_frames: int = 15, balls: dict[int, tuple[float, float, float]] | None = None,
-                        aspect: float = 16 / 9) -> tuple[dict[int, RimBox], dict]:
+                        aspect: float = 16 / 9, follows_play: bool = False) -> tuple[dict[int, RimBox], dict]:
     """Link per-frame rim detections into hoops and keep the dominant hoop per camera segment.
 
     detections: {source frame: [(confidence, normalized xyxy), ...]}. Within a
@@ -210,9 +218,12 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
     hoops are in view, the one the ball drops onto or is lifted to wins instead:
     a fixed camera in a gym can see the neighbouring courts' hoops, sharper and
     more confident than the one in play (bKA6 picked a side court's hoop on all
-    nine clips). Box jitter is
-    reduced with a 5-sample local linear fit. Gaps are left to the scorer's rim lookup,
-    which interpolates up to 12 frames and never bridges a cut.
+    nine clips). With ``follows_play`` (a camera that pans with play), a hoop
+    tracked only while the dominant one is out of view is kept for its own time
+    too: in one continuous pan from end to end the camera shows one hoop and then
+    the other (20a1, 6c6a, d731, 1e79 lost the far hoop at 0.8-0.9 confidence).
+    Box jitter is reduced with a 5-sample local linear fit. Gaps are left to the
+    scorer's rim lookup, which interpolates and never bridges a cut.
     """
     frames = sorted(detections)
     edges = [-math.inf, *sorted(cuts), math.inf]
@@ -266,21 +277,35 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
                 dominant = max(steady, key=lambda track: (visits[id(track)], _confidence(track)))
         if len(dominant) < 3:
             continue
+        chosen = [dominant]
+        if follows_play:
+            for track in sorted(tracks, key=_confidence, reverse=True):
+                if track is not dominant and _steady_hoop(track, max_gap_frames) and _apart(track, chosen):
+                    chosen.append(track)
         stats["segments_with_rim"] += 1
-        stats["other_hoop_tracks"] += len(tracks) - 1
-        boxes = np.asarray([box for _, _, box in dominant])
-        times = np.asarray([frame for frame, _, _ in dominant], dtype=float)
-        for index, (frame, _, _) in enumerate(dominant):
-            # A local straight-line fit follows a steady pan exactly (a median of
-            # a trending window would just return the raw box) and averages jitter.
-            lo, hi = max(0, index - 2), index + 3
-            if len(times[lo:hi]) < 3:
-                rims[frame] = tuple(float(v) for v in boxes[index])
-                continue
-            t = times[lo:hi] - frame
-            coefficients = np.polyfit(t, boxes[lo:hi], 1)
-            rims[frame] = tuple(float(v) for v in coefficients[1])
+        stats["other_hoop_tracks"] += len(tracks) - len(chosen)
+        stats["hoops_by_time"] = stats.get("hoops_by_time", 0) + len(chosen) - 1
+        for hoop in chosen:
+            boxes = np.asarray([box for _, _, box in hoop])
+            times = np.asarray([frame for frame, _, _ in hoop], dtype=float)
+            for index, (frame, _, _) in enumerate(hoop):
+                # A local straight-line fit follows a steady pan exactly (a median of
+                # a trending window would just return the raw box) and averages jitter.
+                lo, hi = max(0, index - 2), index + 3
+                if len(times[lo:hi]) < 3:
+                    rims[frame] = tuple(float(v) for v in boxes[index])
+                    continue
+                t = times[lo:hi] - frame
+                coefficients = np.polyfit(t, boxes[lo:hi], 1)
+                rims[frame] = tuple(float(v) for v in coefficients[1])
     return rims, stats
+
+
+def _steady_hoop(track, max_gap_frames: int) -> bool:
+    """A hoop seen for at least as long as the longest gap a track bridges, at the
+    detector's usual confidence for a hoop in view: not a one-off false box."""
+    return (track[-1][0] - track[0][0] >= max_gap_frames
+            and float(np.median([conf for _, conf, _ in track])) >= HOOP_IN_VIEW_CONFIDENCE)
 
 
 def detect_fixed_rim(input_path: Path, detector, samples: int = 15) -> RimBox | None:

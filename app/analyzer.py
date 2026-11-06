@@ -728,7 +728,7 @@ def score_clip(inputs: dict, output_dir: Path | None, input_path: Path,
             # A fixed camera can see other courts' hoops; a moving one follows play to the
             # hoop in use, and there a zoom can split that hoop into two tracks.
             balls={b.frame: (b.x, b.y, b.confidence) for b in balls} if profile in COURT_PROFILES else None,
-            aspect=width / height)
+            aspect=width / height, follows_play=profile == "moving")
         # Net flow was measured around each frame's most confident rim; keep it
         # only where that was the hoop finally chosen.
         for frame_no_, box in flow_rims.items():
