@@ -982,7 +982,9 @@ def find_attempts(shots: list[ShotResult], balls: list[Detection], frames: list[
             evidence += [f"{shot_type.capitalize()}: let go away from the rim, reaching it "
                          f"{(event.frame - contact.frame) / fps:.2f} s later", *notes]
         else:
-            shot_type = "layup"
+            # Neither let go at the rim nor long enough in the air for an arc shot: a
+            # finish all the same, and a dunk looks like a layup in 2D.
+            shot_type = "layup or dunk"
             if previous_reach is not None and contact.frame - previous_reach <= TIP_WINDOW_S * fps:
                 evidence.append(f"Putback: {(contact.frame - previous_reach) / fps:.2f} s after the previous attempt "
                                 "reached the basket")

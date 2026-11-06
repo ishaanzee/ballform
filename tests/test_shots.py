@@ -69,7 +69,7 @@ def test_layup_reaching_the_basket_is_a_shot_by_the_last_hand_contact():
     shots = find_attempts([], balls, frames, FPS, None, 1.)
     assert len(shots) == 1
     shot = shots[0]
-    assert shot.shot_type == "layup"
+    assert shot.shot_type == "layup or dunk"
     assert shot.release_s == round(10 / FPS, 2)
     assert shot.attempt["path"] == "rim_attempt" and shot.attempt["shooter_track_id"] == 1
     assert shot.outcome == "unknown"
@@ -194,7 +194,7 @@ def test_arc_tip_right_after_a_rim_attempt_got_there_is_a_tip():
     balls, frames = scene(path, holders, events, {f: 1 for f in range(11)}, n=47)
     tip_arc = ShotResult(1, 0., 30 / FPS, 1., "unknown", 0., ["Ball arc detected"], {})
     layup, tip = find_attempts([tip_arc], balls, frames, FPS, None, 1.)
-    assert (layup.shot_type, tip.shot_type) == ("layup", "tip")
+    assert (layup.shot_type, tip.shot_type) == ("layup or dunk", "tip")
     assert any(item.endswith("0.33 s after the previous attempt got there") for item in tip.evidence)
 
 
@@ -309,7 +309,7 @@ def test_layup_outcome_uses_the_rim_when_one_exists():
     holders = {f: (1, (.42, .35)) for f in range(11)}
     balls, frames = scene(path, holders, handlers={f: 1 for f in range(11)})
     shot, = find_attempts([], balls, frames, FPS, (.47, .08, .06, .04), 1.)
-    assert shot.shot_type == "layup" and shot.attempt["basket_sources"] == ["rim_area"]
+    assert shot.shot_type == "layup or dunk" and shot.attempt["basket_sources"] == ["rim_area"]
     assert shot.outcome == "made"
 
 
@@ -322,7 +322,7 @@ def test_putback_after_a_rebound_is_a_new_layup():
     events = [(20, *basket_box(.8)), (50, *basket_box(.8))]
     balls, frames = scene(path, holders, events, {f: 2 for f in range(32, 41)})
     shots = find_attempts([arc_shot()], balls, frames, FPS, None, 1.)
-    assert [shot.shot_type for shot in shots] == ["jump shot", "layup"]
+    assert [shot.shot_type for shot in shots] == ["jump shot", "layup or dunk"]
     assert shots[1].attempt["shooter_track_id"] == 2
     assert any(item.startswith("Putback") for item in shots[1].evidence)
 
