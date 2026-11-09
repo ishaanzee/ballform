@@ -172,7 +172,7 @@ def _overlap(a: RimBox, b: RimBox) -> float:
 
 
 def _ball_visits(track: list[tuple[int, float, RimBox]], balls: dict[int, tuple[float, float, float]],
-                 frames: list[int], aspect: float) -> int:
+                 frames: list[int], aspect: float, step: int = 1) -> int:
     """Frames whose confident ball is coming down onto the hoop (within 2 rim widths
     sideways, up to 4 above the ring, and lower than a frame or two before) or being
     lifted to it (within 1.5 sideways, rising, up to 1 above the ring).
@@ -187,7 +187,8 @@ def _ball_visits(track: list[tuple[int, float, RimBox]], balls: dict[int, tuple[
     visits = 0
     for frame in frames:
         ball = balls.get(frame)
-        previous = balls.get(frame - 1) or balls.get(frame - 2)
+        # Above 60 fps (step 3+) frame - 2 is never sampled, so look one sample back.
+        previous = balls.get(frame - step) or balls.get(frame - 2)
         if ball is None or previous is None or ball[2] < BALL_VISIT_CONFIDENCE:
             continue
         nearest = min(known, key=lambda f: abs(f - frame))
@@ -322,7 +323,7 @@ def track_detected_rims(detections: dict[int, list], cuts: list[int], step: int 
         visits: dict[int, int] = {}
         if balls and len(steady) > 1:
             span = [f for f in balls if start <= f < end]
-            visits = {id(track): _ball_visits(track, balls, span, aspect) for track in steady}
+            visits = {id(track): _ball_visits(track, balls, span, aspect, step) for track in steady}
             if max(visits.values()) >= BALL_VISITS_TO_PICK_HOOP:
                 dominant = max(steady, key=lambda track: (visits[id(track)], _confidence(track)))
         if len(dominant) < 3:

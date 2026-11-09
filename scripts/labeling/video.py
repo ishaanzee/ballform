@@ -136,7 +136,7 @@ def download(video_id: str, dest: Path, sections: str | None = None) -> int:
         return 0
     cmd = ["yt-dlp", "--no-warnings", "--no-playlist", "-f", FORMAT, "-N", "16", "--retries", "15",
            "--fragment-retries", "30", "--retry-sleep", "fragment:exp=1:10", "--socket-timeout", "20",
-           "--no-progress", "--no-part", "-o", str(dest / f"{video_id}.%(ext)s"), "--remux-video", "mp4"]
+           "--no-progress", "-o", str(dest / f"{video_id}.%(ext)s"), "--remux-video", "mp4"]
     if sections:
         cmd += ["--download-sections", sections]
     cmd.append(f"https://www.youtube.com/watch?v={video_id}")

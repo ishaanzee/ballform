@@ -94,7 +94,8 @@ def _run(job_id: str, input_path: Path, rim: tuple[float, float, float, float] |
             settings_path.write_text(json.dumps({**settings, "court_landmarks": found}))
         _update(job_id, status="complete", progress=1.0, message="Complete", result=result)
     except Exception as exc:
-        _update(job_id, status="failed", message=str(exc), error=type(exc).__name__)
+        logging.getLogger("uvicorn.error").exception("Analysis job %s failed", job_id)
+        _update(job_id, status="failed", message=str(exc) or type(exc).__name__, error=type(exc).__name__)
 
 
 @app.middleware("http")

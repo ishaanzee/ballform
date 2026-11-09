@@ -308,10 +308,12 @@ def stitch_tracks(frames: list[dict], aspect_ratio: float, fps: float, max_gap_s
     mapping: dict[int, int] = {}
     while True:
         options: dict[int, list[tuple[float, int]]] = {}
+        frame_sets = {t: {o[0] for o in obs} for t, obs in tracks.items()}
         for a, A in tracks.items():
-            a_frames = {o[0] for o in A}
             for b, B in tracks.items():
-                if a == b or B[0][0] <= A[0][0] or a_frames & {o[0] for o in B}:
+                # B starting over max_gap after A ends can never pass transition(A[-1], B[0]).
+                if (a == b or B[0][0] <= A[0][0] or B[0][0] - A[-1][0] > max_gap
+                        or not frame_sets[a].isdisjoint(frame_sets[b])):
                     continue
                 # Fragments may interleave while both online tracks stay alive;
                 # every point where the identity switches must be plausible.

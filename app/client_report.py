@@ -57,7 +57,10 @@ def _esc(value) -> str:
 
 
 def _num(value) -> str:
-    return f"{value:.1f}".rstrip("0").rstrip(".") if isinstance(value, float) else str(value)
+    if not isinstance(value, float):
+        return str(value)
+    text = f"{value:.1f}".rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text  # -0.04 rounds to "-0"
 
 
 def _with_unit(value, unit: str) -> str:
@@ -177,9 +180,12 @@ def _game_table(shots: list[dict], rim: bool) -> str:
         metrics = game.get("metrics") or {}
         zone = ZONES.get(metrics.get("shot_zone"), "—") if metrics.get("shot_zone") else "—"
         distance = _with_unit(metrics["shot_distance_ft"], "ft") if metrics.get("shot_distance_ft") is not None else "—"
+        score = _score_text(shot.get("game"))
+        if game.get("score_basis") and score != "Not scored":
+            score += " (contest only)"  # rim attempt: not a shot-space score, left out of the average
         body += (f"<tr><td>{_esc(shot['number'])}</td><td>{_num(shot['release_s'])} s</td>"
                  f"<td>{_esc(shot.get('shot_type') or 'shot')}</td><td>{_esc(_outcome(shot, rim)[0])}</td>"
-                 f"<td>{_esc(_score_text(shot.get('game')))}</td><td>{_esc(zone)}</td><td>{_esc(distance)}</td></tr>")
+                 f"<td>{_esc(score)}</td><td>{_esc(zone)}</td><td>{_esc(distance)}</td></tr>")
     return ("<table><thead><tr><th>#</th><th>Time</th><th>Type</th><th>Result</th><th>Shot-space</th>"
             f"<th>Zone</th><th>Distance</th></tr></thead><tbody>{body}</tbody></table>")
 

@@ -185,7 +185,8 @@ def shot_check(frames, court_map, obs, result, trajectories) -> list[dict]:
         game = copy.deepcopy(saved["game"])
         game["evidence"] = [e for e in game["evidence"] if not e.startswith("Court:")]
         shot = ShotResult(saved["number"], saved["start_s"], saved["release_s"], saved["end_s"], saved["outcome"],
-                          saved["outcome_confidence"], [], {}, game=game)
+                          saved["outcome_confidence"], [], {}, game=game,
+                          shot_type=saved.get("shot_type"))
         add_court_metrics([shot], frames, balls, court_map)
         before = {k: saved["game"]["metrics"].get(k) for k in COURT_METRICS}
         after = {k: shot.game["metrics"].get(k) for k in COURT_METRICS}

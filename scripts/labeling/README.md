@@ -22,7 +22,8 @@ scorebug 38 s, match 46 s (cut scan; cached after), cut 10 s per clip, cuts 2 s,
    whole-foot coordinates on the arc.
 2. **Find the video.** `$L/video.py find <event>`. Use the `BEST` id (NBA channel only). `NONE`: tell
    the coordinator and take another game.
-3. **Download.** `$L/video.py download <yt id> eval/staging/video`. If it stalls, rerun it.
+3. **Download.** `$L/video.py download <yt id> eval/staging/video`. If it stalls, rerun it. An unfinished
+   download stays `<yt id>.mp4.part`, and the rerun resumes it.
 4. **Scorebug timeline.** `$OCR/scorebug.py eval/staging/video/<yt id>.mp4 --event <event>`. It prints
    one line per segment (a stretch with the bug on and the clock running continuously). Long gaps are
    replays, cutaways or footage without a bug.

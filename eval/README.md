@@ -63,7 +63,7 @@ Once thresholds are tuned against these clips, they stop being an honest test. P
 
 `fixed-holdout.csv` holds blind fixed-camera clips from public amateur videos that are not in `fixed.csv`, started on 2026-11-06 because `fixed.csv` had become a dev set (its first videos were still being labeled and checked at the end of that night; staged rows are in `eval/staging/fixed-holdout/` until they are committed with `rows.py commit`). Score it with `--labels eval/fixed-holdout.csv --summary-only`.
 
-`fixed.csv` holds non-broadcast footage: 35 clips from four public fixed-camera videos of adult games (notes start `FIXED youtube:<id>`; `ballform-eval` groups them by video). Their jobs use the courtside or elevated profile at the source frame rate (25-30 fps), and have no distances or zones. Score it with `--labels eval/fixed.csv`.
+`fixed.csv` holds non-broadcast footage: 45 clips from five public fixed-camera videos of adult games (notes start `FIXED youtube:<id>`; `ballform-eval` groups them by video). Their jobs use the courtside or elevated profile at the source frame rate (25-30 fps), and have no distances or zones. Score it with `--labels eval/fixed.csv`.
 
 New broadcast clips are labeled with the toolkit in `scripts/labeling/` (see its README): play-by-play, the NBA channel's full-game upload, scorebug OCR to line the two up, cut-free clips, contact sheets, and locked commits of the rows.
 

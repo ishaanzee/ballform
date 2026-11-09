@@ -75,6 +75,22 @@ def test_game_report_falls_back_to_torso_lengths():
     assert "1.4 torso lengths" in page
 
 
+def test_rim_attempt_score_is_marked_contest_only_in_table():
+    rim = game_shot(2)
+    rim["shot_type"] = "layup or dunk"
+    rim["game"]["score"] = 63.9
+    rim["game"]["score_basis"] = "contest clearance only (rim attempt)"
+    page = render({"mode": "one_on_one", "diagnostics": {}, "limitations": [], "shots": [game_shot(1), rim]})
+    assert "<td>61.2 / 100</td>" in page
+    assert "<td>63.9 / 100 (contest only)</td>" in page
+
+
+def test_small_negative_numbers_do_not_render_minus_zero():
+    from app.client_report import _with_unit
+    assert _with_unit(-0.038, "torso lengths") == "0 torso lengths"
+    assert _with_unit(-0.4, "torso lengths") == "-0.4 torso lengths"
+
+
 def test_missing_rim_is_not_reported_as_misses():
     result = {"mode": "one_on_one", "diagnostics": {"rim_source": None}, "limitations": [],
               "shots": [game_shot(1)]}

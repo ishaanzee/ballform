@@ -4,7 +4,7 @@ const ctx = canvas.getContext('2d');
 const token = new URLSearchParams(location.search).get('token') || '';
 const transport = new URLSearchParams(location.search).get('transport') || '';
 const jobKey = `ballform-job:${token || 'local'}`;
-let file, dragStart, rimBox, report, reportJob;
+let file, dragStart, rimBox, rimTime = 0, report, reportJob;
 let courtPoints = [], marking = 'rim';
 let selectedPoseModelForJob = null;
 const poseModelLabels = {'yolo26m-pose':'YOLO26m pose','yolo26s-pose':'YOLO26s pose'};
@@ -74,13 +74,16 @@ $('#cameraFile').onchange = () => loadFile($('#cameraFile').files[0]);
 ['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
 window.addEventListener('resize', resizeCanvas);
-function resizeCanvas(){ const r=preview.getBoundingClientRect(); canvas.width=r.width*devicePixelRatio; canvas.height=r.height*devicePixelRatio; canvas.style.height=r.height+'px'; drawBox(); }
+// Also resize when the preview is shown again (a resize while it was hidden measured 0x0) or its video changes.
+if (window.ResizeObserver) new ResizeObserver(() => resizeCanvas()).observe(preview);
+// Cover only the shown picture (the video is letterboxed by object-fit: contain), so clicks normalize to the frame.
+function resizeCanvas(){ const r=preview.getBoundingClientRect(), vw=preview.videoWidth||r.width, vh=preview.videoHeight||r.height, s=Math.min(r.width/vw,r.height/vh)||0, w=vw*s, h=vh*s; Object.assign(canvas.style,{left:`${(r.width-w)/2}px`,top:`${(r.height-h)/2}px`,width:`${w}px`,height:`${h}px`}); canvas.width=w*devicePixelRatio; canvas.height=h*devicePixelRatio; drawBox(); }
 $('#scrubber').oninput = e => preview.currentTime = preview.duration * e.target.value / 100;
 function point(e){ const r=canvas.getBoundingClientRect(); return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; }
 canvas.onpointerdown = e => {
   if(marking==='landmarks') return window.courtCalibration?.place(e);
   if(marking==='court') {if(courtPoints.length<8){const p=point(e);courtPoints.push([p.x,p.y]);drawBox();}return;}
-  dragStart=point(e); rimBox=null; canvas.setPointerCapture(e.pointerId);
+  dragStart=point(e); rimBox=null; rimTime=preview.currentTime; canvas.setPointerCapture(e.pointerId);
 };
 canvas.onpointermove = e => { if(marking==='landmarks') return window.courtCalibration?.move(e); if(!dragStart)return; const p=point(e); rimBox=[Math.min(p.x,dragStart.x),Math.min(p.y,dragStart.y),Math.abs(p.x-dragStart.x),Math.abs(p.y-dragStart.y)]; drawBox(); };
 canvas.onpointerup = () => { window.courtCalibration?.release(); dragStart=null; };
@@ -126,7 +129,7 @@ $('#analyze').onclick = async () => {
   $('#markStep').classList.add('hidden'); $('#progressStep').classList.remove('hidden');
   $('#settings').classList.add('hidden'); $('#retry').classList.add('hidden'); $('#progressText').classList.remove('error');
   const form=new FormData(); form.append('video',file); if(rimBox)form.append('rim',JSON.stringify(rimBox));
-  if (rimBox) form.append('rim_time_s', String(Math.max(0, preview.currentTime)));
+  if (rimBox) form.append('rim_time_s', String(Math.max(0, rimTime)));  // the frame the box was drawn on
   form.append('mode', $('#analysisMode').value); form.append('handedness', $('#handedness').value);
   form.append('camera', $('#cameraProfile').value);
   form.append('pose_model', $('#poseModel').value);
@@ -149,9 +152,12 @@ $('#analyze').onclick = async () => {
     poll(job_id);
   } catch(e){ showError(e.message); }
 };
-async function poll(id){
+async function poll(id, misses=0){
   try{
-    const response=await fetch(apiUrl(`/api/jobs/${id}`)), state=await response.json();
+    // Keep polling through brief network drops (phone locked, Safari backgrounded); the job runs on.
+    const response=await fetch(apiUrl(`/api/jobs/${id}`)).catch(e=>{if(misses<30)return null;throw e;});
+    if(!response){$('#progressText').textContent='Lost the connection to the Mac; retrying…';return setTimeout(()=>poll(id,misses+1),2000);}
+    const state=await response.json();
     if(!response.ok) throw new Error(state.detail || 'Could not read the analysis job');
     if(state.pose_model_requested){
       const requested=poseModelLabels[state.pose_model_requested]||state.pose_model_requested;
@@ -167,7 +173,7 @@ async function poll(id){
     $('#meter').style.width=`${35+Math.max(0,state.progress)*65}%`;$('#progressText').textContent=state.message;
     if(state.status==='complete') return render(id,state.result);
     if(state.status==='failed'){localStorage.removeItem(jobKey);return showError(state.message);}
-    setTimeout(()=>poll(id),1000);
+    setTimeout(()=>poll(id,misses),1000);
   }catch(e){showError(e.message);}
 }
 function showError(message){ $('#progressText').classList.add('error');$('#progressText').textContent=message;$('#retry').classList.remove('hidden'); }

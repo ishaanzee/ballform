@@ -236,3 +236,20 @@ def test_court_detect_explains_a_frame_without_a_court(client):
     _, png = cv2.imencode(".png", np.full((360, 640, 3), 90, np.uint8))
     body = client.post("/api/court/detect", files={"frame": ("f.png", png.tobytes())}).json()
     assert body["ok"] is False and body["reason"] and body["points"] == []
+
+
+def test_run_logs_the_traceback_when_analysis_fails(monkeypatch, tmp_path, caplog):
+    job_id = "failurelogcheck"
+    main.STATE.pop(job_id, None)
+
+    def broken_analyze(*_args, **_kwargs):
+        raise IndexError
+
+    monkeypatch.setattr(main, "analyze_video", broken_analyze)
+    with caplog.at_level("ERROR", logger="uvicorn.error"):
+        main._run(job_id, tmp_path / "clip.mp4", None)
+    assert main.STATE[job_id]["status"] == "failed"
+    assert main.STATE[job_id]["message"] == "IndexError"  # not blank for a message-less exception
+    record = next(r for r in caplog.records if job_id in r.getMessage())
+    assert record.exc_info and record.exc_info[0] is IndexError
+    main.STATE.pop(job_id, None)

@@ -44,6 +44,14 @@ def test_browser_warns_that_four_clicks_cannot_be_checked():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_swapped_left_right_marks_are_flagged_not_shown_as_infinity():
+    swapped = CLICKS[:2] + [["ft_right", 834, 762], ["ft_left", 939, 600]]
+    result = harness(swapped)
+    assert "consistent view of the floor" in result["status"] and "Infinity" not in result["status"]
+    assert result["field"] is not None  # still sent; the server makes the final call
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_an_accepted_proposal_is_sent_as_auto():
     from app.court import parse_landmarks
     result = harness([], PROPOSAL)

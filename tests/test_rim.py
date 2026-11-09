@@ -129,6 +129,14 @@ def test_ball_dropping_onto_a_hoop_picks_it_over_more_confident_neighbours():
     assert without_balls[10][0] != pytest.approx(.485)
 
 
+def test_ball_drop_picks_the_hoop_above_60_fps():
+    # 120 fps sampled every 4th frame: the previous ball is one sample back.
+    hoops = {f * 4: boxes for f, boxes in _three_hoops().items()}
+    balls = {f * 4: (.50, .20 + .01 * (f - 20), .8) for f in range(20, 30)}
+    rims, _ = track_detected_rims(hoops, [], step=4, max_gap_frames=60, balls=balls)
+    assert rims[40][0] == pytest.approx(.485)
+
+
 def test_ball_lifted_to_a_hoop_counts_for_a_layup():
     # Carried up from below the ring to just above it.
     balls = {f: (.505, .33 - .006 * (f - 20), .8) for f in range(20, 30)}

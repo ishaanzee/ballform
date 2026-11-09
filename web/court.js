@@ -178,6 +178,8 @@ window.courtCalibration = (() => {
       return `${lead}${pick} ${n} of at least 4 marked (5 or more lets Ballform check the fit).${auto}`;
     }
     if (fitted?.error) return `${lead}${pick} These marks cannot define the floor yet: 4 of them must not lie on one line.`;
+    // A point the fit puts behind the camera gets an infinite error (usually a swapped left/right pair).
+    if (!fitted.errors.every(Number.isFinite)) return `${lead}${pick} These marks do not form a consistent view of the floor: check left/right pairs and misclicks.`;
     const rms = Math.sqrt(fitted.errors.reduce((a, e) => a + e * e, 0) / n);
     let text = `${lead}${pick}`;
     if (source === 'auto' || source === 'auto, whole clip') {

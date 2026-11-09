@@ -149,6 +149,32 @@ def test_model_checksum_is_skipped_until_file_changes(monkeypatch, tmp_path):
     assert len(hashes) == 2
 
 
+def test_model_download_uses_timeout_and_rejects_truncated_file(monkeypatch, tmp_path):
+    import io
+    import app.analyzer as analyzer
+
+    class Response(io.BytesIO):
+        def __init__(self, body, length):
+            super().__init__(body)
+            self.headers = {"Content-Length": str(length)}
+
+    calls = []
+    body = b"a" * 1_000_001
+    def fake_urlopen(url, timeout=None):
+        calls.append(timeout)
+        return Response(body, length)
+    monkeypatch.setattr(analyzer.urllib.request, "urlopen", fake_urlopen)
+    model = tmp_path / "model.pt"
+    length = len(body) + 10
+    with pytest.raises(ValueError):
+        analyzer._ensure_model(model, "http://example/model.pt")
+    assert not model.exists()
+    length = len(body)
+    assert analyzer._ensure_model(model, "http://example/model.pt") == model
+    assert model.read_bytes() == body
+    assert calls == [60, 60]
+
+
 def test_court_polygon_only_applies_to_fixed_game_cameras():
     from app.analyzer import _applied_court
     court = [[0, 0], [1, 0], [1, 1]]
