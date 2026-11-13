@@ -41,6 +41,7 @@ REOPEN_DEG = 12.0       # elbow opening, walking back in time, that ends the sea
 LOOKBACK_S = 0.7       # set point is searched this long before the wrist passes the nose
 MAX_HOLD_S = 2.0
 MAX_LEAN_DEG, MIN_KNEE_DEG, MIN_RAISED_S = 30.0, 100.0, 0.2
+MIN_EXTEND_S = 0.08     # an elbow cannot open 40 degrees faster; a quicker one is a pose jump
 
 
 def _angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
@@ -82,6 +83,7 @@ class Series:
             self.wrist_h = (xy["nose"][:, 1] - wrist[:, 1]) / self.torso
             self.wrist_dx = (wrist[:, 0] - xy["nose"][:, 0]) / self.torso
             self.arm = wrist - xy[f"{side}_shoulder"]
+            self.wrist_over_shoulder = (xy[f"{side}_shoulder"][:, 1] - wrist[:, 1]) / self.torso
             self.trunk_dx = (self.shoulder[:, 0] - self.hip[:, 0]) / self.torso
             self.trunk_dy = (self.hip[:, 1] - self.shoulder[:, 1]) / self.torso
             self.shoulder_width = np.linalg.norm(xy["left_shoulder"] - xy["right_shoulder"], axis=1) / self.torso
@@ -126,10 +128,13 @@ def _reps(series: Series) -> list[tuple[int, float, int]]:
             continue
         top = int(up[np.nanargmax(series.elbow[up])])
         # The set point is the fold the extension starts from: walk back from the release
-        # until the elbow opens again. The elbow is also folded while the ball is held at
-        # the waist, which is not the set point.
+        # until the elbow opens again or the wrist is back below the shoulder. The elbow is
+        # also folded while the ball is held at the waist, and some shooters fold it further
+        # all the way up from there; neither is the set point.
         low, first = top, int(series.between(t[start] - LOOKBACK_S, t[top])[0])
         for i in range(top - 1, first - 1, -1):
+            if series.wrist_over_shoulder[i] < 0:
+                break
             if series.elbow[i] < series.elbow[low]:
                 low = i
             elif series.elbow[i] > series.elbow[low] + REOPEN_DEG:
@@ -187,7 +192,7 @@ def _signature(series: Series, low: int, release: float, end: int, handedness: s
     # on legs that are not folded, and keeps the arm up for a moment after the release.
     lean, knee = values["trunk_lean_deg"], values["knee_bend_deg"]
     if (lean is None or abs(lean) > MAX_LEAN_DEG or knee is None or knee < MIN_KNEE_DEG
-            or t[end] - release < MIN_RAISED_S):
+            or t[end] - release < MIN_RAISED_S or values["extend_time_s"] < MIN_EXTEND_S):
         return {}
     features = {k: round(float(v), 3) if v is not None and math.isfinite(v) else None for k, v in values.items()}
     # Seen from the shooter's right when facing image-right. The far arm passes behind the

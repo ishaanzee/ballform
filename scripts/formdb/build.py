@@ -273,10 +273,17 @@ def drop(player: str, indexes: list[int]) -> int:
     return 0
 
 
+def _same_shot(a: dict, b: dict) -> bool:
+    return all(a["features"][k] is not None and b["features"][k] is not None and abs(a["features"][k] - b["features"][k]) < 0.5
+               for k in ("set_elbow_deg", "release_arm_deg", "knee_bend_deg"))
+
+
 def build(min_reps: int) -> int:
     players = [json.loads(p.read_text()) for p in sorted((STAGING / "reps").glob("*.json"))]
     for player in players:
-        player["reps"] = [r for r in (remeasure(rep, player["hand"]) for rep in player["reps"]) if r]
+        reps = [r for r in (remeasure(rep, player["hand"]) for rep in player["reps"]) if r]
+        # Compilations overlap: the same free throw from two sources measures the same.
+        player["reps"] = [r for i, r in enumerate(reps) if not any(_same_shot(r, e) for e in reps[:i])]
     players = [{"name": p["player"], "hand": p["hand"], "reps": p["reps"]} for p in players]
     db = form_match.build_db(players, min_reps)
     form_match.DB_PATH.write_text(json.dumps(db, separators=(",", ":")))
@@ -295,8 +302,10 @@ def build(min_reps: int) -> int:
             for i, rep in enumerate(player["reps"]):
                 if rep["arm_side"] != side or player["name"] not in names:
                     continue
-                others = [{**p, "reps": [r for j, r in enumerate(p["reps"]) if p is not player or j != i]} for p in players]
-                result = form_match.match([rep], form_match.build_db(others, min_reps))
+                # The same players as the templates, so a player at the minimum stays a candidate.
+                others = [{**p, "reps": [r for j, r in enumerate(p["reps"]) if p is not player or j != i]}
+                          for p in players if p["name"] in names]
+                result = form_match.match([rep], form_match.build_db(others, 1))
                 ranked = [m["name"] for m in result["matches"]] if result else []
                 total += 1
                 hits += ranked[:1] == [player["name"]]
