@@ -31,15 +31,15 @@ The templates come from broadcast free throws filmed by the main sideline camera
 
 There are two sets of templates, one per camera side. The sideline camera sees a shooter from his right at one basket and from his left at the other, and the same free throw measures differently from the two. Your clip is compared only with templates from the same side.
 
-Almost all templates have the shooting arm on the far side of the body from the camera: 20 players, against 3 on the near side. At the basket where the camera is on a right-hander's shooting-hand side, it sees him partly from behind (shoulder width 0.37 to 0.51 torso lengths), and those free throws are dropped as not side-on. That is why you film from the side opposite your shooting hand.
+Almost all templates have the shooting arm on the far side of the body from the camera: 25 players, against 4 on the near side. At the basket where the camera is on a right-hander's shooting-hand side, it sees him partly from behind (shoulder width 0.37 to 0.51 torso lengths), and those free throws are dropped as not side-on. That is why you film from the side opposite your shooting hand.
 
 A player needs three checked free throws on a side to get a template. Many players have none: their home broadcasts show free throws from behind or from too far away, and highlight videos often cut in after the release.
 
 ## matching
 
-Each measurement is weighted by the share of its variance that lies between players rather than between one player's own free throws. On the far-arm side, knee bend (0.88), set point distance in front of the face (0.75), knee timing (0.71) and arm angle at release (0.66) separate players best; elbow extension at release (0.37) varies more within a player than between players and counts least. The distance to a player is the weighted root-mean-square difference in between-player standard deviations, and similarity is `100 · exp(−distance² / 2)`.
+Each measurement is weighted by the share of its variance that lies between players rather than between one player's own free throws. On the far-arm side, knee bend (0.87), forward lean (0.78), set point distance in front of the face (0.75) and knee timing (0.73) separate players best; elbow extension at release (0.42) varies more within a player than between players and counts least. The distance to a player is the weighted root-mean-square difference in between-player standard deviations, and similarity is `100 · exp(−distance² / 2)`.
 
-As a check, each template free throw is left out of its own player's template and matched against all players. On the far-arm side the right player comes first for 78 of 110 free throws and in the first three for 92, where chance is 6; on the near-arm side, with three players, 11 of 12.
+As a check, each template free throw is left out of its own player's template and matched against all players. On the far-arm side the right player comes first for 106 of 145 free throws and in the first three for 128, where chance is 6; on the near-arm side, with four players, 12 of 15.
 
 Feedback lists the largest weighted differences from the chosen player, leaving out any difference inside that player's own shot-to-shot spread or below 5°, 0.1 torso lengths or 0.08 s.
 
@@ -48,5 +48,5 @@ Feedback lists the largest weighted differences from the chosen player, leaving 
 - The templates are broadcast footage: an elevated camera 20 to 30 degrees off a true side view. A phone at chest height directly side-on sees slightly different angles. This offset has not been measured.
 - 2D only. Elbow flare, hand placement and wrist action are not seen from the side.
 - Broadcast video is 25 to 60 fps, so timing is known to a few hundredths of a second.
-- A player with few reps, or reps from one game, has a less certain template. Templates have 3 to 9 free throws.
+- A player with few reps, or reps from one game, has a less certain template. Templates have 3 to 14 free throws.
 - A free throw the pose model reads badly is dropped when the elbow opens faster than an arm can (under 0.08 s); other misreadings can remain in a template.
