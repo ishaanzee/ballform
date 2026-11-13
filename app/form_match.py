@@ -19,6 +19,7 @@ from app.form_signature import FEATURES, JOINTS, SKELETON_TIMES
 DB_PATH = Path(__file__).with_name("form_db.json")
 # Shoulder width over torso length. Side-on broadcast free throws measure 0.17-0.27, oblique ones 0.44+.
 MAX_SIDE_SHOULDER_WIDTH = 0.35
+SIDES = ("near", "far")
 # feature -> (what to do when yours is lower than the player's, what to do when it is higher)
 ADVICE = {
     "set_elbow_deg": ("Keep your shooting arm more open at the set point", "Fold your shooting arm more at the set point"),
@@ -59,8 +60,7 @@ def median_skeleton(reps: Sequence[dict]) -> list[dict | None]:
     return frames
 
 
-def build_db(players: Sequence[dict]) -> dict:
-    """players: [{"name", "hand", "reps": [signature, ...]}] -> the form_db.json content."""
+def _build_view(players: Sequence[dict]) -> dict:
     entries = [{"name": p["name"], "hand": p.get("hand", "right"), "reps": len(p["reps"]),
                 "features": median_features(p["reps"]),
                 "spread": {name: _spread([r["features"].get(name) for r in p["reps"]]) for name in FEATURES},
@@ -76,7 +76,20 @@ def build_db(players: Sequence[dict]) -> dict:
             continue
         features[name] = {"scale": round(between, 4), "within": round(within, 4),
                           "weight": round(between ** 2 / (between ** 2 + within ** 2), 3)}
-    return {"version": 1, "shot": "free throw", "features": features, "players": entries}
+    return {"features": features, "players": entries}
+
+
+def build_db(players: Sequence[dict], min_reps: int = 2) -> dict:
+    """players: [{"name", "hand", "reps": [signature, ...]}] -> the form_db.json content.
+
+    One set of templates per camera side: "near" when the shooting arm is on the camera's
+    side of the body, "far" when it is on the other. A broadcast sees a shooter from one side
+    at each basket, and the same free throw measures differently from the two."""
+    views = {}
+    for side in SIDES:
+        split = [{**p, "reps": [r for r in p["reps"] if r.get("arm_side", "near") == side]} for p in players]
+        views[side] = _build_view([p for p in split if len(p["reps"]) >= min_reps])
+    return {"version": 2, "shot": "free throw", "views": views}
 
 
 def load_db(path: Path = DB_PATH) -> dict | None:
@@ -130,11 +143,17 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
     what to change to look like them, the measurements side by side and their skeleton.
     None without reps or a database."""
     db = db if db is not None else load_db()
-    if not reps or not db or not db.get("players"):
+    if not reps or not db:
         return None
-    mine, features = median_features(reps), db["features"]
+    sides = [r.get("arm_side", "near") for r in reps]
+    side = max(SIDES, key=sides.count)
+    view = (db.get("views") or {}).get(side)
+    if not view or not view["players"] or not view["features"]:
+        return None
+    reps = [r for r, s in zip(reps, sides) if s == side]
+    mine, features = median_features(reps), view["features"]
     ranked = []
-    for player in db["players"]:
+    for player in view["players"]:
         distance, _ = _distance(mine, player["features"], features)
         if distance is not None:
             ranked.append(({"name": player["name"], "distance": round(distance, 3),
@@ -150,6 +169,9 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
     if widths and float(np.median(widths)) > MAX_SIDE_SHOULDER_WIDTH:
         notes.append("This clip is not a side view, and the player templates are. Film from the side, level with "
                      "the free-throw line, or the match mostly reflects the camera angle.")
+    if side == "far":
+        notes.append("Your shooting arm is on the far side of your body from the camera, where it passes behind "
+                     "your head. Filming from your shooting-hand side measures it better.")
     if len(reps) < 3:
         notes.append(f"Based on {len(reps)} free throw{'s' if len(reps) != 1 else ''}. Five or more in one clip "
                      "gives a steadier match.")
@@ -159,7 +181,7 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
         if spread is not None:
             consistency.append({"feature": name, "label": FEATURES[name][0], "unit": FEATURES[name][1],
                                 "yours": round(spread, 3), "players": info["within"]})
-    return {"shot": db.get("shot", "free throw"), "reps": len(reps),
+    return {"shot": db.get("shot", "free throw"), "reps": len(reps), "arm_side": side,
             "release_times_s": [r["release_s"] for r in reps], "matches": [entry for entry, _ in ranked],
             "consistency": consistency, "notes": notes,
             "skeleton": {"times": list(SKELETON_TIMES), "yours": median_skeleton(reps)}}

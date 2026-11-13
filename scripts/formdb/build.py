@@ -10,8 +10,8 @@
 
 scan finds free throws in a video of one player's free throws (a per-player compilation):
 a pose model samples the video three times a second for a standing person with a wrist above
-the head, then MediaPipe follows that person on an upscaled crop and app/form_signature.py
-measures the rep. Only side views of a shooter who stays on the spot are kept. Every other
+the head who stood on the same spot for the second before, then MediaPipe follows that person
+on an upscaled crop and app/form_signature.py measures the rep. Only side views of a shooter who stays on the spot are kept. Every other
 player in the video who shoots a set shot from the side is kept too, so review the sheet.
 
 Reps live in eval/staging/formdb/reps/<player>.json (not in git). Only numbers derived from
@@ -89,12 +89,14 @@ def raised_arm_sightings(video: Path) -> list[tuple[float, tuple[int, int, int, 
     cap = cv2.VideoCapture(str(video))
     fps, width, height = cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     step, found, index = max(1, round(fps / SCAN_HZ)), [], 0
+    people: dict[int, np.ndarray] = {}   # sampled frame index -> every person box
     while cap.grab():
         if index % step == 0:
             ok, frame = cap.retrieve()
             if not ok:
                 break
             result = model.predict(frame, imgsz=1280, conf=0.4, verbose=False)[0]
+            people[index] = result.boxes.xyxy.cpu().numpy() if result.boxes is not None else np.zeros((0, 4))
             if result.keypoints is not None and result.keypoints.conf is not None:
                 for box, xy, conf in zip(result.boxes.xyxy.cpu().numpy(), result.keypoints.xy.cpu().numpy(),
                                          result.keypoints.conf.cpu().numpy()):
@@ -106,10 +108,23 @@ def raised_arm_sightings(video: Path) -> list[tuple[float, tuple[int, int, int, 
                         continue
                     torso = np.linalg.norm((xy[5] + xy[6]) / 2 - (xy[11] + xy[12]) / 2)
                     if any(conf[w] > 0.4 and xy[0][1] - xy[w][1] > 0.15 * torso for w in (9, 10)):
-                        found.append((index / fps, tuple(int(v) for v in box)))
+                        # A free-throw shooter stood on the same spot in the two samples before.
+                        if all(_overlaps(box, people.get(index - k * step)) for k in (2, 3)):
+                            found.append((index / fps, tuple(int(v) for v in box)))
         index += 1
     cap.release()
     return found
+
+
+def _overlaps(box: np.ndarray, others: np.ndarray | None, least: float = 0.5) -> bool:
+    """Whether some box in ``others`` covers at least ``least`` of ``box`` by intersection over union."""
+    if others is None or not len(others):
+        return False
+    x1, y1 = np.maximum(box[0], others[:, 0]), np.maximum(box[1], others[:, 1])
+    x2, y2 = np.minimum(box[2], others[:, 2]), np.minimum(box[3], others[:, 3])
+    inter = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
+    union = (box[2] - box[0]) * (box[3] - box[1]) + (others[:, 2] - others[:, 0]) * (others[:, 3] - others[:, 1]) - inter
+    return bool((inter / union).max() >= least)
 
 
 def group(sightings: list) -> list[tuple[float, tuple[int, int, int, int]]]:
@@ -235,7 +250,7 @@ def sheet(player: str) -> int:
             tiles.append(tile)
         cap.release()
         f = rep["features"]
-        print(f"#{index} {rep['source']} {rep['release_s']:.2f}s  " + "  ".join(
+        print(f"#{index} {rep['source']} {rep['release_s']:.2f}s {rep.get('arm_side', '?')}  " + "  ".join(
             f"{k.rsplit('_', 1)[0]} {f[k]}" for k in FEATURES))
     if not tiles:
         print("no reps")
@@ -262,27 +277,33 @@ def build(min_reps: int) -> int:
     players = [json.loads(p.read_text()) for p in sorted((STAGING / "reps").glob("*.json"))]
     for player in players:
         player["reps"] = [r for r in (remeasure(rep, player["hand"]) for rep in player["reps"]) if r]
-    players = [p for p in players if len(p["reps"]) >= min_reps]
-    if len(players) < 2:
-        print(f"need at least two players with {min_reps}+ reps")
-        return 1
-    db = form_match.build_db([{"name": p["player"], "hand": p["hand"], "reps": p["reps"]} for p in players])
+    players = [{"name": p["player"], "hand": p["hand"], "reps": p["reps"]} for p in players]
+    db = form_match.build_db(players, min_reps)
     form_match.DB_PATH.write_text(json.dumps(db, separators=(",", ":")))
-    print(f"wrote {form_match.DB_PATH.relative_to(ROOT)}: {len(db['players'])} players")
-    for name, feature in db["features"].items():
-        print(f"  {name:<20} weight {feature['weight']:.2f}  spread between players {feature['scale']:.3f}")
-    # Identification check: each rep, left out of its own player's template, should match that player.
-    hits = top3 = total = 0
-    for player in players:
-        for i, rep in enumerate(player["reps"]):
-            others = [{"name": p["player"], "hand": p["hand"],
-                       "reps": [r for j, r in enumerate(p["reps"]) if p is not player or j != i]} for p in players]
-            ranked = [m["name"] for m in form_match.match([rep], form_match.build_db(others))["matches"]]
-            total += 1
-            hits += ranked[:1] == [player["player"]]
-            top3 += player["player"] in ranked[:3]
-    print(f"leave-one-rep-out identification: top-1 {hits}/{total}, top-3 {top3}/{total} "
-          f"(chance {total / len(players):.0f}/{total})")
+    print(f"wrote {form_match.DB_PATH.relative_to(ROOT)}")
+    for side, view in db["views"].items():
+        print(f"{side} arm: " + ", ".join(f"{p['name']} ({p['reps']})" for p in view["players"]))
+        if len(view["players"]) < 2:
+            continue
+        for name, feature in view["features"].items():
+            print(f"  {name:<20} weight {feature['weight']:.2f}  between players {feature['scale']:.3f}  "
+                  f"within a player {feature['within']:.3f}")
+        # Identification check: each rep, left out of its own player's template, should match that player.
+        names = {p["name"] for p in view["players"]}
+        hits = top3 = total = 0
+        for player in players:
+            for i, rep in enumerate(player["reps"]):
+                if rep["arm_side"] != side or player["name"] not in names:
+                    continue
+                others = [{**p, "reps": [r for j, r in enumerate(p["reps"]) if p is not player or j != i]} for p in players]
+                result = form_match.match([rep], form_match.build_db(others, min_reps))
+                ranked = [m["name"] for m in result["matches"]] if result else []
+                total += 1
+                hits += ranked[:1] == [player["name"]]
+                top3 += player["name"] in ranked[:3]
+        if total:
+            print(f"  leave-one-rep-out identification: top-1 {hits}/{total}, top-3 {top3}/{total} "
+                  f"(chance top-1 {total / len(names):.0f}/{total})")
     return 0
 
 
@@ -294,7 +315,7 @@ def main() -> int:
     s.add_argument("--hand", choices=["left", "right"], default="right"); s.add_argument("--source")
     sh = sub.add_parser("sheet"); sh.add_argument("player")
     d = sub.add_parser("drop"); d.add_argument("player"); d.add_argument("indexes", type=int, nargs="+")
-    b = sub.add_parser("build"); b.add_argument("--min-reps", type=int, default=3)
+    b = sub.add_parser("build"); b.add_argument("--min-reps", type=int, default=3, help="reps a player needs on a camera side")
     args = parser.parse_args()
     if args.command == "fetch":
         return fetch(args.video_id, args.sections)

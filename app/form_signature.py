@@ -143,7 +143,7 @@ def _reps(series: Series) -> list[tuple[int, float, int]]:
     return reps
 
 
-def _signature(series: Series, low: int, release: float, end: int) -> dict:
+def _signature(series: Series, low: int, release: float, end: int, handedness: str) -> dict:
     t = series.t
     after = series.between(release, release + 0.25)
     lift = series.between(t[low] - 0.1, release + 0.25)
@@ -183,7 +183,11 @@ def _signature(series: Series, low: int, release: float, end: int) -> dict:
     if not values["release_height"] > values["set_height"] or not values["release_arm_deg"] > 0:
         return {}
     features = {k: round(float(v), 3) if v is not None and math.isfinite(v) else None for k, v in values.items()}
+    # Seen from the shooter's right when facing image-right. The far arm passes behind the
+    # head and the two sides are different camera angles, so they are not compared.
+    near = (facing > 0) == (handedness == "right")
     return {"release_s": round(release, 3), "set_s": round(opening, 3), "features": features,
+            "arm_side": "near" if near else "far",
             "shoulder_width": round(float(np.nanmedian(series.shoulder_width[lift])), 3),
             "skeleton": _skeleton(series, release, facing)}
 
@@ -217,4 +221,4 @@ def shot_signatures(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0, hande
     if len(poses) < 5:
         return []
     series = Series(poses, aspect_ratio, handedness)
-    return [s for s in (_signature(series, *rep) for rep in _reps(series)) if s]
+    return [s for s in (_signature(series, *rep, handedness) for rep in _reps(series)) if s]

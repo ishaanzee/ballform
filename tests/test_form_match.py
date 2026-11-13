@@ -100,7 +100,7 @@ def _player(name, set_elbow, release_elbow):
 
 def test_match_ranks_the_closest_player_first_and_says_what_differs():
     db = build_db([_player("Folded", 60, 176), _player("Open", 110, 160)])
-    assert db["features"]["set_elbow_deg"]["weight"] > 0.9
+    assert db["views"]["near"]["features"]["set_elbow_deg"]["weight"] > 0.9
     mine = [shot_signatures(shooter(set_elbow=100, release_elbow=162))[0] for _ in range(3)]
     result = match(mine, db)
     assert [m["name"] for m in result["matches"]] == ["Open", "Folded"]
@@ -109,15 +109,32 @@ def test_match_ranks_the_closest_player_first_and_says_what_differs():
     assert len(result["matches"][0]["skeleton"]) == len(SKELETON_TIMES)
     assert len(result["skeleton"]["yours"]) == len(SKELETON_TIMES)
     assert "feedback" not in match(mine, db, detail=1)["matches"][1]
-    notes = feedback(median_features(mine), db["players"][0], db["features"], limit=len(FEATURES))
+    notes = feedback(median_features(mine), db["views"]["near"]["players"][0], db["views"]["near"]["features"], limit=len(FEATURES))
     note = next(n for n in notes if n["feature"] == "set_elbow_deg")
     assert note["text"].startswith("Fold your shooting arm more at the set point")
     assert "yours is 100°, Folded's is 6" in note["text"]
 
 
+def test_near_and_far_arm_views_are_matched_separately():
+    def far(player):
+        return {**player, "reps": [dict(r, arm_side="far") for r in player["reps"]]}
+    # Seen from the far side the two players' measurements are swapped.
+    near = [_player("A", 60, 176), _player("B", 110, 160)]
+    db = build_db([{**a, "reps": a["reps"] + far(b)["reps"]} for a, b in zip(near, near[::-1])])
+    mine = _player("me", 62, 175)["reps"]
+    assert shot_signatures(shooter())[0]["arm_side"] == "near"
+    assert shot_signatures(shooter(facing=-1))[0]["arm_side"] == "far"
+    assert shot_signatures(shooter(facing=-1, hand="left"), handedness="left")[0]["arm_side"] == "near"
+    assert match(mine, db)["matches"][0]["name"] == "A"
+    result = match(far({"reps": mine})["reps"], db)
+    assert result["matches"][0]["name"] == "B" and result["arm_side"] == "far"
+    assert "far side" in " ".join(result["notes"])
+    assert match(far({"reps": mine})["reps"], build_db(near)) is None   # no far-side templates
+
+
 def test_match_needs_reps_and_a_database():
     assert match([], build_db([_player("A", 60, 176), _player("B", 110, 160)])) is None
-    assert match(_player("A", 60, 176)["reps"], {"players": [], "features": {}}) is None
+    assert match(_player("A", 60, 176)["reps"], {"views": {"near": {"players": [], "features": {}}}}) is None
 
 
 def test_match_warns_about_few_reps_and_a_view_that_is_not_side_on():
