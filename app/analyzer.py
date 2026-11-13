@@ -1217,7 +1217,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         result["limitations"].append(
             "Player match compares image-plane joint angles and timing of your free throws with templates measured "
             "from side-view broadcast free throws. It describes resemblance, not quality: shooting like a player is "
-            "not evidence of shooting better. Camera angle changes the measurements, so film side-on.")
+            "not evidence of shooting better. Camera angle changes the measurements, so film side-on, from the side "
+            "opposite the shooting hand.")
     if mode == "one_on_one":
         result["limitations"].extend(game_summary.get("limitations", []))
         if court_ignored:

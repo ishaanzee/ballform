@@ -14,7 +14,7 @@ function updateSettings() {
   $('#handedness').disabled = game;
   $('#poseModel').disabled = !game;
   $('#courtAutoField').classList.toggle('hidden', !game);
-  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : matching ? 'Film one shooter’s free throws from the side, level with the free-throw line, whole body in frame from before the ball comes up until the follow-through drops. Five or more in one clip gives a steadier match.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
+  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : matching ? 'Film one shooter’s free throws from the side opposite the shooting hand (from the left of a right-hander), level with the free-throw line, whole body in frame from before the ball comes up until the follow-through drops. Five or more in one clip gives a steadier match.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
   $('#analyze').innerHTML = `${game ? 'Analyze game' : matching ? 'Match my form' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
   const court = courtAllowed();

@@ -141,7 +141,9 @@ def test_near_and_far_arm_views_are_matched_separately():
     assert match(mine, db)["matches"][0]["name"] == "A"
     result = match(far({"reps": mine})["reps"], db)
     assert result["matches"][0]["name"] == "B" and result["arm_side"] == "far"
-    assert "far side" in " ".join(result["notes"])
+    assert not any("templates from this side" in note for note in result["notes"])
+    fewer = build_db([{**a, "reps": a["reps"] + far(b)["reps"]} for a, b in zip(near, near[::-1])] + [_player("C", 80, 170)])
+    assert "Only 2 of 3 players" in " ".join(match(far({"reps": mine})["reps"], fewer)["notes"])
     assert match(far({"reps": mine})["reps"], build_db(near)) is None   # no far-side templates
 
 

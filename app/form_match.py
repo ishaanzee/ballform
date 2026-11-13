@@ -17,7 +17,7 @@ import numpy as np
 from app.form_signature import FEATURES, JOINTS, SKELETON_TIMES
 
 DB_PATH = Path(__file__).with_name("form_db.json")
-# Shoulder width over torso length. Side-on broadcast free throws measure 0.17-0.27, oblique ones 0.44+.
+# Shoulder width over torso length. Side-on broadcast free throws measure 0.17-0.27, oblique ones 0.37+.
 MAX_SIDE_SHOULDER_WIDTH = 0.35
 SIDES = ("near", "far")
 # Smallest difference worth telling a shooter about, by unit.
@@ -172,9 +172,11 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
     if widths and float(np.median(widths)) > MAX_SIDE_SHOULDER_WIDTH:
         notes.append("This clip is not a side view, and the player templates are. Film from the side, level with "
                      "the free-throw line, or the match mostly reflects the camera angle.")
-    if side == "far":
-        notes.append("Your shooting arm is on the far side of your body from the camera, where it passes behind "
-                     "your head. Filming from your shooting-hand side measures it better.")
+    other = (db.get("views") or {}).get(SIDES[1 - SIDES.index(side)]) or {"players": []}
+    if len(other["players"]) > len(view["players"]):
+        notes.append(f"Only {len(view['players'])} of {len(other['players'])} players have templates from this side. "
+                     "Film from the side " + ("opposite" if side == "near" else "of") + " your shooting hand to "
+                     "be compared with all of them.")
     if len(reps) < 3:
         notes.append(f"Based on {len(reps)} free throw{'s' if len(reps) != 1 else ''}. Five or more in one clip "
                      "gives a steadier match.")
