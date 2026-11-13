@@ -49,6 +49,9 @@ POSE_MODEL = ROOT / "models" / "pose_landmarker_lite.task"
 POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
 GAME_POSE_MODEL = ROOT / "models" / "pose_landmarker_full.task"
 GAME_POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+# Player matching uses the model the templates were measured with (scripts/formdb/build.py).
+MATCH_POSE_MODEL = ROOT / "models" / "pose_landmarker_heavy.task"
+MATCH_POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task"
 BALL_MODEL = ROOT / "models" / "yolo11n.pt"
 BALL_MODEL_URL = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo11n.pt"
 MODEL_RELEASE = "https://github.com/ultralytics/assets/releases/download/v8.4.0/"
@@ -857,8 +860,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_times = {}
     stage_started = time.perf_counter()
     report(0.02, "Loading local vision models")
-    # Player matching compares joint positions with broadcast templates, so it uses the larger pose model.
-    pose_path = None if game_mode else ensure_pose_model(mode == "form_match")
+    pose_path = (None if game_mode else _ensure_model(MATCH_POSE_MODEL, MATCH_POSE_MODEL_URL)
+                 if mode == "form_match" else ensure_pose_model())
     device = _device()
     game_pose_path = None
     pose_fallback = None

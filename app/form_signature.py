@@ -113,12 +113,13 @@ def _reps(series: Series) -> list[tuple[int, float, int]]:
     for start, end in runs:
         if t[end] - t[start] < 0.1:
             continue
-        window = series.between(t[start] - LOOKBACK_S, min(t[end], t[start] + 0.6))
-        elbows = series.elbow[window]
-        if not np.isfinite(elbows).any():
+        # Straightest while raised, then most folded before that. An arm hanging straight
+        # before the lift must not be taken for the release.
+        up = series.between(t[start], min(t[end], t[start] + 0.6))
+        if not np.isfinite(series.elbow[up]).any():
             continue
-        top = int(window[np.nanargmax(elbows)])
-        before = window[window <= top]
+        top = int(up[np.nanargmax(series.elbow[up])])
+        before = series.between(t[start] - LOOKBACK_S, t[top])
         low = int(before[np.nanargmin(series.elbow[before])])
         lo, hi = series.elbow[low], series.elbow[top]
         if hi < MIN_RELEASE_ELBOW or hi - lo < MIN_EXTENSION:
@@ -139,6 +140,10 @@ def _signature(series: Series, low: int, release: float, end: int) -> dict:
     # The shooter faces the way the shooting wrist sits from the nose at the set point.
     facing = 1.0 if np.nanmedian(series.wrist_dx[lift]) >= 0 else -1.0
     lo, hi = float(series.elbow[low]), float(np.nanmax(series.elbow[after]))
+    # The elbow stays near its smallest angle for several frames while the ball still rises,
+    # so the set point is read where the elbow starts to open, not at the smallest angle.
+    opening = _crossing(t, series.elbow, low, int(after[-1]), lo + 0.1 * (hi - lo))
+    at_set = lambda values: float(np.interp(opening, t, values))  # noqa: E731
     arm = np.nanmedian(series.arm[series.between(release, release + 0.15)], axis=0)
     legs = series.between(release - 0.8, release)
     knee_at = int(legs[np.nanargmin(series.knee[legs])]) if np.isfinite(series.knee[legs]).any() else None
@@ -147,13 +152,12 @@ def _signature(series: Series, low: int, release: float, end: int) -> dict:
     hold_end = min(t[end], release + MAX_HOLD_S)
     values = {
         "set_elbow_deg": lo,
-        "set_height": float(series.wrist_h[low]),
-        "set_forward": float(series.wrist_dx[low] * facing),
+        "set_height": at_set(series.wrist_h),
+        "set_forward": at_set(series.wrist_dx) * facing,
         "release_elbow_deg": hi,
         "release_height": float(np.nanmax(series.wrist_h[after])),
         "release_arm_deg": math.degrees(math.atan2(-arm[1], arm[0] * facing)),
-        "extend_time_s": (_crossing(t, series.elbow, low, int(after[-1]), lo + 0.9 * (hi - lo))
-                          - _crossing(t, series.elbow, low, int(after[-1]), lo + 0.1 * (hi - lo))),
+        "extend_time_s": _crossing(t, series.elbow, low, int(after[-1]), lo + 0.9 * (hi - lo)) - opening,
         "lift_time_s": release - float(t[below[-1]]) if below else None,
         "knee_bend_deg": float(series.knee[knee_at]) if knee_at is not None else None,
         "knee_lead_s": release - float(t[knee_at]) if knee_at is not None else None,
@@ -165,8 +169,8 @@ def _signature(series: Series, low: int, release: float, end: int) -> dict:
     # An arm that ends below its set point or pointing down was lost by the pose model at release.
     if not values["release_height"] > values["set_height"] or not values["release_arm_deg"] > 0:
         return {}
-    features = {k: round(v, 3) if v is not None and math.isfinite(v) else None for k, v in values.items()}
-    return {"release_s": round(release, 3), "set_s": round(float(t[low]), 3), "features": features,
+    features = {k: round(float(v), 3) if v is not None and math.isfinite(v) else None for k, v in values.items()}
+    return {"release_s": round(release, 3), "set_s": round(opening, 3), "features": features,
             "shoulder_width": round(float(np.nanmedian(series.shoulder_width[lift])), 3),
             "skeleton": _skeleton(series, release, facing)}
 

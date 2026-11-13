@@ -253,3 +253,15 @@ def test_run_logs_the_traceback_when_analysis_fails(monkeypatch, tmp_path, caplo
     record = next(r for r in caplog.records if job_id in r.getMessage())
     assert record.exc_info and record.exc_info[0] is IndexError
     main.STATE.pop(job_id, None)
+
+
+def test_upload_accepts_form_match_mode_and_rejects_unknown_modes(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    response = client.post("/api/jobs", files={"video": ("ft.mp4", b"video", "video/mp4")},
+                           data={"mode": "form_match", "handedness": "left"})
+    assert response.status_code == 202
+    assert calls[0][0][3:5] == ("form_match", "left")
+    assert response.json()["pose_model_requested"] is None
+    assert client.post("/api/jobs", files={"video": ("ft.mp4", b"video", "video/mp4")},
+                       data={"mode": "player_match"}).status_code == 422

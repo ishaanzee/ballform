@@ -36,9 +36,7 @@ from app.form_signature import FEATURES, shot_signatures  # noqa: E402
 from app.models import PoseFrame  # noqa: E402
 
 STAGING = ROOT / "eval" / "staging" / "formdb"
-HEAVY = ROOT / "models" / "pose_landmarker_heavy.task"
-HEAVY_URL = ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/"
-             "float16/latest/pose_landmarker_heavy.task")
+from app.analyzer import MATCH_POSE_MODEL as HEAVY, MATCH_POSE_MODEL_URL as HEAVY_URL  # noqa: E402
 MP_NAMES = {0: "nose", 11: "left_shoulder", 12: "right_shoulder", 13: "left_elbow", 14: "right_elbow",
             15: "left_wrist", 16: "right_wrist", 23: "left_hip", 24: "right_hip", 25: "left_knee",
             26: "right_knee", 27: "left_ankle", 28: "right_ankle"}
@@ -135,7 +133,7 @@ def crop_poses(video: Path, start: float, end: float, crop: tuple[int, int, int,
     import mediapipe as mp
     if not HEAVY.exists():
         import urllib.request
-        urllib.request.urlretrieve(HEAVY_URL, HEAVY)
+        urllib.request.urlretrieve(HEAVY_URL, HEAVY)  # noqa: S310
     options = mp.tasks.vision.PoseLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=str(HEAVY), delegate=mp.tasks.BaseOptions.Delegate.CPU),
         running_mode=mp.tasks.vision.RunningMode.VIDEO, num_poses=1, min_pose_detection_confidence=0.3,
@@ -187,7 +185,15 @@ def measure(video: Path, when: float, box: tuple[int, int, int, int], hand: str)
     drift = float(np.linalg.norm(ankles.max(axis=0) - ankles.min(axis=0)))
     if drift > MAX_DRIFT:
         return None, f"shooter moving ({drift:.2f} torso)"
-    return {**rep, "crop": list(crop)}, "ok"
+    stored = [[round(p.time_s, 4), {k: [round(v[0], 4), round(v[1], 4)] for k, v in p.landmarks.items()}] for p in poses]
+    return {**rep, "crop": list(crop), "aspect": aspect, "poses": stored}, "ok"
+
+
+def remeasure(rep: dict, hand: str) -> dict | None:
+    """The rep measured again from its stored poses with the current app/form_signature.py."""
+    poses = [PoseFrame(i, t, {k: (x, y, 1.0) for k, (x, y) in marks.items()}) for i, (t, marks) in enumerate(rep["poses"])]
+    found = [r for r in shot_signatures(poses, rep["aspect"], hand) if abs(r["release_s"] - rep["release_s"]) < 0.4]
+    return {**rep, **found[0]} if found and found[0]["shoulder_width"] <= MAX_SHOULDER_WIDTH else None
 
 
 def scan(video: Path, player: str, hand: str, source: str | None) -> int:
@@ -214,6 +220,7 @@ def scan(video: Path, player: str, hand: str, source: str | None) -> int:
 def sheet(player: str) -> int:
     """Set-point and release frames of every rep with the measured skeleton drawn on."""
     data = load_reps(player)
+    data["reps"] = [remeasure(rep, data["hand"]) or rep for rep in data["reps"]]
     tiles = []
     for index, rep in enumerate(data["reps"]):
         x1, y1, x2, y2 = rep["crop"]
@@ -253,6 +260,8 @@ def drop(player: str, indexes: list[int]) -> int:
 
 def build(min_reps: int) -> int:
     players = [json.loads(p.read_text()) for p in sorted((STAGING / "reps").glob("*.json"))]
+    for player in players:
+        player["reps"] = [r for r in (remeasure(rep, player["hand"]) for rep in player["reps"]) if r]
     players = [p for p in players if len(p["reps"]) >= min_reps]
     if len(players) < 2:
         print(f"need at least two players with {min_reps}+ reps")

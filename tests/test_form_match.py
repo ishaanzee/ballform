@@ -64,6 +64,16 @@ def test_signature_does_not_depend_on_which_way_the_shooter_faces():
     assert right["set_forward"] != 0
 
 
+def test_arm_hanging_straight_before_the_lift_is_not_the_release():
+    poses = shooter(set_elbow=75)
+    for pose in poses:
+        if pose.time_s < 0.8:   # arm fully straight at the side before the routine
+            x, y, v = pose.landmarks["right_shoulder"]
+            pose.landmarks["right_elbow"], pose.landmarks["right_wrist"] = (x, y + 0.12, v), (x, y + 0.23, v)
+    reps = shot_signatures(poses)
+    assert len(reps) == 1 and reps[0]["features"]["set_elbow_deg"] == pytest.approx(75, abs=5)
+
+
 def test_left_handed_shooter_is_measured_on_the_left_arm():
     features = shot_signatures(shooter(set_elbow=90, hand="left"), handedness="left")[0]["features"]
     assert features["set_elbow_deg"] == pytest.approx(90, abs=4)
