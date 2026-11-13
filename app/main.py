@@ -123,8 +123,8 @@ async def create_job(background: BackgroundTasks, video: UploadFile = File(...),
                      rim_frame: str | None = Form(None), rim_time_s: str | None = Form(None),
                      pose_model: str = Form("yolo26s-pose"), court_landmarks: str | None = Form(None),
                      court_auto: str | None = Form(None), court_standard: str = Form("nba")) -> dict:
-    if mode not in {"form", "one_on_one"}:
-        raise HTTPException(422, "Mode must be form or one_on_one.")
+    if mode not in {"form", "form_match", "one_on_one"}:
+        raise HTTPException(422, "Mode must be form, form_match or one_on_one.")
     if handedness not in {"right", "left"}:
         raise HTTPException(422, "Handedness must be right or left.")
     if camera not in CAMERAS:

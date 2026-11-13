@@ -39,6 +39,8 @@ from app.vision import COURT_PROFILES, CutDetector, camera_profile, regions, val
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
 from app.ball_select import CandidateCourtVision, StaticBallFilter, enabled as static_ball_filter_enabled
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
+from app.form_match import match as match_players
+from app.form_signature import shot_signatures
 from app.possession import decode_handlers
 from app.trajectory import floor_trajectories, trajectories_json
 
@@ -844,7 +846,7 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
                   rim_time_s: float | None = None, pose_model: str = "yolo26s-pose",
                   court_landmarks: dict | None = None, auto_court: bool = False,
                   court_standard: str = "nba") -> dict:
-    if mode not in {"form", "one_on_one"} or handedness not in {"left", "right"}:
+    if mode not in {"form", "form_match", "one_on_one"} or handedness not in {"left", "right"}:
         raise ValueError("Invalid analysis mode or shooting hand")
     if court_standard not in STANDARDS:
         raise ValueError(f"Court standard must be one of: {', '.join(STANDARDS)}.")
@@ -855,7 +857,8 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
     stage_times = {}
     stage_started = time.perf_counter()
     report(0.02, "Loading local vision models")
-    pose_path = None if game_mode else ensure_pose_model()
+    # Player matching compares joint positions with broadcast templates, so it uses the larger pose model.
+    pose_path = None if game_mode else ensure_pose_model(mode == "form_match")
     device = _device()
     game_pose_path = None
     pose_fallback = None
@@ -1201,6 +1204,17 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         ],
         "annotated_video": "annotated.mp4",
     }
+    if mode == "form_match":
+        signatures = shot_signatures(poses, width / height, handedness)
+        result["form_match"] = match_players(signatures) or {
+            "reps": len(signatures), "matches": [], "notes": [
+                "No free throw was measured. Film one shooter from the side with the whole body in frame, from "
+                "before the ball comes up until the follow-through drops."
+                if not signatures else "No player templates are installed (app/form_db.json is missing)."]}
+        result["limitations"].append(
+            "Player match compares image-plane joint angles and timing of your free throws with templates measured "
+            "from side-view broadcast free throws. It describes resemblance, not quality: shooting like a player is "
+            "not evidence of shooting better. Camera angle changes the measurements, so film side-on.")
     if mode == "one_on_one":
         result["limitations"].extend(game_summary.get("limitations", []))
         if court_ignored:
