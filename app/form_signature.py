@@ -37,6 +37,7 @@ FEATURES = {
 SKELETON_TIMES = tuple(round(-0.8 + 0.05 * i, 2) for i in range(25))  # seconds from release
 MIN_EXTENSION = 40.0   # degrees the elbow must open between set point and release
 MIN_RELEASE_ELBOW = 135.0
+REOPEN_DEG = 12.0       # elbow opening, walking back in time, that ends the search for the set point
 LOOKBACK_S = 0.7       # set point is searched this long before the wrist passes the nose
 MAX_HOLD_S = 2.0
 
@@ -83,6 +84,10 @@ class Series:
             self.trunk_dx = (self.shoulder[:, 0] - self.hip[:, 0]) / self.torso
             self.trunk_dy = (self.hip[:, 1] - self.shoulder[:, 1]) / self.torso
             self.shoulder_width = np.linalg.norm(xy["left_shoulder"] - xy["right_shoulder"], axis=1) / self.torso
+        knees = (xy["left_knee"] + xy["right_knee"]) / 2
+        with np.errstate(invalid="ignore", divide="ignore"):
+            self.forward = ((xy["nose"][:, 0] - self.shoulder[:, 0])
+                            + (knees[:, 0] - (self.hip[:, 0] + self.ankle[:, 0]) / 2)) / self.torso
         self.knee = np.nanmean(np.stack([_angle(xy[f"{s}_hip"], xy[f"{s}_knee"], xy[f"{s}_ankle"])
                                          for s in ("left", "right")]), axis=0) if len(poses) else np.zeros(0)
 
@@ -119,8 +124,15 @@ def _reps(series: Series) -> list[tuple[int, float, int]]:
         if not np.isfinite(series.elbow[up]).any():
             continue
         top = int(up[np.nanargmax(series.elbow[up])])
-        before = series.between(t[start] - LOOKBACK_S, t[top])
-        low = int(before[np.nanargmin(series.elbow[before])])
+        # The set point is the fold the extension starts from: walk back from the release
+        # until the elbow opens again. The elbow is also folded while the ball is held at
+        # the waist, which is not the set point.
+        low, first = top, int(series.between(t[start] - LOOKBACK_S, t[top])[0])
+        for i in range(top - 1, first - 1, -1):
+            if series.elbow[i] < series.elbow[low]:
+                low = i
+            elif series.elbow[i] > series.elbow[low] + REOPEN_DEG:
+                break
         lo, hi = series.elbow[low], series.elbow[top]
         if hi < MIN_RELEASE_ELBOW or hi - lo < MIN_EXTENSION:
             continue
@@ -137,8 +149,9 @@ def _signature(series: Series, low: int, release: float, end: int) -> dict:
     lift = series.between(t[low] - 0.1, release + 0.25)
     if len(after) == 0 or np.isfinite(series.torso[lift]).mean() < 0.8:
         return {}
-    # The shooter faces the way the shooting wrist sits from the nose at the set point.
-    facing = 1.0 if np.nanmedian(series.wrist_dx[lift]) >= 0 else -1.0
+    # The shooter faces the way the nose sits from the shoulders and the bent knees from the
+    # hip-ankle line. The wrist does not say: a high set point is over or behind the head.
+    facing = 1.0 if np.nanmedian(series.forward[lift]) >= 0 else -1.0
     lo, hi = float(series.elbow[low]), float(np.nanmax(series.elbow[after]))
     # The elbow stays near its smallest angle for several frames while the ball still rises,
     # so the set point is read where the elbow starts to open, not at the smallest angle.

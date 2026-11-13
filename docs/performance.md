@@ -14,7 +14,7 @@ If you work on `kernelopt` yourself, install your checkout instead with `-e ../k
 
 When it is installed, `BALLFORM_BALL_BACKEND=auto` (the default) uses it on Apple silicon. The two side crops of a frame run as one batched GPU call. Set `BALLFORM_BALL_BACKEND=coreml` to use ONNX Runtime + Core ML instead, or `mlx` to require the port. If the package is missing or fails, `auto` falls back to Core ML and records why in `vision.ball_backend_fallback`.
 
-The port is a pure speedup. On four test clips, its ball detections, possession boxes, players, ball handler and shot results were identical to the Core ML path. It matched all 1082 confident objects on 120 other frames. Per call it takes 28.5 ms versus 48.4 ms, and the two side crops take 54.5 ms together versus 96.8 ms. End to end, analyses were 13–29% faster, and waits on side-crop detection fell from 5–9 s per clip to under 0.6 s.
+The port is a pure speedup. On four test clips, its ball detections, possession boxes, players, ball handler and shot results were identical to the Core ML path. It matched all 1082 confident objects on 120 other frames. Measured in Ballform, it takes 28.5 ms per call versus 48.4 ms (kernelopt's separate full-1080p-frame benchmark measured 28.2 ms versus 50.9 ms), and the two side crops take 54.5 ms together versus 96.8 ms. End to end, analyses were 13–29% faster, and waits on side-crop detection fell from 5–9 s per clip to under 0.6 s.
 
 Two caveats:
 - A plain `uv sync` removes packages that are not in the lockfile. Use `uv sync --inexact`, or rerun the install command above. Otherwise analyses quietly fall back to Core ML.

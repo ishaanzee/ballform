@@ -42,7 +42,7 @@ Open <http://127.0.0.1:8000>. The first run downloads the pose and detection wei
 
 Both speedups are optional. Without them everything still runs, just slower, and the results page says which one is missing.
 
-**Faster ball detector.** An MLX + Metal port of the same model from [kernelopt](https://github.com/ishaanzee/kernelopt), 28.5 ms per call versus 48.4 ms, with identical detections.
+**Faster ball detector.** An MLX + Metal port of the same model from [kernelopt](https://github.com/ishaanzee/kernelopt), 28.5 ms per call versus 48.4 ms as measured in Ballform, with identical detections. (kernelopt's README reports 28.2 ms versus 50.9 ms; that is a separate benchmark on full 1920×1080 frames.)
 
 ```bash
 uv pip install --python .venv/bin/python "fast-rfdetr @ git+https://github.com/ishaanzee/kernelopt"
