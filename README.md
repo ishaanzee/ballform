@@ -23,6 +23,7 @@ The numbers are review signals, not a scouting department in a box. Compare clip
 - **Labels shot types**: jump shot, floater, layup, dunk, tip.
 - **Court calibration** maps the floor so distances, zones and spacing come out in feet. On broadcast footage it is found automatically from the whole clip; you can also mark or adjust the court landmarks yourself.
 - **Form mode** reports 2D release timing, launch angle, elbow angle and upper-arm elevation for comparing your own reps.
+- **Free-throw player match** measures your free throws from a side-on clip, finds which of 25 NBA players' free-throw form is closest and says what to change to look more like one of them. It describes resemblance, not quality.
 - **Annotated review video** with tracking, court lines and a pulse on makes.
 
 Everything runs locally. Clips and reports stay in `data/jobs/`.
@@ -85,6 +86,7 @@ Deeper write-ups, with the measurements behind them:
 - [Court calibration](docs/court-calibration.md): homography fit, auto-detect, whole-clip calibration, floor trajectories, accuracy checks
 - [Performance](docs/performance.md): model backends, pipelining, review video encoding, timings
 - [Cameras and clips](docs/cameras-and-clips.md): profiles, rim detection, make classifier
+- [Free-throw player match](docs/form-match.md): filming, measurements, player templates, matching, limits
 
 ## limits
 
@@ -99,6 +101,8 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 | `app/shots.py` | hidden-release jump shots, rim attempts, shot types |
 | `app/game.py` | shooter/defender association, shot-space score |
 | `app/court.py`, `court_detect.py`, `camera_motion.py`, `trajectory.py` | court templates and fit, auto-detect, camera motion, floor trajectories |
+| `app/form_signature.py`, `form_match.py`, `form_db.json` | free-throw measurements from pose, player templates and matching |
+| `scripts/formdb/build.py` | builds the player templates from broadcast free throws |
 | `app/tracking.py` | multi-player IDs and jersey descriptors |
 | `app/vision.py` | wide-view detection, crops, court filtering, cuts |
 | `app/main.py` | local upload/job API |
