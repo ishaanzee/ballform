@@ -74,6 +74,19 @@ def test_arm_hanging_straight_before_the_lift_is_not_the_release():
     assert len(reps) == 1 and reps[0]["features"]["set_elbow_deg"] == pytest.approx(75, abs=5)
 
 
+def test_pose_glitch_that_looks_like_a_lift_is_not_a_rep():
+    poses = shooter(hold=0.0, duration=2.0)
+    for pose in poses:   # the arm is up for an instant only
+        if pose.time_s > 1.65:
+            x, y, v = pose.landmarks["right_shoulder"]
+            pose.landmarks["right_elbow"], pose.landmarks["right_wrist"] = (x, y + 0.12, v), (x, y + 0.23, v)
+    assert shot_signatures(poses) == []
+    upside_down = shooter()
+    for pose in upside_down:
+        pose.landmarks["left_hip"], pose.landmarks["right_hip"] = (0.5, 0.2, 0.9), (0.5, 0.2, 0.9)
+    assert shot_signatures(upside_down) == []
+
+
 def test_left_handed_shooter_is_measured_on_the_left_arm():
     features = shot_signatures(shooter(set_elbow=90, hand="left"), handedness="left")[0]["features"]
     assert features["set_elbow_deg"] == pytest.approx(90, abs=4)

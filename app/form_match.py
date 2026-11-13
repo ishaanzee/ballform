@@ -20,6 +20,8 @@ DB_PATH = Path(__file__).with_name("form_db.json")
 # Shoulder width over torso length. Side-on broadcast free throws measure 0.17-0.27, oblique ones 0.44+.
 MAX_SIDE_SHOULDER_WIDTH = 0.35
 SIDES = ("near", "far")
+# Smallest difference worth telling a shooter about, by unit.
+MIN_DIFFERENCE = {"°": 5.0, "torso": 0.1, "s": 0.08}
 # feature -> (what to do when yours is lower than the player's, what to do when it is higher)
 ADVICE = {
     "set_elbow_deg": ("Keep your shooting arm more open at the set point", "Fold your shooting arm more at the set point"),
@@ -122,7 +124,8 @@ def feedback(mine: dict, player: dict, features: dict, limit: int = 3) -> list[d
     for name in sorted(parts, key=parts.get, reverse=True):
         yours, theirs = mine[name], player["features"][name]
         # Inside the player's own rep-to-rep variation there is nothing to change.
-        if abs(yours - theirs) <= max(player["spread"].get(name) or 0.0, features[name]["within"]):
+        if abs(yours - theirs) <= max(player["spread"].get(name) or 0.0, features[name]["within"],
+                                      MIN_DIFFERENCE[FEATURES[name][1]]):
             continue
         advice = ADVICE[name][0 if yours < theirs else 1]
         notes.append({"feature": name, "label": FEATURES[name][0], "yours": round(yours, 3), "theirs": round(theirs, 3),

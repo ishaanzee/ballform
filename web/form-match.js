@@ -70,7 +70,7 @@
       ? `<p class="cue">Least repeatable from shot to shot: ${steadier.map(c => `${esc(c.label.toLowerCase())} (varies ${value(c.yours, c.unit)}, players ${value(c.players, c.unit)})`).join('; ')}.</p>`
       : '<p class="cue">Your free throws repeat about as closely as the players\' do on every measurement.</p>';
     root.innerHTML = `<h3>Player match</h3>
-      <p class="report-note">Closest free-throw forms among ${match.matches.length} players, from ${match.reps} of your free throw${match.reps === 1 ? '' : 's'}. Similarity is 0–100 on measured set point, release, timing and legs; it is resemblance, not quality.</p>
+      <p class="report-note">Closest free-throw forms among ${match.matches.length} players, from your ${match.reps} free throw${match.reps === 1 ? '' : 's'} in this clip. Similarity is 0–100 on measured set point, release, timing and legs; it is resemblance, not quality.</p>
       ${notes}
       <div class="match-grid"><ol id="matchList" class="match-list">${list}</ol>
       <div class="match-stage"><canvas id="matchCanvas" width="560" height="380" role="img" aria-label="Your skeleton and the player's skeleton through the release"></canvas>

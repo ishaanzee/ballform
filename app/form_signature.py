@@ -40,6 +40,7 @@ MIN_RELEASE_ELBOW = 135.0
 REOPEN_DEG = 12.0       # elbow opening, walking back in time, that ends the search for the set point
 LOOKBACK_S = 0.7       # set point is searched this long before the wrist passes the nose
 MAX_HOLD_S = 2.0
+MAX_LEAN_DEG, MIN_KNEE_DEG, MIN_RAISED_S = 30.0, 100.0, 0.2
 
 
 def _angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
@@ -181,6 +182,12 @@ def _signature(series: Series, low: int, release: float, end: int, handedness: s
     }
     # An arm that ends below its set point or pointing down was lost by the pose model at release.
     if not values["release_height"] > values["set_height"] or not values["release_arm_deg"] > 0:
+        return {}
+    # A pose that jumps for a few frames can look like a lift: a real shooter stands upright
+    # on legs that are not folded, and keeps the arm up for a moment after the release.
+    lean, knee = values["trunk_lean_deg"], values["knee_bend_deg"]
+    if (lean is None or abs(lean) > MAX_LEAN_DEG or knee is None or knee < MIN_KNEE_DEG
+            or t[end] - release < MIN_RAISED_S):
         return {}
     features = {k: round(float(v), 3) if v is not None and math.isfinite(v) else None for k, v in values.items()}
     # Seen from the shooter's right when facing image-right. The far arm passes behind the
