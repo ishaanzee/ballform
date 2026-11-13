@@ -10,11 +10,12 @@ let selectedPoseModelForJob = null;
 const poseModelLabels = {'yolo26m-pose':'YOLO26m pose','yolo26s-pose':'YOLO26s pose'};
 function updateSettings() {
   const game = $('#analysisMode').value === 'one_on_one';
+  const matching = $('#analysisMode').value === 'form_match';
   $('#handedness').disabled = game;
   $('#poseModel').disabled = !game;
   $('#courtAutoField').classList.toggle('hidden', !game);
-  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
-  $('#analyze').innerHTML = `${game ? 'Analyze game' : 'Analyze form'} <span>→</span>`;
+  $('#modeHelp').textContent = game ? 'For NBA broadcasts choose Moving broadcast + tracked rim; players are then told apart from referees and spectators automatically. Game analysis checks both shooting hands. Wide views take longer to process.' : matching ? 'Film one shooter’s free throws from the side, level with the free-throw line, whole body in frame from before the ball comes up until the follow-through drops. Five or more in one clip gives a steadier match.' : 'Keep one shooter’s arm, ball, feet, and basket visible. Use a steady camera for a repeatable mechanics review.';
+  $('#analyze').innerHTML = `${game ? 'Analyze game' : matching ? 'Match my form' : 'Analyze form'} <span>→</span>`;
   const moving = $('#cameraProfile').value === 'moving';
   const court = courtAllowed();
   $('#markCourt').classList.toggle('hidden', !court);
@@ -201,7 +202,7 @@ function render(id,result){
   localStorage.removeItem(jobKey);
   $('#progressStep').classList.add('hidden');$('#workspace').classList.add('hidden');$('#results').classList.remove('hidden');
   const game=result.mode==='one_on_one';
-  $('#reportMode').textContent=game?`GAME REVIEW · ${(result.camera_profile||'AUTO').toUpperCase()}`:`SHOOTING FORM · ${(result.handedness||$('#handedness').value).toUpperCase()} HAND`;
+  $('#reportMode').textContent=game?`GAME REVIEW · ${(result.camera_profile||'AUTO').toUpperCase()}`:`${result.mode==='form_match'?'FREE-THROW MATCH':'SHOOTING FORM'} · ${(result.handedness||$('#handedness').value).toUpperCase()} HAND`;
   $('#gameHelp').classList.toggle('hidden',!game);
   if(game){const method=result.game_summary?.method;$('#gameHelp').textContent='Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. '+(result.court_calibration?'Torso-length distances are projected in the image and normalized to the shooter’s torso length; metrics in feet are measured on the calibrated floor. Compare torso-length metrics only across clips with similar camera angles.':'Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.')+(method?.formula?` Score: ${method.formula}.`:'');}
   const made=result.shots.filter(s=>s.outcome==='made'||s.outcome==='likely made').length;
@@ -219,6 +220,7 @@ function render(id,result){
   const actual=result.vision?.pose_model;
   const modelText=requested?`Pose model requested: ${poseModelLabels[requested]||requested}; loaded: ${actual||'not reported'}. `:'';
   window.courtCalibration?.report(result);
+  window.formMatch?.render(result);
   $('#visionSummary').textContent=game?`${modelText}Tracking: up to ${diagnostics.max_players_visible??0} player candidates per frame; ${diagnostics.ball_detections??0} ball observations; ${diagnostics.scene_cuts??0} camera cuts. ${performanceText} Review player IDs in the video to confirm the matchup.`:performanceText;
   // Name any optional speedup this analysis could not use, so a slow run is explained.
   const vision=result.vision||{}, slower=[];

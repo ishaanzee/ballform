@@ -95,15 +95,14 @@ def test_match_ranks_the_closest_player_first_and_says_what_differs():
     result = match(mine, db)
     assert [m["name"] for m in result["matches"]] == ["Open", "Folded"]
     assert result["matches"][0]["similarity"] > result["matches"][1]["similarity"]
-    assert result["target"] == "Open"
-    toward = match(mine, db, target="Folded")
-    assert toward["target"] == "Folded"
-    assert 1 <= len(toward["feedback"]) <= 3
+    assert 1 <= len(result["matches"][1]["feedback"]) <= 3
+    assert len(result["matches"][0]["skeleton"]) == len(SKELETON_TIMES)
+    assert len(result["skeleton"]["yours"]) == len(SKELETON_TIMES)
+    assert "feedback" not in match(mine, db, detail=1)["matches"][1]
     notes = feedback(median_features(mine), db["players"][0], db["features"], limit=len(FEATURES))
     note = next(n for n in notes if n["feature"] == "set_elbow_deg")
     assert note["text"].startswith("Fold your shooting arm more at the set point")
     assert "yours is 100°, Folded's is 6" in note["text"]
-    assert len(toward["skeleton"]["theirs"]) == len(SKELETON_TIMES)
 
 
 def test_match_needs_reps_and_a_database():

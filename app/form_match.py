@@ -119,9 +119,16 @@ def feedback(mine: dict, player: dict, features: dict, limit: int = 3) -> list[d
     return notes
 
 
-def match(reps: Sequence[dict], db: dict | None = None, target: str | None = None) -> dict | None:
-    """Rank the database players by similarity to these reps and say what differs from the
-    closest one (or from ``target``, a player name). None without reps or a database."""
+def _comparison(mine: dict, player: dict, features: dict) -> list[dict]:
+    return [{"feature": name, "label": FEATURES[name][0], "unit": FEATURES[name][1],
+             "yours": None if mine[name] is None else round(mine[name], 3),
+             "theirs": player["features"].get(name), "weight": features[name]["weight"]} for name in features]
+
+
+def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict | None:
+    """Rank the database players by similarity to these reps. The ``detail`` closest carry
+    what to change to look like them, the measurements side by side and their skeleton.
+    None without reps or a database."""
     db = db if db is not None else load_db()
     if not reps or not db or not db.get("players"):
         return None
@@ -130,13 +137,14 @@ def match(reps: Sequence[dict], db: dict | None = None, target: str | None = Non
     for player in db["players"]:
         distance, _ = _distance(mine, player["features"], features)
         if distance is not None:
-            ranked.append({"name": player["name"], "distance": round(distance, 3),
-                           "similarity": round(100 * math.exp(-distance ** 2 / 2)), "reps": player["reps"]})
-    ranked.sort(key=lambda m: m["distance"])
+            ranked.append(({"name": player["name"], "distance": round(distance, 3),
+                            "similarity": round(100 * math.exp(-distance ** 2 / 2)), "reps": player["reps"]}, player))
     if not ranked:
         return None
-    chosen = next((p for p in db["players"] if p["name"] == target), None) or next(
-        p for p in db["players"] if p["name"] == ranked[0]["name"])
+    ranked.sort(key=lambda entry: entry[0]["distance"])
+    for entry, player in ranked[:detail]:
+        entry.update(feedback=feedback(mine, player, features), features=_comparison(mine, player, features),
+                     skeleton=player["skeleton"])
     widths = [r["shoulder_width"] for r in reps if r.get("shoulder_width") is not None]
     notes = []
     if widths and float(np.median(widths)) > MAX_SIDE_SHOULDER_WIDTH:
@@ -149,13 +157,9 @@ def match(reps: Sequence[dict], db: dict | None = None, target: str | None = Non
     for name, info in features.items():
         spread = _spread([r["features"].get(name) for r in reps])
         if spread is not None:
-            consistency.append({"feature": name, "label": FEATURES[name][0], "yours": round(spread, 3),
-                                "players": info["within"]})
-    return {"shot": db.get("shot", "free throw"), "reps": len(reps), "matches": ranked,
-            "target": chosen["name"], "feedback": feedback(mine, chosen, features),
-            "features": [{"feature": name, "label": FEATURES[name][0], "unit": FEATURES[name][1],
-                          "yours": None if mine[name] is None else round(mine[name], 3),
-                          "theirs": chosen["features"].get(name), "weight": features[name]["weight"]}
-                         for name in features],
+            consistency.append({"feature": name, "label": FEATURES[name][0], "unit": FEATURES[name][1],
+                                "yours": round(spread, 3), "players": info["within"]})
+    return {"shot": db.get("shot", "free throw"), "reps": len(reps),
+            "release_times_s": [r["release_s"] for r in reps], "matches": [entry for entry, _ in ranked],
             "consistency": consistency, "notes": notes,
-            "skeleton": {"times": list(SKELETON_TIMES), "yours": median_skeleton(reps), "theirs": chosen["skeleton"]}}
+            "skeleton": {"times": list(SKELETON_TIMES), "yours": median_skeleton(reps)}}
