@@ -136,6 +136,9 @@ def test_near_and_far_arm_views_are_matched_separately():
     db = build_db([{**a, "reps": a["reps"] + far(b)["reps"]} for a, b in zip(near, near[::-1])])
     mine = _player("me", 62, 175)["reps"]
     assert shot_signatures(shooter())[0]["arm_side"] == "near"
+    placement = shot_signatures(shooter(facing=-1))[0]["placement"]
+    assert placement["facing"] == -1 and 0 < placement["x"] < 1 and 0 < placement["torso"] < 1
+    assert len(match(mine, db)["placements"]) == len(mine)
     assert shot_signatures(shooter(facing=-1))[0]["arm_side"] == "far"
     assert shot_signatures(shooter(facing=-1, hand="left"), handedness="left")[0]["arm_side"] == "near"
     assert match(mine, db)["matches"][0]["name"] == "A"

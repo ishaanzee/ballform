@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>Ballform — Shot mechanics, frame by frame</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=form-match-2">
+  <link rel="stylesheet" href="/assets/styles.css?v=form-match-3">
 </head>
 <body>
   <header><a class="brand" id="homeLink" href="/"><span>BF</span> BALLFORM</a><div class="local" id="modeLabel">● RUNS LOCALLY</div></header>
@@ -79,14 +79,15 @@
       <div id="courtNote" class="report-note hidden"></div>
       <p id="gameHelp" class="report-note hidden">Shot-space score is a transparent 0–100 heuristic, not make probability or a validated player grade. Distances are projected in the image and normalized to the shooter’s torso length; they are not feet or meters. Compare clips only with similar camera angles.</p>
       <section id="formMatch" class="form-match hidden" aria-label="Player match"></section>
-      <video id="annotated" controls playsinline></video>
+      <div id="matchOnVideo" class="match-on-video hidden"></div>
+      <div class="review-wrap"><video id="annotated" controls playsinline></video><canvas id="reviewOverlay" aria-hidden="true"></canvas></div>
       <div id="shots"></div>
       <div class="limitations"><h3>Read this correctly</h3><ul id="limitations"></ul></div>
     </section>
   </main>
   <footer><span>BALLFORM / LOCAL VISION LAB</span><span>VIDEO EVIDENCE · 2D CAMERA PLANE</span></footer>
-  <script src="/assets/app.js?v=form-match-2"></script>
+  <script src="/assets/app.js?v=form-match-3"></script>
   <script src="/assets/court.js?v=court-whole-clip-1"></script>
-  <script src="/assets/form-match.js?v=form-match-2"></script>
+  <script src="/assets/form-match.js?v=form-match-3"></script>
 </body>
 </html>

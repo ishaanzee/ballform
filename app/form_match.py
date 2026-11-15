@@ -187,6 +187,7 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
             consistency.append({"feature": name, "label": FEATURES[name][0], "unit": FEATURES[name][1],
                                 "yours": round(spread, 3), "players": info["within"]})
     return {"shot": db.get("shot", "free throw"), "reps": len(reps), "arm_side": side,
-            "release_times_s": [r["release_s"] for r in reps], "matches": [entry for entry, _ in ranked],
+            "release_times_s": [r["release_s"] for r in reps],
+            "placements": [r.get("placement") for r in reps], "matches": [entry for entry, _ in ranked],
             "consistency": consistency, "notes": notes,
             "skeleton": {"times": list(SKELETON_TIMES), "yours": median_skeleton(reps)}}

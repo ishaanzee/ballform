@@ -43,6 +43,10 @@ As a check, each template free throw is left out of its own player's template an
 
 Feedback lists the largest weighted differences from the chosen player, leaving out any difference inside that player's own shot-to-shot spread or below 5°, 0.1 torso lengths or 0.08 s.
 
+## comparing poses
+
+The results panel plays your median skeleton and the chosen player's through the release, side by side or overlaid on the same feet. Above the review video, "Draw the player's pose over my video" draws that player's skeleton on your footage at each free throw: feet on your feet, scaled to your torso length, facing your way. The player's limbs are in his proportions, not yours, so joints line up only where the two forms and builds agree.
+
 ## limits
 
 - The templates are broadcast footage: an elevated camera 20 to 30 degrees off a true side view. A phone at chest height directly side-on sees slightly different angles. This offset has not been measured.

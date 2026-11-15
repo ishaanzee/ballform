@@ -68,6 +68,7 @@ class Series:
     def __init__(self, poses: Sequence[PoseFrame], aspect_ratio: float, handedness: str):
         poses = sorted(poses, key=lambda p: p.time_s)
         self.t = np.asarray([p.time_s for p in poses], dtype=float)
+        self.aspect_ratio = aspect_ratio
         raw = {name: np.asarray([[p.landmarks[name][0] * aspect_ratio, p.landmarks[name][1]]
                                  if name in p.landmarks else [np.nan, np.nan] for p in poses], dtype=float).reshape(-1, 2)
                for name in JOINTS}
@@ -201,7 +202,7 @@ def _signature(series: Series, low: int, release: float, end: int, handedness: s
     return {"release_s": round(release, 3), "set_s": round(opening, 3), "features": features,
             "arm_side": "near" if near else "far",
             "shoulder_width": round(float(np.nanmedian(series.shoulder_width[lift])), 3),
-            "skeleton": _skeleton(series, release, facing)}
+            "skeleton": _skeleton(series, release, facing), "placement": _placement(series, release, facing)}
 
 
 def _skeleton(series: Series, release: float, facing: float) -> list[dict | None]:
@@ -224,6 +225,18 @@ def _skeleton(series: Series, release: float, facing: float) -> list[dict | None
             joints[name] = [round(float((x - origin[0]) * facing / scale), 3), round(float((origin[1] - y) / scale), 3)]
         frames.append(joints if all(math.isfinite(v) for p in joints.values() for v in p) else None)
     return frames
+
+
+def _placement(series: Series, release: float, facing: float) -> dict | None:
+    """Where the skeleton sits in the frame, to draw another skeleton over the footage: the
+    origin between the ankles as fractions of frame width and height, and one torso length as
+    a fraction of frame height."""
+    at = int(np.argmin(np.abs(series.t - release)))
+    origin, scale = series.ankle[at], np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
+    if not np.isfinite(origin).all() or not scale > 0:
+        return None
+    return {"x": round(float(origin[0] / series.aspect_ratio), 4), "y": round(float(origin[1]), 4),
+            "torso": round(float(scale), 4), "aspect": round(float(series.aspect_ratio), 4), "facing": int(facing)}
 
 
 def shot_signatures(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0, handedness: str = "right") -> list[dict]:
