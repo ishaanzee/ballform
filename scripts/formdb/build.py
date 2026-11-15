@@ -47,7 +47,7 @@ BONES = [("left_shoulder", "right_shoulder"), ("left_shoulder", "left_elbow"), (
 SCAN_HZ = 3.0
 BEFORE_S, AFTER_S = 2.2, 1.6      # window followed around a raised-arm sighting
 MAX_SHOULDER_WIDTH = form_match.MAX_SIDE_SHOULDER_WIDTH
-MAX_DRIFT = 0.3                   # torso lengths the ankles may move in the 0.8 s before release
+MAX_DRIFT = form_match.MAX_DRIFT
 
 
 def slug(player: str) -> str:
@@ -194,10 +194,9 @@ def measure(video: Path, when: float, box: tuple[int, int, int, int], hand: str)
     if rep["shoulder_width"] > MAX_SHOULDER_WIDTH:
         return None, f"not a side view (shoulder width {rep['shoulder_width']:.2f} torso)"
     track = [f for f, t in zip(rep["skeleton"], form_match.SKELETON_TIMES) if f and -0.8 <= t <= 0]
-    if len(track) < 12:
+    drift = (rep.get("placement") or {}).get("drift")
+    if len(track) < 12 or drift is None:
         return None, "pose lost before release"
-    ankles = np.asarray([[(f["left_ankle"][k] + f["right_ankle"][k]) / 2 for k in (0, 1)] for f in track])
-    drift = float(np.linalg.norm(ankles.max(axis=0) - ankles.min(axis=0)))
     if drift > MAX_DRIFT:
         return None, f"shooter moving ({drift:.2f} torso)"
     stored = [[round(p.time_s, 4), {k: [round(v[0], 4), round(v[1], 4)] for k, v in p.landmarks.items()}] for p in poses]

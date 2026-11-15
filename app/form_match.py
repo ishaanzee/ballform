@@ -19,6 +19,7 @@ from app.form_signature import FEATURES, JOINTS, SKELETON_TIMES
 DB_PATH = Path(__file__).with_name("form_db.json")
 # Shoulder width over torso length. Side-on broadcast free throws measure 0.17-0.27, oblique ones 0.37+.
 MAX_SIDE_SHOULDER_WIDTH = 0.35
+MAX_DRIFT = 0.3   # torso lengths the feet may move in the frame in the 0.8 s before release
 SIDES = ("near", "far")
 # Smallest difference worth telling a shooter about, by unit.
 MIN_DIFFERENCE = {"°": 5.0, "torso": 0.1, "s": 0.08}
@@ -177,6 +178,10 @@ def match(reps: Sequence[dict], db: dict | None = None, detail: int = 5) -> dict
         notes.append(f"Only {len(view['players'])} of {len(other['players'])} players have templates from this side. "
                      "Film from the side " + ("opposite" if side == "near" else "of") + " your shooting hand to "
                      "be compared with all of them.")
+    drifts = [r["placement"]["drift"] for r in reps if (r.get("placement") or {}).get("drift") is not None]
+    if drifts and float(np.median(drifts)) > MAX_DRIFT:
+        notes.append("The camera or your feet moved during the free throws. The measurements follow your body, "
+                     "but a moving camera blurs the pose; a still camera measures better.")
     if len(reps) < 3:
         notes.append(f"Based on {len(reps)} free throw{'s' if len(reps) != 1 else ''}. Five or more in one clip "
                      "gives a steadier match.")

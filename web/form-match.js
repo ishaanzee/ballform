@@ -65,8 +65,11 @@
     const rep = data.release_times_s.findIndex((t, i) => data.placements[i] && now - t >= times[0] && now - t <= times[times.length - 1]);
     const joints = rep < 0 ? null : jointsAt(frames, now - data.release_times_s[rep]);
     if (!joints) return;
-    const place = data.placements[rep], W = canvas.width, H = canvas.height, unit = place.torso * H;
-    const at = name => [place.x * W + joints[name][0] * place.facing * unit, place.y * H - joints[name][1] * unit];
+    // Your feet in this frame, so the player stays on them when the camera moves.
+    const place = data.placements[rep], feet = jointsAt(place.track.map(p => p && { at: p }), now - data.release_times_s[rep]);
+    if (!feet) return;
+    const W = canvas.width, H = canvas.height, unit = place.torso * H;
+    const at = name => [feet.at[0] * W + joints[name][0] * place.facing * unit, feet.at[1] * H - joints[name][1] * unit];
     for (const [color, width] of [['rgba(0,0,0,.55)', 7], ['#ffffff', 3.5]]) {
       ctx.strokeStyle = color; ctx.lineWidth = width * ratio; ctx.lineCap = 'round';
       for (const [a, b] of BONES) { ctx.beginPath(); ctx.moveTo(...at(a)); ctx.lineTo(...at(b)); ctx.stroke(); }

@@ -137,7 +137,8 @@ def test_near_and_far_arm_views_are_matched_separately():
     mine = _player("me", 62, 175)["reps"]
     assert shot_signatures(shooter())[0]["arm_side"] == "near"
     placement = shot_signatures(shooter(facing=-1))[0]["placement"]
-    assert placement["facing"] == -1 and 0 < placement["x"] < 1 and 0 < placement["torso"] < 1
+    assert placement["facing"] == -1 and 0 < placement["torso"] < 1 and placement["drift"] < 0.05
+    assert len(placement["track"]) == len(SKELETON_TIMES) and 0 < placement["track"][16][0] < 1
     assert len(match(mine, db)["placements"]) == len(mine)
     assert shot_signatures(shooter(facing=-1))[0]["arm_side"] == "far"
     assert shot_signatures(shooter(facing=-1, hand="left"), handedness="left")[0]["arm_side"] == "near"
@@ -160,3 +161,18 @@ def test_match_warns_about_few_reps_and_a_view_that_is_not_side_on():
     rep = dict(shot_signatures(shooter())[0], shoulder_width=0.6)
     notes = " ".join(match([rep], db)["notes"])
     assert "not a side view" in notes and "1 free throw." in notes
+
+
+def test_a_panning_camera_does_not_slide_the_skeleton():
+    still = shooter()
+    panned = [PoseFrame(p.frame, p.time_s, {k: (x + 0.08 * p.time_s, y, c) for k, (x, y, c) in p.landmarks.items()}) for p in still]
+    a, b = shot_signatures(still)[0], shot_signatures(panned)[0]
+    assert b["features"] == pytest.approx(a["features"], abs=0.3)
+    for one, other in zip(a["skeleton"], b["skeleton"]):
+        assert (one is None) == (other is None)
+        for joint in one or {}:
+            assert other[joint] == pytest.approx(one[joint], abs=0.02)
+    assert a["placement"]["drift"] < 0.05 < 0.3 < b["placement"]["drift"]
+    assert b["placement"]["track"][20][0] - b["placement"]["track"][4][0] == pytest.approx(0.08 * 0.8, abs=0.005)
+    moved = match([b], build_db([_player("A", 60, 176), _player("B", 110, 160)]))
+    assert any("camera or your feet moved" in note for note in moved["notes"])

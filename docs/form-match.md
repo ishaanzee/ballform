@@ -45,7 +45,7 @@ Feedback lists the largest weighted differences from the chosen player, leaving 
 
 ## comparing poses
 
-The results panel plays your median skeleton and the chosen player's through the release, side by side or overlaid on the same feet. Above the review video, "Draw the player's pose over my video" draws that player's skeleton on your footage at each free throw: feet on your feet, scaled to your torso length, facing your way. The player's limbs are in his proportions, not yours, so joints line up only where the two forms and builds agree.
+The results panel plays your median skeleton and the chosen player's through the release, side by side or overlaid on the same feet. Skeletons are drawn relative to the feet in each frame, so a panning or shaking camera does not slide the body; the match adds a note when the feet moved more than 0.3 torso lengths in the frame before a release. Above the review video, "Draw the player's pose over my video" draws that player's skeleton on your footage at each free throw: following your feet frame by frame, scaled to your torso length, facing your way. The player's limbs are in his proportions, not yours, so joints line up only where the two forms and builds agree.
 
 ## limits
 

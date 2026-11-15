@@ -205,38 +205,50 @@ def _signature(series: Series, low: int, release: float, end: int, handedness: s
             "skeleton": _skeleton(series, release, facing), "placement": _placement(series, release, facing)}
 
 
-def _skeleton(series: Series, release: float, facing: float) -> list[dict | None]:
-    """Joint positions around the release: origin between the ankles at release, x toward
-    the basket, y up, in torso lengths. None where the clip has no frame near that time."""
-    t = series.t
-    at = int(np.argmin(np.abs(t - release)))
-    origin, scale = series.ankle[at], np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
-    if not np.isfinite(origin).all() or not scale > 0:
-        return []
-    frames = []
+def _ankle_track(series: Series, release: float) -> list[np.ndarray | None]:
+    """The point between the ankles at each skeleton time, in frame-height units."""
+    t, track = series.t, []
     for offset in SKELETON_TIMES:
         when = release + offset
-        if when < t[0] - 0.02 or when > t[-1] + 0.02:
+        point = np.asarray([np.interp(when, t, series.ankle[:, k]) for k in (0, 1)])
+        track.append(point if t[0] - 0.02 <= when <= t[-1] + 0.02 and np.isfinite(point).all() else None)
+    return track
+
+
+def _skeleton(series: Series, release: float, facing: float) -> list[dict | None]:
+    """Joint positions around the release: origin between the ankles in each frame, x toward
+    the basket, y up, in torso lengths. None where the clip has no frame near that time.
+    Following the ankles keeps a panning or shaking camera from sliding the body."""
+    t = series.t
+    scale = np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
+    if not scale > 0:
+        return []
+    frames = []
+    for offset, origin in zip(SKELETON_TIMES, _ankle_track(series, release)):
+        if origin is None:
             frames.append(None)
             continue
         joints = {}
         for name in JOINTS:
-            x, y = (np.interp(when, t, series.xy[name][:, k]) for k in (0, 1))
+            x, y = (np.interp(release + offset, t, series.xy[name][:, k]) for k in (0, 1))
             joints[name] = [round(float((x - origin[0]) * facing / scale), 3), round(float((origin[1] - y) / scale), 3)]
         frames.append(joints if all(math.isfinite(v) for p in joints.values() for v in p) else None)
     return frames
 
 
 def _placement(series: Series, release: float, facing: float) -> dict | None:
-    """Where the skeleton sits in the frame, to draw another skeleton over the footage: the
-    origin between the ankles as fractions of frame width and height, and one torso length as
-    a fraction of frame height."""
-    at = int(np.argmin(np.abs(series.t - release)))
-    origin, scale = series.ankle[at], np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
-    if not np.isfinite(origin).all() or not scale > 0:
+    """Where the shooter stands in the frame, to draw another skeleton over the footage: the
+    point between the ankles at each skeleton time as fractions of frame width and height,
+    one torso length as a fraction of frame height, and how far that point moved in the
+    0.8 s before release, in torso lengths (the camera or the feet moving)."""
+    scale = np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
+    track = _ankle_track(series, release)
+    if not scale > 0 or not any(p is not None for p in track):
         return None
-    return {"x": round(float(origin[0] / series.aspect_ratio), 4), "y": round(float(origin[1]), 4),
-            "torso": round(float(scale), 4), "aspect": round(float(series.aspect_ratio), 4), "facing": int(facing)}
+    before = np.asarray([p for p, offset in zip(track, SKELETON_TIMES) if p is not None and offset <= 0])
+    drift = float(np.linalg.norm(before.max(axis=0) - before.min(axis=0)) / scale) if len(before) >= 2 else None
+    return {"track": [None if p is None else [round(float(p[0] / series.aspect_ratio), 4), round(float(p[1]), 4)] for p in track],
+            "torso": round(float(scale), 4), "facing": int(facing), "drift": None if drift is None else round(drift, 3)}
 
 
 def shot_signatures(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0, handedness: str = "right") -> list[dict]:
