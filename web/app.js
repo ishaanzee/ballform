@@ -221,6 +221,7 @@ function render(id,result){
   const modelText=requested?`Pose model requested: ${poseModelLabels[requested]||requested}; loaded: ${actual||'not reported'}. `:'';
   window.courtCalibration?.report(result);
   window.formMatch?.render(result);
+  window.courtMap?.render(id,result);
   $('#visionSummary').textContent=game?`${modelText}Tracking: up to ${diagnostics.max_players_visible??0} player candidates per frame; ${diagnostics.ball_detections??0} ball observations; ${diagnostics.scene_cuts??0} camera cuts. ${performanceText} Review player IDs in the video to confirm the matchup.`:performanceText;
   // Name any optional speedup this analysis could not use, so a slow run is explained.
   const vision=result.vision||{}, slower=[];

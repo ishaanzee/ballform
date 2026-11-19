@@ -22,6 +22,7 @@ The numbers are review signals, not a scouting department in a box. Compare clip
 - **Picks the shooter and the nearest contesting defender**, then scores the shot with a transparent formula: 65% separation + 35% contest clearance.
 - **Labels shot types**: jump shot, floater, layup, dunk, tip.
 - **Court calibration** maps the floor so distances, zones and spacing come out in feet. On broadcast footage it is found automatically from the whole clip; you can also mark or adjust the court landmarks yourself.
+- **Court map**: with a calibrated court, a top-down view beside the review video shows where every tracked player is on the floor, moving with the video.
 - **Form mode** reports 2D release timing, launch angle, elbow angle and upper-arm elevation for comparing your own reps.
 - **Free-throw player match** measures your free throws from a side-on clip, finds which of 25 NBA players' free-throw form is closest and says what to change to look more like one of them. It describes resemblance, not quality.
 - **Annotated review video** with tracking, court lines and a pulse on makes.
@@ -83,7 +84,7 @@ Tips for a good clip: keep the shooter, ball and rim visible, shoot at 60 fps an
 Deeper write-ups, with the measurements behind them:
 
 - [Game mode](docs/game-mode.md): the shot-space score, shot-type rules, validation
-- [Court calibration](docs/court-calibration.md): homography fit, auto-detect, whole-clip calibration, floor trajectories, accuracy checks
+- [Court calibration](docs/court-calibration.md): homography fit, auto-detect, whole-clip calibration, floor trajectories, court map, accuracy checks
 - [Performance](docs/performance.md): model backends, pipelining, review video encoding, timings
 - [Cameras and clips](docs/cameras-and-clips.md): profiles, rim detection, make classifier
 - [Free-throw player match](docs/form-match.md): filming, measurements, player templates, matching, limits
@@ -101,6 +102,7 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 | `app/shots.py` | hidden-release jump shots, rim attempts, shot types |
 | `app/game.py` | shooter/defender association, shot-space score |
 | `app/court.py`, `court_detect.py`, `camera_motion.py`, `trajectory.py` | court templates and fit, auto-detect, camera motion, floor trajectories |
+| `app/court_map.py` | top-down court map of each tracked player, from the saved floor trajectories |
 | `app/form_signature.py`, `form_match.py`, `form_db.json` | free-throw measurements from pose, player templates and matching |
 | `app/camera_tilt.py` | camera roll from upright edges in the scene, to level the free-throw measurements |
 | `scripts/formdb/build.py` | builds the player templates from broadcast free throws |
@@ -114,6 +116,7 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 uv run pytest -q
 node --check web/app.js
 node --check web/court.js
+node --check web/court-map.js
 ```
 
 ## license

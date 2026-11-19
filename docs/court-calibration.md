@@ -82,3 +82,14 @@ Merged with the other 2026-10-15 rules (`docs/game-mode.md`), 105 of 125 labeled
 
 To redo it: `uv run python scripts/auto_court_landmarks.py` (one to two CPU minutes per clip, several clips in parallel), then `uv run --inexact ballform-eval --replay`.
 
+## court map
+
+With a calibrated court, the results page shows a top-down half court beside the review video. Each tracked player is a dot at their smoothed floor position (the trajectories above) at the video's current time, labelled with the same P number as in the video and filled with the jersey colour sampled from the footage, with the path of the last 1.5 s behind it. During a shot the shooter has an orange ring and the selected defender a dashed dark one. The map is turned in quarter turns so the side of the court nearest the camera is at the bottom, as in the video.
+
+The map adds no measurement of its own: `app/court_map.py` reads `court.json`, `observations.json` and `result.json` from the job and serves them at `/api/jobs/<id>/court-map`. Its errors are those of the tracking and the calibration:
+
+- A player is drawn only on frames where the floor mapping held and the player has a trajectory. Paths never join across a camera cut or a gap.
+- A track that switches to another person moves the dot with it; the P number is the tracker's, not a jersey number.
+- Referees, coaches and spectators the tracker follows on the floor are drawn too, unless a playing-area polygon excluded them.
+- Only the calibrated half court is drawn. Players past half court are left off.
+

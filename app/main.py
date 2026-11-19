@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from app import court_map
 from app.analyzer import ROOT, analyze_video, preload_game_models
 from app.client_report import build_client_report
 from app.court import STANDARDS, parse_landmarks
@@ -254,6 +255,17 @@ def get_video(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "Annotated video is not ready")
     return FileResponse(path, media_type="video/mp4", filename=f"ballform-{job_id}.mp4")
+
+
+@app.get("/api/jobs/{job_id}/court-map")
+def get_court_map(job_id: str) -> dict:
+    """Each tracked player's position on the calibrated floor, for the top-down court map."""
+    if not job_id.isalnum():
+        raise HTTPException(404)
+    payload = court_map.load(JOBS_DIR / job_id)
+    if payload is None:
+        raise HTTPException(404, "This analysis has no court calibration")
+    return payload
 
 
 @app.get("/api/jobs/{job_id}/client-report", response_class=HTMLResponse)
