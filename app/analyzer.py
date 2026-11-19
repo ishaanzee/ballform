@@ -37,6 +37,7 @@ from app.tracking import BallHandlerTracker, HandlerDecision, PoseTracker, jerse
 from app.rim import box_iou, detect_fixed_rim, fixed_hoop_candidates, track_detected_rims, track_marked_rim, xywh
 from app.vision import COURT_PROFILES, CutDetector, camera_profile, regions, validate_court
 from app.basketball import BasketballDetector, MODEL_FILENAME, MODEL_URL, MODEL_SHA256
+from app.camera_tilt import camera_tilt
 from app.ball_select import CandidateCourtVision, StaticBallFilter, enabled as static_ball_filter_enabled
 from app.pose import EXPORT_SHAPES, CoreMLPose, TorchPose, export_path
 from app.form_match import match as match_players
@@ -1208,12 +1209,21 @@ def _analyze_video(input_path: Path, output_dir: Path, rim: tuple[float, float, 
         "annotated_video": "annotated.mp4",
     }
     if mode == "form_match":
-        signatures = shot_signatures(poses, width / height, handedness)
+        tilt = camera_tilt(input_path, poses)
+        signatures = shot_signatures(poses, width / height, handedness, tilt or 0.0)
         result["form_match"] = match_players(signatures) or {
             "reps": len(signatures), "matches": [], "notes": [
                 "No free throw was measured. Film one shooter from the side with the whole body in frame, from "
                 "before the ball comes up until the follow-through drops."
                 if not signatures else "No player templates are installed (app/form_db.json is missing)."]}
+        result["form_match"]["camera_tilt_deg"] = tilt
+        if tilt is None:
+            result["form_match"]["notes"].append(
+                "Camera tilt could not be checked: no upright edges such as a wall, post or door frame were found "
+                "behind the shooter. Lean and arm angle are measured as filmed, so keep the phone level.")
+        elif abs(tilt) >= 1.0:
+            result["form_match"]["notes"].append(
+                f"The camera was tilted {abs(tilt):.1f}°. Lean and arm angle are corrected for it.")
         result["limitations"].append(
             "Player match compares image-plane joint angles and timing of your free throws with templates measured "
             "from side-view broadcast free throws. It describes resemblance, not quality: shooting like a player is "

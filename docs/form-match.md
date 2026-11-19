@@ -6,7 +6,7 @@ Form-match mode measures your free throws from a side-on clip, finds the NBA pla
 
 - One shooter, free throws only, five or more in one clip.
 - Side-on, level with the free-throw line, from the side opposite your shooting hand (from the left of a right-hander). Whole body in frame from before the ball comes up until the follow-through drops.
-- 60 fps if the phone has it. Keep the camera still.
+- 60 fps if the phone has it. Keep the camera still and level, with a wall, post or door frame somewhere behind you: their upright edges are how a tilted phone is noticed.
 
 ## what is measured
 
@@ -22,6 +22,14 @@ Form-match mode measures your free throws from a side-on clip, finds the NBA pla
 | forward lean at release, follow-through hold | trunk and finish |
 
 Angles are in the image plane. Lengths are in torso lengths (mid-shoulder to mid-hip), so a shooter's size and the zoom do not matter.
+
+## camera tilt
+
+Forward lean and arm angle are measured against the vertical, so a phone tilted 3° shifts both by 3°. The shooter cannot be the reference, because how upright the shooter stands is one of the measurements. `app/camera_tilt.py` reads the tilt from the scene instead: long straight edges within 20° of the image's vertical, in eight frames spread over the clip, leaving out the shooter and everything below the hips (floor lines running away from the camera look upright without being so). A camera pointing up or down makes upright edges lean together or apart across the frame, so their lean is fitted as a line across the frame and read at the centre. The poses are turned by that angle before anything is measured.
+
+No tilt is reported, and nothing is corrected, unless the edges settle it: at least half of them must agree within 1.5°, from three or more places across the frame, on both sides of the centre or near it. The results then say that tilt could not be checked.
+
+Checked on ten fixed-camera clips and one phone clip by rotating whole frames 3° and 6° each way: the reading moved by the applied angle to within 0.5° on all nine clips that gave a reading, and two clips of the same camera agreed within 0.2°. Steep overhead views and broadcast game footage gave no reading. The true tilt of those cameras is not known, so this shows that a change in tilt is measured, not that the zero is exact. The templates are not corrected: broadcast cameras are assumed level.
 
 ## the player templates
 
@@ -45,11 +53,12 @@ Feedback lists the largest weighted differences from the chosen player, leaving 
 
 ## comparing poses
 
-The results panel plays your median skeleton and the chosen player's through the release, side by side or overlaid on the same feet. Skeletons are drawn relative to the feet in each frame, so a panning or shaking camera does not slide the body; the match adds a note when the feet moved more than 0.3 torso lengths in the frame before a release. Above the review video, "Draw the player's pose over my video" draws that player's skeleton on your footage at each free throw: following your feet frame by frame, scaled to your torso length, facing your way. The player's limbs are in his proportions, not yours, so joints line up only where the two forms and builds agree.
+The results panel plays your median skeleton and the chosen player's through the release, side by side or overlaid on the same feet. Skeletons are drawn relative to the feet in each frame, so a panning or shaking camera does not slide the body; the match adds a note when the feet moved more than 0.3 torso lengths in the frame before a release. Above the review video, "Draw the player's pose over my video" draws that player's skeleton on your footage at each free throw: following your feet frame by frame, scaled to your torso length, facing your way, turned by your camera's tilt. The player's limbs are in his proportions, not yours, so joints line up only where the two forms and builds agree.
 
 ## limits
 
 - The templates are broadcast footage: an elevated camera 20 to 30 degrees off a true side view. A phone at chest height directly side-on sees slightly different angles. This offset has not been measured.
+- Camera tilt is corrected only when the scene has upright edges to read it from, and to about half a degree. A lens that bends straight lines (an action camera) is not allowed for.
 - 2D only. Elbow flare, hand placement and wrist action are not seen from the side.
 - Broadcast video is 25 to 60 fps, so timing is known to a few hundredths of a second.
 - A player with few reps, or reps from one game, has a less certain template. Templates have 3 to 14 free throws.

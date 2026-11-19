@@ -69,7 +69,12 @@
     const place = data.placements[rep], feet = jointsAt(place.track.map(p => p && { at: p }), now - data.release_times_s[rep]);
     if (!feet) return;
     const W = canvas.width, H = canvas.height, unit = place.torso * H;
-    const at = name => [feet.at[0] * W + joints[name][0] * place.facing * unit, feet.at[1] * H - joints[name][1] * unit];
+    // The player's pose is upright; turn it by the tilt of your camera so it stands as your footage does.
+    const turn = (place.tilt_deg || 0) * Math.PI / 180, cos = Math.cos(turn), sin = Math.sin(turn);
+    const at = name => {
+      const dx = joints[name][0] * place.facing * unit, dy = -joints[name][1] * unit;
+      return [feet.at[0] * W + dx * cos - dy * sin, feet.at[1] * H + dx * sin + dy * cos];
+    };
     for (const [color, width] of [['rgba(0,0,0,.55)', 7], ['#ffffff', 3.5]]) {
       ctx.strokeStyle = color; ctx.lineWidth = width * ratio; ctx.lineCap = 'round';
       for (const [a, b] of BONES) { ctx.beginPath(); ctx.moveTo(...at(a)); ctx.lineTo(...at(b)); ctx.stroke(); }

@@ -7,6 +7,8 @@ are compared feature by feature in app/form_match.py.
 
 Lengths are in torso lengths (mid-shoulder to mid-hip), angles in degrees in the image
 plane, times in seconds. They are comparable between clips only when both are side views.
+Angles against the vertical assume a level camera; ``tilt_deg`` (app/camera_tilt.py) undoes
+a camera that is not.
 """
 from __future__ import annotations
 
@@ -65,14 +67,19 @@ def _smooth(values: np.ndarray, radius: int = 1) -> np.ndarray:
 class Series:
     """Smoothed per-frame measurements of one shooter."""
 
-    def __init__(self, poses: Sequence[PoseFrame], aspect_ratio: float, handedness: str):
+    def __init__(self, poses: Sequence[PoseFrame], aspect_ratio: float, handedness: str, tilt_deg: float = 0.0):
         poses = sorted(poses, key=lambda p: p.time_s)
         self.t = np.asarray([p.time_s for p in poses], dtype=float)
-        self.aspect_ratio = aspect_ratio
+        self.aspect_ratio, self.tilt_deg = aspect_ratio, tilt_deg
         raw = {name: np.asarray([[p.landmarks[name][0] * aspect_ratio, p.landmarks[name][1]]
                                  if name in p.landmarks else [np.nan, np.nan] for p in poses], dtype=float).reshape(-1, 2)
                for name in JOINTS}
-        self.xy = {name: _smooth(points) for name, points in raw.items()}
+        image = {name: _smooth(points) for name, points in raw.items()}
+        self.ankle_image = (image["left_ankle"] + image["right_ankle"]) / 2   # as filmed, to draw over the footage
+        # Turned about the frame centre so that the scene's vertical is the y axis.
+        turn, centre = math.radians(tilt_deg), np.asarray([aspect_ratio / 2, 0.5])
+        upright = np.asarray([[math.cos(turn), -math.sin(turn)], [math.sin(turn), math.cos(turn)]])
+        self.xy = {name: (points - centre) @ upright + centre for name, points in image.items()}
         xy, side = self.xy, handedness
         self.shoulder = (xy["left_shoulder"] + xy["right_shoulder"]) / 2
         self.hip = (xy["left_hip"] + xy["right_hip"]) / 2
@@ -205,12 +212,12 @@ def _signature(series: Series, low: int, release: float, end: int, handedness: s
             "skeleton": _skeleton(series, release, facing), "placement": _placement(series, release, facing)}
 
 
-def _ankle_track(series: Series, release: float) -> list[np.ndarray | None]:
+def _ankle_track(series: Series, release: float, ankle: np.ndarray) -> list[np.ndarray | None]:
     """The point between the ankles at each skeleton time, in frame-height units."""
     t, track = series.t, []
     for offset in SKELETON_TIMES:
         when = release + offset
-        point = np.asarray([np.interp(when, t, series.ankle[:, k]) for k in (0, 1)])
+        point = np.asarray([np.interp(when, t, ankle[:, k]) for k in (0, 1)])
         track.append(point if t[0] - 0.02 <= when <= t[-1] + 0.02 and np.isfinite(point).all() else None)
     return track
 
@@ -224,7 +231,7 @@ def _skeleton(series: Series, release: float, facing: float) -> list[dict | None
     if not scale > 0:
         return []
     frames = []
-    for offset, origin in zip(SKELETON_TIMES, _ankle_track(series, release)):
+    for offset, origin in zip(SKELETON_TIMES, _ankle_track(series, release, series.ankle)):
         if origin is None:
             frames.append(None)
             continue
@@ -239,23 +246,26 @@ def _skeleton(series: Series, release: float, facing: float) -> list[dict | None
 def _placement(series: Series, release: float, facing: float) -> dict | None:
     """Where the shooter stands in the frame, to draw another skeleton over the footage: the
     point between the ankles at each skeleton time as fractions of frame width and height,
-    one torso length as a fraction of frame height, and how far that point moved in the
-    0.8 s before release, in torso lengths (the camera or the feet moving)."""
+    one torso length as a fraction of frame height, the camera tilt that was undone, and how
+    far that point moved in the 0.8 s before release, in torso lengths (the camera or the
+    feet moving)."""
     scale = np.nanmedian(series.torso[series.between(release - 0.5, release + 0.2)])
-    track = _ankle_track(series, release)
+    track = _ankle_track(series, release, series.ankle_image)
     if not scale > 0 or not any(p is not None for p in track):
         return None
     before = np.asarray([p for p, offset in zip(track, SKELETON_TIMES) if p is not None and offset <= 0])
     drift = float(np.linalg.norm(before.max(axis=0) - before.min(axis=0)) / scale) if len(before) >= 2 else None
     return {"track": [None if p is None else [round(float(p[0] / series.aspect_ratio), 4), round(float(p[1]), 4)] for p in track],
-            "torso": round(float(scale), 4), "facing": int(facing), "drift": None if drift is None else round(drift, 3)}
+            "torso": round(float(scale), 4), "facing": int(facing), "tilt_deg": series.tilt_deg, "drift": None if drift is None else round(drift, 3)}
 
 
-def shot_signatures(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0, handedness: str = "right") -> list[dict]:
-    """One signature per set shot found in a single shooter's poses, in time order."""
+def shot_signatures(poses: Sequence[PoseFrame], aspect_ratio: float = 1.0, handedness: str = "right",
+                    tilt_deg: float = 0.0) -> list[dict]:
+    """One signature per set shot found in a single shooter's poses, in time order.
+    ``tilt_deg`` is how far the scene's vertical leans to the right in the image."""
     if handedness not in {"left", "right"}:
         raise ValueError("handedness must be left or right")
     if len(poses) < 5:
         return []
-    series = Series(poses, aspect_ratio, handedness)
+    series = Series(poses, aspect_ratio, handedness, tilt_deg)
     return [s for s in (_signature(series, *rep, handedness) for rep in _reps(series)) if s]

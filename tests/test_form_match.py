@@ -176,3 +176,24 @@ def test_a_panning_camera_does_not_slide_the_skeleton():
     assert b["placement"]["track"][20][0] - b["placement"]["track"][4][0] == pytest.approx(0.08 * 0.8, abs=0.005)
     moved = match([b], build_db([_player("A", 60, 176), _player("B", 110, 160)]))
     assert any("camera or your feet moved" in note for note in moved["notes"])
+
+
+def _tilted(poses, degrees):
+    """The same shooter filmed by a camera rolled so the scene's vertical leans ``degrees`` to the right."""
+    c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    return [PoseFrame(p.frame, p.time_s, {k: (0.5 + (x - 0.5) * c - (y - 0.5) * s, 0.5 + (x - 0.5) * s + (y - 0.5) * c, v)
+                                          for k, (x, y, v) in p.landmarks.items()}) for p in poses]
+
+
+def test_camera_tilt_is_undone_in_the_measurements():
+    level = shot_signatures(shooter())[0]
+    as_filmed = shot_signatures(_tilted(shooter(), 4.0))[0]
+    corrected = shot_signatures(_tilted(shooter(), 4.0), tilt_deg=4.0)[0]
+    assert as_filmed["features"]["trunk_lean_deg"] - level["features"]["trunk_lean_deg"] == pytest.approx(4.0, abs=0.3)
+    assert corrected["features"] == pytest.approx(level["features"], abs=0.05)
+    for one, other in zip(level["skeleton"], corrected["skeleton"]):
+        for joint in one or {}:
+            assert other[joint] == pytest.approx(one[joint], abs=0.03)   # smoothing is per axis
+    # The feet stay where they are in the footage, and the overlay is told the tilt.
+    assert corrected["placement"]["track"] == as_filmed["placement"]["track"]
+    assert corrected["placement"]["tilt_deg"] == 4.0 and level["placement"]["tilt_deg"] == 0.0

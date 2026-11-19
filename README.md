@@ -102,6 +102,7 @@ Camera movement changes apparent distances. Jerseys can look alike. Players over
 | `app/game.py` | shooter/defender association, shot-space score |
 | `app/court.py`, `court_detect.py`, `camera_motion.py`, `trajectory.py` | court templates and fit, auto-detect, camera motion, floor trajectories |
 | `app/form_signature.py`, `form_match.py`, `form_db.json` | free-throw measurements from pose, player templates and matching |
+| `app/camera_tilt.py` | camera roll from upright edges in the scene, to level the free-throw measurements |
 | `scripts/formdb/build.py` | builds the player templates from broadcast free throws |
 | `app/tracking.py` | multi-player IDs and jersey descriptors |
 | `app/vision.py` | wide-view detection, crops, court filtering, cuts |
