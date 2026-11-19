@@ -24,7 +24,7 @@ The numbers are review signals, not a scouting department in a box. Compare clip
 - **Court calibration** maps the floor so distances, zones and spacing come out in feet. On broadcast footage it is found automatically from the whole clip; you can also mark or adjust the court landmarks yourself.
 - **Court map**: with a calibrated court, a top-down view beside the review video shows where every tracked player is on the floor, moving with the video.
 - **Form mode** reports 2D release timing, launch angle, elbow angle and upper-arm elevation for comparing your own reps.
-- **Free-throw player match** measures your free throws from a side-on clip, finds which of 25 NBA players' free-throw form is closest and says what to change to look more like one of them. It describes resemblance, not quality.
+- **Free-throw player match** measures your free throws from a side-on clip, finds which of 27 NBA players' free-throw form is closest and says what to change to look more like one of them. It describes resemblance, not quality.
 - **Annotated review video** with tracking, court lines and a pulse on makes.
 
 Everything runs locally. Clips and reports stay in `data/jobs/`.
